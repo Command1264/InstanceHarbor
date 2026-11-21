@@ -39,7 +39,8 @@ $crtHashes = [ordered]@{
     'vcruntime140_1.dll' = '1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f'
 }
 $noticeNames = @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')
-$allNames = $fileNames + @($consoleHashes.Keys) + @($crtHashes.Keys) + $noticeNames
+$startupGuide = 'WINDOWS-GETTING-STARTED.txt'
+$allNames = $fileNames + @($consoleHashes.Keys) + @($crtHashes.Keys) + $noticeNames + $startupGuide
 $versionPattern = '^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$'
 $hashPattern = '^[a-f0-9]{64}$'
 $encoding = [Text.UTF8Encoding]::new($false, $true)
@@ -100,6 +101,12 @@ function Assert-Manifest($Manifest) {
     if (@($names | Where-Object { $_ -cin $noticeNames }).Count) {
         if (@($noticeNames | Where-Object { $_ -cnotin $names }).Count) { throw 'Incomplete package notices.' }
         $expected += $noticeNames
+    }
+    if ($startupGuide -cin $names) {
+        if ($noticeNames[0] -cnotin $names -or @($names | Where-Object { $_ -cin $crtHashes.Keys }).Count) {
+            throw 'The Windows startup guide requires distribution notices and a system runtime package.'
+        }
+        $expected += $startupGuide
     }
     if ($names.Count -ne $expected.Count) { throw 'Incomplete package runtime pair.' }
     foreach ($name in $expected) {
@@ -164,7 +171,7 @@ function Install-Stage {
                 $allowed = $allNames + 'manifest.json'
                 $entries = @($zip.Entries)
                 $entriesByName = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-                if ($entries.Count -notin @(3, 5, 6, 7, 8, 10)) { throw 'Unexpected ZIP entry count.' }
+                if ($entries.Count -lt 3 -or $entries.Count -gt $allNames.Count) { throw 'Unexpected ZIP entry count.' }
                 foreach ($entry in $entries) {
                     if ($entry.FullName -cnotin $allowed -or !$entriesByName.TryAdd($entry.FullName, $entry)) { throw 'Unexpected or duplicate ZIP entry.' }
                 }

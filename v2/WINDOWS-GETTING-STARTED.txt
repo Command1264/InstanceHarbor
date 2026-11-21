@@ -1,0 +1,16 @@
+﻿InstanceHarbor 1.0.0-rc2 — Windows x64
+
+1. If the Microsoft Visual C++ v14 x64 Runtime is missing or out of date,
+   install the latest supported x64 version directly from Microsoft.
+   https://aka.ms/vc14/vc_redist.x64.exe
+   Microsoft’s installer may ask for administrator approval or a restart.
+2. Extract the entire ZIP to one folder and open InstanceHarbor.exe.
+   The PowerShell CLI is ihctl.exe.
+3. If Windows reports a missing WebView2 Runtime, install Microsoft Edge WebView2.
+   https://developer.microsoft.com/microsoft-edge/webview2/#download-section
+
+繁體中文
+1. 若未安裝 Microsoft Visual C++ v14 x64 Runtime 或版本過舊，請從上方
+   Microsoft 官方連結安裝最新版 x64 Runtime。可能需要管理員核准或重新開機。
+2. 完整解壓 ZIP，再開啟 InstanceHarbor.exe。PowerShell CLI 為 ihctl.exe。
+3. 若 Windows 提示缺少 WebView2 Runtime，請由上方 Microsoft 官方頁面安裝。

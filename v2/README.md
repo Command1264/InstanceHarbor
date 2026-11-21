@@ -238,15 +238,16 @@ Paper 26.3 的共用插件 JAR 隔離實驗也可使用同一份唯讀 JAR，各
 
 安裝腳本接受有預先核對 SHA-256 的便攜包，可驗證版本切換、
 還原與解除安裝，安裝或解除安裝時須先退出該安裝位置的程序。
-使用 MSVC 動態連結建置時，
-`pack-windows.ps1 -VCRuntimeDirectory` 可將兩顆已核對雜湊的 x64 Microsoft Visual C++ DLL 放入便攜包。
-較早的便攜包仍使用安裝環境提供的 Microsoft Visual C++ 執行階段。GUI 另使用 Windows WebView2。
+RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。GUI 另使用 Windows WebView2。
 ### Windows x64 1.0.0-rc2 封裝
 
 從本目錄以 PowerShell 7 執行 `./build-product.ps1 -Release`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
-用 `pack-windows.ps1` 將 release 的 `InstanceHarbor.exe`、`ihctl.exe` 與已核對的 x64 執行階段封裝成 ZIP。
+用 `pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
 接著用 `pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
-Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。Windows WebView2 與伺服器所需的 Java 由電腦提供。
+Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。Setup 要求系統有 Visual C++ x64 Runtime 14.44.35211.0 或更新版本。
+沒有符合版本時，Setup 會在寫入前提示使用 [Microsoft 官方 x64 Runtime 安裝程式](https://aka.ms/vc14/vc_redist.x64.exe)，
+靜默安裝則回傳退出碼 3。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
+Setup 解除安裝會保留共用的 Runtime。Windows WebView2 與伺服器所需的 Java 由電腦提供。
 若乾淨 Windows 或 Windows Sandbox 提示找不到 WebView2，先安裝
 [Microsoft WebView2 Evergreen Standalone Installer 的 x64 版](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)，再重開 InstanceHarbor。
 

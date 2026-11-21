@@ -56,6 +56,9 @@ $crtHashes = [ordered]@{
     'vcruntime140_1.dll' = '1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f'
 }
 $crtNames = @()
+if ($Version -ceq '1.0.0-rc2' -and $VCRuntimeDirectory) {
+    throw 'RC2 uses the system Visual C++ runtime. Omit VCRuntimeDirectory.'
+}
 if ($VCRuntimeDirectory) {
     $crtRoot = Get-PlainItem $VCRuntimeDirectory
     if (!$crtRoot.PSIsContainer) { throw 'VCRuntimeDirectory must be a directory.' }
@@ -72,6 +75,8 @@ if ($NoticeDirectory) {
 } elseif ($Version -ceq '1.0.0-rc2') {
     throw 'The RC2 distribution requires NoticeDirectory.'
 }
+$guideNames = @()
+if ($Version -ceq '1.0.0-rc2') { $guideNames = @('WINDOWS-GETTING-STARTED.txt') }
 $manifest = [ordered]@{ schema = 'instanceharbor-windows-package/v1'; version = $Version; files = @() }
 $stage = Join-Path $parent.FullName ('.instanceharbor-package-' + [guid]::NewGuid().ToString('N') + '.tmp')
 $encoding = [Text.UTF8Encoding]::new($false)
@@ -80,10 +85,11 @@ try {
     try {
         $zip = [IO.Compression.ZipArchive]::new($zipStream, [IO.Compression.ZipArchiveMode]::Create, $true)
         try {
-            foreach ($name in ($names + $consoleNames + $crtNames + $noticeNames)) {
+            foreach ($name in ($names + $consoleNames + $crtNames + $noticeNames + $guideNames)) {
                 $sourceRoot = if ($name -cin $consoleNames) { $consoleRoot }
                     elseif ($name -cin $crtNames) { $crtRoot }
                     elseif ($name -cin $noticeNames) { $noticeRoot }
+                    elseif ($name -cin $guideNames) { Get-Item -LiteralPath $PSScriptRoot }
                     else { $binaryRoot }
                 $item = Get-PlainItem (Join-Path $sourceRoot.FullName $name)
                 if ($item.PSIsContainer -or $item.Length -le 0 -or $item.Length -gt 256MB) { throw "Invalid package input: $name" }

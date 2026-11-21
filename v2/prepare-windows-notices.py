@@ -13,8 +13,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 ROOT = Path(__file__).resolve().parent.parent
 TARGET = "x86_64-pc-windows-msvc"
 TERMINAL_RELEASE = "https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0"
-VC_REDIST = "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution"
-VC_TERMS = "https://visualstudio.microsoft.com/license-terms/"
+VC_DOWNLOAD = "https://aka.ms/vc14/vc_redist.x64.exe"
 MOZILLA = "https://www.mozilla.org/en-US/MPL/2.0/"
 NOTICE_NAME = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|authors)", re.I)
 FALLBACKS = {
@@ -153,13 +152,10 @@ InstanceHarbor's own source terms are in LICENSE. This file preserves third-part
 for the Windows distribution. The Cargo dependency inventory also includes build-time
 components conservatively.
 
-Microsoft Visual C++ Runtime (x64), version 14.44.35211.0
-  vcruntime140.dll and vcruntime140_1.dll. Copyright Microsoft Corporation.
-  App-local, unmodified redistributable files from Microsoft.VC143.CRT.
-  Microsoft terms apply. Microsoft distribution rights are conditional on the applicable
-  Visual Studio license and the documented terms for Distributable Code.
-  {VC_REDIST}
-  {VC_TERMS}
+Windows prerequisites obtained separately
+  The Microsoft Visual C++ v14 x64 Runtime is installed by users from Microsoft.
+  Setup requires version 14.44.35211.0 or newer. Use the latest supported version.
+  {VC_DOWNLOAD}
   Microsoft Edge WebView2 is supplied separately by Windows or Microsoft.
 
 {source_index}

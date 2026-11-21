@@ -17,9 +17,9 @@ if(!(Test-Path -LiteralPath $parent -PathType Container) -or (Test-Path -Literal
 $stage=Join-Path $parent ('setup-input-'+[guid]::NewGuid().ToString('N').Substring(0,12))
 # Read and verify the product package through the existing portable installer.
 $prepared=& (Join-Path $PSScriptRoot 'install-windows.ps1') -Action Stage -InstallRoot $stage -Package $packagePath -ExpectedPackageSha256 $ExpectedPackageSha256
-if($prepared.version -cne '1.0.0-rc2' -or !$prepared.nativeConsoleRuntime -or !$prepared.visualCppRuntime){throw 'Expected the Windows x64 RC2 distribution with both runtimes.'}
+if($prepared.version -cne '1.0.0-rc2' -or !$prepared.nativeConsoleRuntime -or $prepared.visualCppRuntime){throw 'Expected RC2 with ConPTY and without app-local Visual C++ DLLs.'}
 $payload=Join-Path (Join-Path $stage 'releases') $prepared.release
-foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')) {
+foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip', 'WINDOWS-GETTING-STARTED.txt')) {
     if (!(Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) { throw "Missing distribution notice: $name" }
 }
 if ((Get-Item -LiteralPath (Join-Path $payload 'InstanceHarbor.exe')).VersionInfo.ProductName -eq 'InstanceHarbor Dev') {

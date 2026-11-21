@@ -1,12 +1,16 @@
-Unicode true
+﻿Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
+!include "WordFunc.nsh"
 
 !define APP "InstanceHarbor"
 !define ROOT "$LOCALAPPDATA\Programs\InstanceHarbor"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\InstanceHarbor-Desktop"
 !define SHORTCUT "$SMPROGRAMS\InstanceHarbor.lnk"
 !define LEASE "instanceharbor.install"
+!define VC_RUNTIME_KEY "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+!define VC_RUNTIME_MIN "14.44.35211.0"
+!define VC_RUNTIME_URL "https://aka.ms/vc14/vc_redist.x64.exe"
 
 Name "${APP} ${VERSION}"
 OutFile "${OUTPUT}"
@@ -30,6 +34,40 @@ VIAddVersionKey "LegalCopyright" "InstanceHarbor contributors"
 !insertmacro MUI_LANGUAGE "TradChinese"
 !insertmacro MUI_LANGUAGE "English"
 
+LangString RuntimeMissing ${LANG_ENGLISH} "Microsoft Visual C++ x64 Runtime is missing."
+LangString RuntimeOld ${LANG_ENGLISH} "Microsoft Visual C++ x64 Runtime is too old ($0)."
+LangString RuntimeDownload ${LANG_ENGLISH} "Install Microsoft's official x64 Runtime (${VC_RUNTIME_MIN} or newer), then run InstanceHarbor Setup again.$\r$\n$\r$\nOpen the Microsoft download?"
+LangString RuntimeMissing ${LANG_TRADCHINESE} "缺少 Microsoft Visual C++ x64 Runtime。"
+LangString RuntimeOld ${LANG_TRADCHINESE} "Microsoft Visual C++ x64 Runtime 版本過舊（$0）。"
+LangString RuntimeDownload ${LANG_TRADCHINESE} "請安裝 Microsoft 官方 x64 Runtime（${VC_RUNTIME_MIN} 或更新版本），再重新執行 InstanceHarbor Setup。$\r$\n$\r$\n要開啟 Microsoft 下載連結嗎？"
+
+Function RequireVCRuntime
+  ; The x86 NSIS stub uses the 64-bit registry view selected by .onInit.
+  ReadRegDWORD $0 HKLM "${VC_RUNTIME_KEY}" "Installed"
+  StrCmp $0 "1" 0 missing
+  ClearErrors
+  ReadRegDWORD $0 HKLM "${VC_RUNTIME_KEY}" "Major"
+  ReadRegDWORD $1 HKLM "${VC_RUNTIME_KEY}" "Minor"
+  ReadRegDWORD $2 HKLM "${VC_RUNTIME_KEY}" "Bld"
+  ReadRegDWORD $3 HKLM "${VC_RUNTIME_KEY}" "Rbld"
+  IfErrors missing
+  StrCpy $0 "$0.$1.$2.$3"
+  ${VersionCompare} "$0" "${VC_RUNTIME_MIN}" $1
+  StrCmp $1 "2" outdated
+  Return
+outdated:
+  StrCpy $1 "$(RuntimeOld)"
+  Goto prompt
+missing:
+  StrCpy $1 "$(RuntimeMissing)"
+prompt:
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "$1$\r$\n$\r$\n$(RuntimeDownload)" /SD IDNO IDNO abort
+  ExecShell "open" "${VC_RUNTIME_URL}"
+abort:
+  SetErrorLevel 3
+  Abort
+FunctionEnd
+
 Function .onInit
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "A Windows x64 system is required." /SD IDOK
@@ -43,6 +81,7 @@ Function .onInit
   StrCmp $0 "" 0 occupied
   IfFileExists "$INSTDIR" occupied 0
   IfFileExists "${SHORTCUT}" occupied 0
+  Call RequireVCRuntime
   Return
 occupied:
   MessageBox MB_ICONSTOP "InstanceHarbor installation files or a shortcut already exist. Close InstanceHarbor and uninstall the previous version before reinstalling. Your workspace is stored separately." /SD IDOK
@@ -57,8 +96,7 @@ Section
   File "${PAYLOAD}\ihctl.exe"
   File "${PAYLOAD}\conpty.dll"
   File "${PAYLOAD}\OpenConsole.exe"
-  File "${PAYLOAD}\vcruntime140.dll"
-  File "${PAYLOAD}\vcruntime140_1.dll"
+  File "${PAYLOAD}\WINDOWS-GETTING-STARTED.txt"
   File "${PAYLOAD}\LICENSE"
   File "${PAYLOAD}\THIRD-PARTY-NOTICES.txt"
   File "${PAYLOAD}\MPL-SOURCES.zip"
@@ -94,8 +132,7 @@ failed:
   Delete "$INSTDIR\ihctl.exe"
   Delete "$INSTDIR\conpty.dll"
   Delete "$INSTDIR\OpenConsole.exe"
-  Delete "$INSTDIR\vcruntime140.dll"
-  Delete "$INSTDIR\vcruntime140_1.dll"
+  Delete "$INSTDIR\WINDOWS-GETTING-STARTED.txt"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\MPL-SOURCES.zip"
@@ -128,8 +165,7 @@ Section "Uninstall"
   Delete "$INSTDIR\ihctl.exe"
   Delete "$INSTDIR\conpty.dll"
   Delete "$INSTDIR\OpenConsole.exe"
-  Delete "$INSTDIR\vcruntime140.dll"
-  Delete "$INSTDIR\vcruntime140_1.dll"
+  Delete "$INSTDIR\WINDOWS-GETTING-STARTED.txt"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\MPL-SOURCES.zip"
