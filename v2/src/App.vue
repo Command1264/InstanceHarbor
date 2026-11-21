@@ -362,7 +362,12 @@ async function revealWindow(){
 }
 let timer:ReturnType<typeof setInterval>|undefined
 let refreshFeedbackTimer:ReturnType<typeof setTimeout>|undefined
-function clearRefreshFeedback(){clearTimeout(refreshFeedbackTimer);refreshFeedbackTimer=undefined}
+// Manual refresh state is kept apart from operation feedback so neither overwrites the other.
+const manualRefreshPending=ref(false), manualRefreshDone=ref(false)
+// Background polls publish a failure only after repeated misses; the last verified list stays.
+const BACKGROUND_FAILURE_LIMIT=3
+let backgroundFailures=0
+function clearRefreshFeedback(){clearTimeout(refreshFeedbackTimer);refreshFeedbackTimer=undefined;manualRefreshDone.value=false}
 let diagnosticFailureReported=false
 let pendingDiagnosticWarning=false
 const diagnosticWarning='無法完整寫入應用程式診斷紀錄。請檢查磁碟空間及 %LOCALAPPDATA%/InstanceHarbor/v2/logs 的容量與存取狀態；既有紀錄不會自動刪除。'
@@ -409,12 +414,12 @@ const accentListener=()=>{
 async function refresh(manual=false){
   if(!nativeBridge){connection.value='browser';if(manual)feedback.value='此瀏覽器沒有原生管理橋接。請使用 InstanceHarbor 桌面程式。';return}
   if(refreshActive){
-    if(manual && feedback.value==='正在核對實例清單')return
-    if(manual){clearRefreshFeedback();feedback.value='正在核對實例清單'}
+    if(manual && manualRefreshPending.value)return
+    if(manual){clearRefreshFeedback();manualRefreshPending.value=true}
     refreshQueued=true;queuedManual ||= manual;return
   }
   refreshActive=true;listReading.value=true;const epoch=++refreshEpoch
-  if(manual){clearRefreshFeedback();feedback.value='正在核對實例清單'}
+  if(manual){clearRefreshFeedback();manualRefreshPending.value=true}
   try{
     const origin=manual?'manual':'background'
     const shouldReadPreferences=!preferencesRetrying && (manual || !preferencesLoaded.value || preferencesUnavailable.value)
@@ -447,22 +452,25 @@ async function refresh(manual=false){
     for(const [name,run] of Object.entries(stopping.value))if(!canStop(live.get(name))||live.get(name)?.run?.id!==run)delete stopping.value[name]
     connection.value='connected'
     listLoaded.value=true
+    backgroundFailures=0
     if(manual){
-      feedback.value=issues.length?'已核對可讀取的實例':preferencesUnavailable.value?'實例清單已核對，無法讀取外觀設定':'實例清單已核對'
       clearRefreshFeedback()
-      const completed=feedback.value
-      refreshFeedbackTimer=setTimeout(()=>{if(feedback.value===completed)feedback.value='';refreshFeedbackTimer=undefined},1000)
+      if(issues.length)feedback.value='已核對可讀取的實例'
+      else if(preferencesUnavailable.value)feedback.value='實例清單已核對，無法讀取外觀設定'
+      manualRefreshDone.value=true
+      refreshFeedbackTimer=setTimeout(()=>{manualRefreshDone.value=false;refreshFeedbackTimer=undefined},1000)
     }
   }catch(e){
     if(epoch!==refreshEpoch)return
+    if(!manual && listLoaded.value && ++backgroundFailures<BACKGROUND_FAILURE_LIMIT)return
     const cause=rawError(e)
     if(/ManagerUnavailable|ManagerPipeUnavailable|ManagerResultUnconfirmed|PeerMismatch|MissingWorkspaceBinding/.test(cause)){
       connection.value='disconnected'
     }
     listUnavailable.value='無法讀取實例清單：'+errorText(e)
-    if(manual)feedback.value=''
   }
   finally{
+    if(manual && !queuedManual)manualRefreshPending.value=false
     refreshActive=false
     listReading.value=false
     void checkDiagnostics()
@@ -478,8 +486,10 @@ function invalidateRefresh(){
   refreshEpoch++
   if(refreshActive)refreshQueued=true
 }
+let jobsBackgroundFailures=0
+let activityFeedbackTimer:ReturnType<typeof setTimeout>|undefined
 function refreshJobs(manual=false,afterMutation=false):Promise<void>{
-  if(manual){jobsManual=true;activityFeedback.value='正在讀取操作紀錄'}
+  if(manual){jobsManual=true;clearTimeout(activityFeedbackTimer);activityFeedback.value='正在讀取操作紀錄'}
   // Background polling joins the current read instead of invalidating slow replies.
   if(jobsRead){jobsFollowup ||= afterMutation;return jobsRead}
   jobsReading.value=true
@@ -506,15 +516,24 @@ function refreshJobs(manual=false,afterMutation=false):Promise<void>{
         if(residentAtRead===residentRevision && batches.status==='fulfilled'){
           if(JSON.stringify(batches.value)!==JSON.stringify(residentJobs.value))residentJobs.value=batches.value
           residentError.value=''
-        }else if(residentAtRead===residentRevision && batches.status==='rejected')residentError.value='無法核對批次工作：'+errorText(batches.reason)
+        }else if(residentAtRead===residentRevision && batches.status==='rejected' && (jobsManual || !jobsLoaded.value || jobsBackgroundFailures+1>=BACKGROUND_FAILURE_LIMIT))residentError.value='無法核對批次工作：'+errorText(batches.reason)
         if(legacy.status==='rejected')throw legacy.reason
         if(JSON.stringify(legacy.value)!==JSON.stringify(jobs.value))jobs.value=legacy.value
         if(maintenance.status==='rejected' && (jobsManual || !jobsLoaded.value)){
           jobsError.value='無法讀取核心維護紀錄：'+errorText(maintenance.reason)
         }else if(maintenance.status==='fulfilled')jobsError.value=''
-        if(batches.status==='fulfilled' && maintenance.status==='fulfilled')jobsLoaded.value=true
-        if(jobsManual)activityFeedback.value=batches.status==='fulfilled' && maintenance.status==='fulfilled'?'操作紀錄已讀取':''
-      }catch(e){if(epoch===jobsEpoch){jobsError.value='無法讀取操作紀錄：'+errorText(e);if(jobsManual)activityFeedback.value=''}}
+        if(batches.status==='fulfilled' && maintenance.status==='fulfilled'){jobsLoaded.value=true;jobsBackgroundFailures=0}
+        else if(!jobsManual)jobsBackgroundFailures++
+        if(jobsManual){
+          activityFeedback.value=batches.status==='fulfilled' && maintenance.status==='fulfilled'?'操作紀錄已讀取':''
+          activityFeedbackTimer=setTimeout(()=>{if(activityFeedback.value==='操作紀錄已讀取')activityFeedback.value=''},1000)
+        }
+      }catch(e){
+        if(epoch!==jobsEpoch)continue
+        if(!jobsManual && jobsLoaded.value && ++jobsBackgroundFailures<BACKGROUND_FAILURE_LIMIT)continue
+        jobsError.value='無法讀取操作紀錄：'+errorText(e)
+        if(jobsManual)activityFeedback.value=''
+      }
     }while(jobsFollowup)
   })().finally(()=>{jobsRead=undefined;jobsManual=false;jobsReading.value=false})
   return jobsRead
@@ -934,7 +953,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <OverlayScroll class="registry-issues" label="無法核對的實例"><ul><li v-for="issue in registryIssues" :key="issue.file">{{ issue.file }} · {{ registryIssueLabels[issue.reason] }}</li></ul></OverlayScroll>
         </template>
       </aside>
-      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :connected="connected" :jobs="projectedJobs" :feedback="feedback" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @create="open('create')" @refresh="refresh(true)"/>
+      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @create="open('create')" @refresh="refresh(true)"/>
       <ActivityPage v-else-if="route==='activity'" :jobs="projectedJobs" :initial-loading="jobsReading && !jobsLoaded && !jobsError && !residentError" :loaded="jobsLoaded" :time-format="visiblePreferences.timeFormat" :error="jobsError" :batch-error="residentError" :cancelling-batch="cancellingBatch" :cancelling-core-batch="cancellingCoreBatch" :core-cancel-failure="coreCancelFailure" :feedback="activityFeedback" @refresh="refreshJobs(true)" @cancel-batch="cancelResidentBatch" @cancel-core-batch="cancelCoreBatch"/>
       <SettingsPage v-else :instance="settingsName" :instance-state="currentSettingsState" :instance-run="currentSettingsRow?.run?.id" :world-command-ready="worldCommandReady" :world-rule-work="worldRuleWork" :restart-status="currentSettingsRow?.autoRestartStatus" :instance-meta="currentSettingsMeta" :preferences="presentation.preferences" :preferences-revision="preferencesRevision" :preferences-loaded="preferencesLoaded" :preferences-ready="preferencesLoaded && !preferencesUnavailable" :connected="connected" :java-candidates="javaCandidates" :java-checked="javaChecked" :refresh-java="discoverJava" :retry-preferences="retryPreferences" @close="navigate('instances')" @core="openCore" @language-preview="languagePreview=$event" @dirty="settingsDirty=$event" @saving="settingsSaving=$event" @mutating="invalidateRefresh" @management-changed="invalidateRefresh(); refresh(); refreshJobs(false,true)" @preferences="next=>{invalidateRefresh();applyPreferences(next)}"/>
     </main></div>

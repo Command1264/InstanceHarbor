@@ -76,7 +76,7 @@ function timeName(value?: number | null) {
     <p v-if="batchError" role="status" class="form-error">{{ batchError }}</p>
     <article v-for="job in visible" :key="job.action+':'+job.id" class="operation-row selectable">
       <div><strong>{{ actionName(job.action) }}</strong><p v-if="!job.items" class="hint" translate="no">{{ job.instance }}</p><p class="hint">{{ timeName(job.createdAt) }}</p></div>
-      <div><p aria-live="polite">{{ resultName(job.state) }}</p><p v-if="job.message" class="hint">{{ job.message }}</p>
+      <div><p>{{ resultName(job.state) }}</p><p v-if="job.message" class="hint">{{ job.message }}</p>
         <ul v-if="job.items" class="batch-items">
           <li v-for="item in job.items" :key="item.name"><bdi translate="no">{{ item.name }}</bdi> · {{ itemPhaseName(job.action,item.phase) }}<span v-if="item.reason"> · {{ reasonName(item.reason) }}</span></li>
         </ul>

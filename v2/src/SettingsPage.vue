@@ -654,7 +654,11 @@ async function readSettings(origin:'manual'|'background'='background', profileCh
     if(!current())return
     if(preferencesTab.value){preferencesDraftRevision.value=props.preferencesRevision;resetDisplayPreferences();markSaved()}
     return true
-  }catch(e){if(current() && (targetTab!=='world'||!world.value||origin==='manual'))error.value='無法讀取設定：'+errorText(e)}
+  }catch(e){
+    // A background reread keeps the last valid settings on screen; only report when the user asked or nothing is shown yet.
+    if(current() && (origin==='manual' || (!baseline.value && (targetTab!=='world'||!world.value))))error.value='無法讀取設定：'+errorText(e)
+    else console.error('背景重讀設定失敗',e)
+  }
   finally{if(javaReadEpoch===epoch)javaReadEpoch=0}
 }
 function resetJavaPicker(){
@@ -1166,7 +1170,7 @@ void load()
           <p class="notice">伺服器運行時儲存的設定檔變更會在正常停止後套用並核對。遊戲規則優先即時套用並讀回。尚未送出且目前無法套用時，會等到下次啟動。</p>
           <p v-if="world.pending" class="hint" role="status">{{ world.pending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
           <details class="world-preflight">
-            <summary>啟動前 YAML 核對 <span class="hint" aria-live="polite">{{ yamlPreflightSummary }}</span></summary>
+            <summary>啟動前 YAML 核對 <span class="hint">{{ yamlPreflightSummary }}</span></summary>
             <p v-if="world.yamlPreflight?.source === 'Launch' && (world.yamlPreflight.changes.length || world.yamlPreflight.filesChanged?.length)" class="hint">最近一次啟動前讀回的差異</p>
             <template v-if="world.yamlPreflight?.filesChanged?.length">
               <p class="hint">內容有變更的檔案</p>

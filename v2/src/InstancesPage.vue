@@ -14,7 +14,7 @@ import { useAppLanguage } from './i18n'
 import { actionName, batchItemState, canOpenConsole, canRestart, canStop, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
 
 const props = defineProps<{coreCheckRows?:Record<string,CoreSource>;
-  rows: Instance[]; initialLoading?: boolean; loaded?: boolean; meta: InstanceMeta[]; preferences: Preferences; busyNames: Set<string>; feedback:string;
+  rows: Instance[]; initialLoading?: boolean; loaded?: boolean; meta: InstanceMeta[]; preferences: Preferences; busyNames: Set<string>; feedback:string; refreshPending?: boolean; refreshDone?: boolean;
   queuedNames?: Set<string>; startingNames?: Set<string>; pinBusy?: boolean; stopping: Record<string, string>; forceBusy: boolean; consoleBusy: boolean; connected: boolean; jobs: Job[]
 }>()
 const emit = defineEmits<{
@@ -136,8 +136,8 @@ function displayState(row:Instance){const state=stateClass(row);return state==='
 const emergency = computed(() => !!single.value && canStop(single.value) &&
   !!(single.value.stopPhase || props.stopping[single.value.name] === single.value.run?.id))
 const recent = computed(() => single.value && recentByName.value.get(single.value.name))
-const refreshBusy=computed(()=>props.feedback==='正在核對實例清單')
-const refreshLabel=computed(()=>props.feedback.startsWith('實例清單已核對')?'已核對':'重新核對')
+const refreshBusy=computed(()=>!!props.refreshPending)
+const refreshLabel=computed(()=>props.refreshDone?'已核對':'重新核對')
 function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? core.label ?? `${core.family} ${core.minecraft}${core.build ? ` build ${core.build}` : ''}` : '尚未核對'}
 const coreVersions = computed(() => new Map<string, {version:string;build?:string;update?:string}>(props.meta.map(({ name, core }) => {
   if (core?.state !== 'known') return [name, { version: coreLabel(name) }]
@@ -208,6 +208,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       <button type="button" :disabled="!connected" @click="emit('batch-core')">{{ t('core.batch.all') }}</button>
     </ActionMenu></div>
   </div>
+  <p class="operation-status selectable" role="status">{{ feedback }}</p>
   <div class="workspace">
     <section class="list-panel" aria-label="實例清單"><div class="selection-line"><span>{{ !loaded ? '尚未取得清單' : selected.length+' 台已選取 · '+visible.length+' 台符合條件' }}</span><span>Ctrl／Shift 可多選 <button v-if="selected.length" class="quiet clear-selection" @click="selected=[];anchor=null">清除選取</button></span></div>
       <OverlayScroll class="table-wrap" label="實例清單"><table ref="instanceTable" class="instances"><thead><tr><th :aria-sort="sort==='name' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('name')">實例 {{ sort==='name' ? (direction===1?'↑':'↓') : '' }}</button></th><th class="core-column" :aria-sort="sort==='core' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('core')">核心版本 {{ sort==='core' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='port' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('port')">Port {{ sort==='port' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='state' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('state')">觀察狀態 {{ sort==='state' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='recent' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('recent')">最近操作 {{ sort==='recent' ? (direction===1?'↑':'↓') : '' }}</button></th></tr></thead>
@@ -253,8 +254,8 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button @click="emit('settings',single.name)">實例設定</button>
         </div>
 
-        <div class="recent-operation detail-section" aria-live="polite"><p v-if="recent" class="hint">最近操作：{{ actionName(recent.action) }} · {{ jobStateName(recent.state) }}</p><p v-else class="hint">最近操作：尚無操作</p></div>
-        <details class="detail-section diagnostics"><summary>工作階段與診斷資料</summary><p class="mono">實際程序狀態：{{ stateName(single.state) }}<br>Run：{{ single.run?.id ?? '無' }}<br>Java：{{ pathLabel(currentMeta?.java ?? '尚未提供') }}<br>位置：{{ pathLabel(currentMeta?.path ?? '尚未提供') }}</p><p v-if="feedback" class="hint selectable">{{ feedback }}</p><button @click="emit('logs',single.name)">查看啟動紀錄</button>
+        <div class="recent-operation detail-section"><p v-if="recent" class="hint">最近操作：{{ actionName(recent.action) }} · {{ jobStateName(recent.state) }}</p><p v-else class="hint">最近操作：尚無操作</p></div>
+        <details class="detail-section diagnostics"><summary>工作階段與診斷資料</summary><p class="mono">實際程序狀態：{{ stateName(single.state) }}<br>Run：{{ single.run?.id ?? '無' }}<br>Java：{{ pathLabel(currentMeta?.java ?? '尚未提供') }}<br>位置：{{ pathLabel(currentMeta?.path ?? '尚未提供') }}</p><button @click="emit('logs',single.name)">查看啟動紀錄</button>
           <InstanceDiagnosticsPanel :key="single.name" :instance="single.name" :rows="rows" :proxies="diagnosticProxies" :connected="connected" :time-format="preferences.timeFormat" />
         </details>
       </template>
