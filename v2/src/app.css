@@ -137,3 +137,11 @@ input,textarea,[contenteditable=true],pre,code,.mono,.selectable,.form-error,[ro
 
 /* Result of the last manual operation; reserves its line so the list does not move. */
 .operation-status{min-height:1.5em;margin:-8px 0 8px;font-size:.875rem;color:var(--muted);overflow-wrap:anywhere}
+
+/* Long dialogs scroll inside an overlay scrollbar; the dialog itself never shows a native one. */
+dialog.overlay-dialog{overflow:hidden}
+dialog.overlay-dialog[open]{display:flex;flex-direction:column}
+dialog .dialog-scroll{min-height:0;flex:1}
+dialog .dialog-scroll .overlay-viewport{padding:0 14px 4px 0}
+/* Remaining native scroll areas reserve the gutter so content width stays fixed. */
+dialog,pre,.button-list,#view{scrollbar-gutter:stable;scrollbar-width:thin}

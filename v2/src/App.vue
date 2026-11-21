@@ -965,7 +965,8 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
     :batches="coreBatches" :connected="connected" :blocked-names="new Set([...lifecycleBusy,...queuedStarts,...residentStarting])"
     :cancelling="cancellingCoreBatch" :cancel-failure="coreCancelFailure"
     @submitted="coreBatchSubmitted" @changed="refreshAfterCoreChange" @cancel="cancelCoreBatch" />
-  <dialog ref="dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'}" @cancel.prevent="close">
+  <dialog ref="dialog" class="overlay-dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'}" @cancel.prevent="close">
+    <OverlayScroll class="dialog-scroll" label="對話框內容">
     <template v-if="modal==='batch'"><h2 id="operation-dialog-title">確認批次操作</h2><p>將對 {{ pendingBatch?.targets.length ?? 0 }} 台實例執行{{ pendingBatch?.action==='start'?'啟動':pendingBatch?.action==='stop'?'正常停止':'重新啟動' }}。</p><p v-if="pendingBatch?.action==='restart'" class="hint">停止逾時的實例不會自動啟動。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">取消</button><OperationButton class="primary" label="確認操作" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
     <template v-if="modal==='force'"><h2 id="operation-dialog-title">強制停止伺服器</h2><p>要強制停止 {{ target?.name }} 嗎？尚未存檔的世界變更可能遺失。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="forceStop">強制停止</button></div></template>
     <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">移除管理</h2><p>選擇 {{ target?.name }} 的管理設定處理方式。兩種方式都保留世界、插件與伺服器檔案；日後可在管理資料夾重新核對。</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">移除管理，保留管理設定</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">移除管理並刪除管理設定</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="removeManagement">確認移除</button></div></template>
@@ -1049,6 +1050,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         </div>
       </form>
     </template>
+  </OverlayScroll>
   </dialog>
   <dialog ref="routeDialog" class="compact" aria-labelledby="route-dialog-title" @cancel.prevent="routeDialog?.close()"><h2 id="route-dialog-title">放棄變更</h2><p>目前設定有尚未儲存的變更。</p><div class="dialog-actions"><button autofocus @click="routeDialog?.close()">取消</button><button class="danger" @click="confirmRoute">放棄變更</button></div></dialog>
   <dialog ref="discardProvisionDialog" class="compact" aria-labelledby="discard-provision-title" @cancel.prevent="discardProvisionDialog?.close()"><h2 id="discard-provision-title">放棄建立草稿</h2><p>目前欄位有尚未送出的內容。</p><div class="dialog-actions"><button autofocus @click="discardProvisionDialog?.close()">取消</button><button class="danger" @click="discardProvision">放棄草稿</button></div></dialog>
