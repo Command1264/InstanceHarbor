@@ -37,17 +37,19 @@ impl Language {
     }
 }
 
-pub fn show_label(language: Language) -> String {
+// Follow the platform convention: short verbs, no product name. The settings help
+// text explains that servers keep running after the app quits.
+pub fn show_label(language: Language) -> &'static str {
     match language {
-        Language::TraditionalChinese => format!("開啟 {TITLE}"),
-        Language::English => format!("Open {TITLE}"),
+        Language::TraditionalChinese => "顯示應用程式",
+        Language::English => "Show app",
     }
 }
 
 pub fn quit_label(language: Language) -> &'static str {
     match language {
-        Language::TraditionalChinese => "結束介面（伺服器繼續執行）",
-        Language::English => "Quit app (servers keep running)",
+        Language::TraditionalChinese => "結束",
+        Language::English => "Quit",
     }
 }
 
@@ -163,6 +165,9 @@ mod tests {
         assert_eq!(Language::parse("zh-TW"), Ok(Language::TraditionalChinese));
         assert_eq!(Language::parse("en"), Ok(Language::English));
         assert!(Language::parse("system").is_err());
-        assert!(quit_label(Language::English).contains("servers keep running"));
+        for language in [Language::TraditionalChinese, Language::English] {
+            assert!(!show_label(language).contains(TITLE));
+            assert!(quit_label(language).chars().count() <= 4);
+        }
     }
 }

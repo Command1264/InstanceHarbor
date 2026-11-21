@@ -28,9 +28,9 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 ## 系統匣
 
 - 主程式在 Windows 通知區域（右下角）顯示圖示。滑鼠停在圖示上會顯示執行中的伺服器台數。
-- 左鍵點圖示，或右鍵選「開啟」，可叫回主視窗。再次執行 `InstanceHarbor.exe` 也會叫回隱藏的視窗。
+- 左鍵點圖示，或右鍵選「顯示應用程式」，可叫回主視窗。再次執行 `InstanceHarbor.exe` 也會叫回隱藏的視窗。
 - 「語言與外觀」的「關閉視窗時縮到系統匣」預設開啟：按 X 只隱藏視窗。關閉此設定後，按 X 會結束介面。
-- 右鍵選「結束介面」才會結束 GUI 程序。伺服器、Host 與 Manager 在任何情況下都不隨 GUI 結束。
+- 右鍵選「結束」才會結束 GUI 程序。伺服器、Host 與 Manager 在任何情況下都不隨 GUI 結束。
 - 回退相容：此設定維持預設時不寫入 `preferences.json`。若已關閉此設定，回退到 `1.0.0-rc2` 前請先重新開啟並儲存，否則舊版無法讀取外觀設定。
 
 ## Windows 檔案存取與部分清單
