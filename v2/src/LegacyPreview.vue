@@ -19,14 +19,14 @@ let opener: HTMLElement | null = null
 const states = { stopped: '已停止', managed: '1.0 Host 正在管理', external: '外部程序占用', unknown: '狀態未確認' }
 const reasons: Record<string, string> = {
   ConfigUnreadable: '缺少必要設定，或設定無法讀取',
-  ConfigInvalid: '實例身分、連接埠或設定不符合已支援的 1.0 格式',
+  ConfigInvalid: '實例身分、 Port 或設定不符合已支援的 1.0 格式',
   NoHostOrListener: '核對時沒有觀察到 Host 或 TCP 監聽',
   IndependentListener: '監聽程序未由此 1.0 實例管理',
   VerifiedLegacyHost: '已核對 Host、啟動紀錄與子程序身分',
   HostUnconfirmed: '無法確認 Host 身分或啟動紀錄。若實例仍在執行，請核對 Host 執行檔路徑',
   LegacyTicketUnreadable: '無法讀取啟動紀錄',
   LegacyDirectoryUnreadable: '無法讀取啟動紀錄資料夾',
-  DuplicatePort: '掃描範圍內有多台實例設定相同的連接埠',
+  DuplicatePort: '掃描範圍內有多台實例設定相同的 Port',
   ListenerUnconfirmed: '無法核對 Windows 的 TCP 監聽資料',
   ListenerMismatch: '監聽程序與 Host 回報不一致',
   ListenerAmbiguous: '監聽程序有多個或身分不明',
@@ -92,7 +92,7 @@ async function check() {
         <label>1.0 Host 執行檔路徑
           <input v-model="host" name="legacy-host-executable" autocomplete="off" spellcheck="false" :readonly="busy" aria-describedby="legacy-host-hint">
         </label>
-        <p id="legacy-host-hint" class="hint">只填入你確認的 1.0 Host。留空時不向任何 Host 查詢狀態。</p>
+        <p id="legacy-host-hint" class="hint">只填入已確認的 1.0 Host。留空時不向任何 Host 查詢狀態。</p>
       </details>
     </form>
     <p class="legacy-status" role="status">{{ status }}</p>

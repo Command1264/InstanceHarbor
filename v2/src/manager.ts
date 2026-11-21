@@ -106,7 +106,7 @@ export function manage<T>(arguments_: string[],origin:'manual'|'background'='man
 }
 export const stateNames: Record<string, string> = {
   Stopped: '已停止', Listening: '正在監聽', Starting: '啟動中',
-  PortOccupied: '連接埠已被占用', RunUnconfirmed: '工作階段未確認',
+  PortOccupied: 'Port 已被占用', RunUnconfirmed: '工作階段未確認',
 }
 export function stateName(state: string) { return stateNames[state] ?? state }
 const actionNames:Record<string,string>={create:'建立',import:'匯入','import-batch':'批次匯入',start:'啟動','batch-start':'批次啟動','batch-stop':'批次正常停止','batch-restart':'批次重新啟動','start-if-current':'啟動',stop:'正常停止',restart:'重新啟動','force-stop':'強制停止','core-install':'更新核心','core-batch-install':'批次核心更新','core-restore':'還原核心','core-reconcile':'核對核心維護','remove-management':'移除管理',adopt:'重新接入'}
@@ -170,7 +170,7 @@ export function errorText(error: unknown) {
   if (raw.includes('InstanceDirectoryInUse')) return '這個資料夾已有執行中的宿主，請先核對該工作階段。'
   if (raw.includes('ImportManagementUnconfirmed')) return '目錄可能仍由其他方式管理，或有世界檔案正在使用。請先核對停止狀態及來源。'
   if (raw.includes('PortAlreadyRegistered')) return '這個 Port 已登記給其他實例。請選擇未使用的 Port。'
-  if (raw.includes('PortOccupied')) return '連接埠已被占用。請選擇其他 Port。'
+  if (raw.includes('PortOccupied')) return 'Port 已被占用。請選擇其他 Port。'
   if (raw.includes('JavaShimNotAllowed')) return '請選擇實際的 java.exe，不能使用轉接腳本或 shim。'
   if (raw.includes('InvalidLifecycleTiming')) return '請核對停止、就緒期限及重啟緩衝的數值範圍。'
   if (raw.includes('UnverifiedCreationCore')) return '目前無法核對這份核心 JAR，請選擇已驗證的版本。'
@@ -205,7 +205,7 @@ export function errorText(error: unknown) {
   if (raw.includes('InstanceNotConfirmedStopped')) return '實例尚未確認為已停止。請重新核對狀態後再試。'
   if (raw.includes('ResultUnconfirmed') || raw.includes('StopResultUnconfirmed')) return '操作結果未確認。請查看工作紀錄與目前工作階段。'
   if (raw.includes('RunUnconfirmed')) return '工作階段身分無法確認或已改變。請重新核對實例狀態。'
-  if (raw.includes('StartIntentChanged')) return '啟動前的工作階段或緊急停止狀態已改變。請重新核對實例後再試。'
+  if (raw.includes('StartIntentChanged')) return '啟動前的工作階段或強制停止狀態已改變。請重新核對實例後再試。'
   if (raw.includes('AlreadyManaged')) return '此實例已在管理清單中。請重新核對清單。'
   if (raw.includes('InvalidServerPort')) return '伺服器 Port 設定無效。請核對 server.properties 後再試。'
   if (raw.includes('RequestConflict')) return '請求識別碼與先前操作不符。請重新核對工作紀錄。'

@@ -1208,7 +1208,7 @@ void load()
       </template>
       <template v-else-if="tab==='autorestart'">
         <h2>自動重啟</h2>
-        <p class="hint">管理服務持續運作時，依可核對的退出結果與 Port 狀態重啟。正常停止或緊急停止永遠優先。</p>
+        <p class="hint">管理服務持續運作時，依可核對的退出結果與 Port 狀態重啟。正常停止或強制停止永遠優先。</p>
         <div v-if="restartStatus" class="hint" role="status">
           <p>{{ t(`settings.restartState.${restartStatus.phase}`) }}</p>
           <p v-if="restartAttemptCount!==undefined">{{ t('settings.restartAttemptCount',{ count:restartAttemptCount }) }}</p>
@@ -1266,7 +1266,7 @@ void load()
       </template>
       <template v-else-if="tab==='scan'">
         <h2>{{ t('management.paths') }}</h2>
-        <p id="scan-help" class="hint">白名單指定要管理的資料夾。黑名單只接受白名單下的子資料夾，並優先排除。可使用完整路徑，或以工作區為起點的相對路徑，例如 ./instances。</p>
+        <p id="scan-help" class="hint">納入資料夾指定要管理的資料夾。排除資料夾只接受納入資料夾下的子資料夾，並優先排除。可使用完整路徑，或以工作區為起點的相對路徑，例如 ./instances。</p>
         <template v-if="scan">
           <p v-if="scan.policy.allow.length || scan.policy.exclude.length" class="hint">既有名稱規則仍有效。允許 {{ scan.policy.allow.join('、') || '無' }}，排除 {{ scan.policy.exclude.join('、') || '無' }}。</p>
           <ManagementPathRows v-for="kind in scanKinds" :key="kind" :kind="kind" :rows="scanDraft[kind]"

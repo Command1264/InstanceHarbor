@@ -216,7 +216,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   <dialog ref="confirm" class="compact" aria-labelledby="core-confirm-title" @cancel="busy && $event.preventDefault()">
     <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?'還原核心':choice?.action==='core-reconcile'?'核對維護結果':'更新核心' }}</h2>
     <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">目標版本為 Build {{ choice.candidateBuild }}。</p>
-    <p>管理服務會再次核對目標、連接埠、已安裝核心及備份。請確認要繼續。</p>
+    <p>管理服務會再次核對目標、 Port、已安裝核心及備份。請確認要繼續。</p>
     <div class="dialog-actions">
       <button autofocus :disabled="busy" @click="confirm?.close()">取消</button>
       <OperationButton class="primary" label="確認" :busy-label="t('action.submitting')" :busy="confirming" @click="apply" />

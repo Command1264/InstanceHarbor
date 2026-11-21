@@ -246,7 +246,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
         <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><button type="button" :disabled="!connected" @click="emit('core',single.name)">核心維護</button>
         <dl><dt>觀察狀態</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">管理範圍</dt><dd v-if="single.outsideManagement">已排除，仍可正常停止</dd><dt>監聽程序</dt><dd>{{ single.ownerPid ? `${single.ownerName ?? '名稱未確認'} · PID ${single.ownerPid}` : '未確認' }}</dd></dl>
         <div class="detail-actions">
-          <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">緊急停止</button>
+          <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">強制停止</button>
           <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?'啟動中':isQueued(single)?'排隊中':'啟動' }}</button>
           <button v-else :disabled="!connected || busyNames.has(single.name) || !canStop(single)" @click="emit('action','stop',[single])">正常停止</button>
           <button :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">開啟後台</button>

@@ -686,7 +686,7 @@ async function operateOne(action:'start'|'stop'|'restart',row:Instance){
     if(reason === 'AutoJavaUnavailable') requests.delete(key)
     if(['stop','restart'].includes(action)&&['StopTimeout','Timeout','HostUnavailable'].some(code=>reason.includes(code))){
       requests.delete(key)
-      if(generation===forceGeneration)showOperationError(`${row.name} 停止結果未確認。請核對工作紀錄，必要時使用緊急停止。`)
+      if(generation===forceGeneration)showOperationError(`${row.name} 停止結果未確認。請核對工作紀錄，必要時使用強制停止。`)
     }else if(generation===forceGeneration)showOperationError(`${row.name} 操作失敗：${errorText(e)}`)
   }finally{
     markActiveRequest(id,false)
@@ -772,7 +772,7 @@ async function forceStop(){
   markActiveRequest(id,true)
   dialog.value?.close()
   modal.value=null
-  feedback.value='正在核對程序並執行緊急停止'
+  feedback.value='正在核對程序並執行強制停止'
   try{
     await manage<{forced?:boolean}>(['force-stop',item.name,id,item.run])
     feedback.value=''
@@ -982,10 +982,10 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <dl class="create-review">
           <dt>實例路徑</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.target) }}</dd>
           <dt>核心版本</dt><dd>{{ creationPreview.core.family }} {{ creationPreview.core.minecraft }}<span v-if="creationPreview.core.build"> · Build {{ creationPreview.core.build }}</span></dd>
-          <dt>連接埠</dt><dd>{{ draft.port }}</dd>
+          <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>建議 Java</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
           <template v-if="creationPreview.whitelist">
-            <dt>新增白名單</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
+            <dt>新增納入資料夾</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
           </template>
         </dl>
         <p v-if="creationPreview.whitelist" class="hint">只加入這台實例的資料夾。</p>
