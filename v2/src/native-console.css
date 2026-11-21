@@ -1,0 +1,134 @@
+html { color-scheme: dark; --console-background: #101820; --console-tab-bar: #192531; background: var(--console-background); color: #e8f0f4; }
+body { margin: 0; font: 14px "Segoe UI", "Microsoft JhengHei UI", sans-serif; }
+[hidden] { display: none !important; }
+html, body, main { height: 100%; overflow: hidden; }
+main { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+#console-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid #405365;
+  background: var(--console-tab-bar);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.console-tab {
+  --tab-base: var(--console-tab-bar);
+  --tab-hover: #0b131d;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  max-width: 260px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+  color: #bccdd9;
+}
+.console-tab:has([aria-selected="true"]) {
+  --tab-base: var(--console-background);
+  --tab-hover: #05090f;
+  background: var(--tab-base);
+  border-color: #506578;
+  color: #e8f0f4;
+}
+.console-tab:hover { background: var(--tab-hover); }
+.console-tab button {
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-radius: 4px;
+  font: inherit;
+  min-height: 32px;
+}
+.console-tab .tab-close:hover { background: var(--tab-base); }
+.console-tab .tab-close:active { background: #2a3d4e; }
+.console-tab button:focus-visible { outline: 2px solid #9bcaff; outline-offset: -2px; }
+.tab-name { padding: 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab-close { flex: 0 0 28px; margin-right: 4px; }
+#console-panels { min-height: 0; min-width: 0; }
+.console-panel {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 8px 0 8px 10px;
+  overflow: hidden;
+}
+.console-surface { position: relative; height: 100%; overflow: clip; }
+.console-screen, .console-screen > .xterm { height: 100%; }
+.console-surface .xterm .xterm-viewport {
+  background-color: var(--console-background);
+  scrollbar-width: none;
+}
+.console-surface .xterm .scrollbar,
+.console-surface .xterm .xterm-scrollable-element > .shadow { display: none; }
+.console-rail {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 14px;
+  z-index: 12;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 140ms linear;
+}
+.console-surface:hover .console-rail, .console-rail:focus { opacity: 1; }
+.console-thumb {
+  position: absolute;
+  inset: 0 2px auto auto;
+  width: 6px;
+  border-radius: 999px;
+  background: #758a9b;
+}
+.console-rail:hover .console-thumb, .console-rail:focus .console-thumb { background: #9aaebb; }
+.console-rail:active .console-thumb { background: #b5c7d4; }
+.console-rail:focus-visible { outline: 2px solid #9bcaff; outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .console-rail { transition: none; } }
+.console-paste-dialog {
+  box-sizing: border-box;
+  width: min(34rem, calc(100% - 2rem));
+  padding: 20px;
+  border: 1px solid #506578;
+  border-radius: 8px;
+  background: var(--console-tab-bar);
+  color: inherit;
+}
+.console-paste-dialog::backdrop { background: rgb(0 0 0 / 55%); }
+.console-paste-dialog h2 { margin: 0; font-size: 18px; }
+.console-paste-dialog pre {
+  max-height: min(35vh, 14rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  padding: 10px;
+  background: var(--console-background);
+}
+.console-paste-dialog form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.console-paste-dialog button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid #506578;
+  border-radius: 4px;
+  background: var(--console-background);
+  color: inherit;
+  font: inherit;
+}
+.console-paste-dialog button:hover { background: #2a3d4e; }
+.console-paste-dialog .console-paste-primary {
+  border-color: #9bc6ff;
+  background: #9bc6ff;
+  color: #101820;
+  font-weight: 600;
+}
+.console-paste-dialog .console-paste-primary:hover { background: #b1d3ff; }
+.console-paste-dialog button:focus-visible { outline: 2px solid #e8f0f4; outline-offset: 2px; }
+.console-error, #console-error {
+  position: fixed;
+  z-index: 2;
+  right: 14px;
+  bottom: 12px;
+  max-width: calc(100% - 28px);
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #503122;
+  color: #fff1e5;
+}

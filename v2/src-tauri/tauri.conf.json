@@ -1,0 +1,28 @@
+{
+  "productName": "InstanceHarbor",
+  "version": "1.0.0-rc2",
+  "identifier": "local.instanceharbor.v2",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "InstanceHarbor",
+        "width": 1380,
+        "height": 860,
+        "minWidth": 980,
+        "minHeight": 640,
+        "center": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

@@ -1,0 +1,506 @@
+{
+  "baseline": "85e38b3f6504161b0e573e053184ad582f6b5daf",
+  "checkedAt": "2026-11-02",
+  "features": [
+    {
+      "id": "instance-search",
+      "group": "instances",
+      "name": "搜尋實例名稱、專案、用途、Port、路徑",
+      "v1Evidence": "gui/app.py:2035",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "1.0 有搜尋；2.0 保留搜尋與狀態篩選，主畫面用途 combo 本輪先隱藏。隱藏目標退出選取。"
+    },
+    {
+      "id": "instance-table-columns",
+      "group": "instances",
+      "name": "實例清單欄位與排序",
+      "v1Evidence": "gui/app.py:436",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "redesign",
+      "note": "1.0 欄位為名稱、Kind、Port、觀察、Port 查核、最近操作；沒有獨立核心/版本欄。2.0 核心/版本欄屬新資訊設計。 本輪實例、核心／版本、最近操作靠左；Port 與觀察狀態的標題及值置中。"
+    },
+    {
+      "id": "instance-selection-multi",
+      "group": "instances",
+      "name": "單選、多選、Ctrl/Shift、清除選取",
+      "v1Evidence": "gui/app.py:446",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "2.0 整列選取，不提供選取 checkbox；保留 Ctrl／Shift、鍵盤與 Esc 清除。"
+    },
+    {
+      "id": "instance-pin",
+      "group": "instances",
+      "name": "釘選與取消釘選",
+      "v1Evidence": "gui/app.py:553",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "單一實例詳情區提供釘選控制。"
+    },
+    {
+      "id": "instance-pin-order",
+      "group": "instances",
+      "name": "釘選項目上移/下移與清除失效釘選",
+      "v1Evidence": "gui/app.py:558",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "另有 stale pin 清理按鈕；釘選順序不參與普通欄位排序。"
+    },
+    {
+      "id": "instance-sort",
+      "group": "instances",
+      "name": "欄位排序與排序選單",
+      "v1Evidence": "gui/app.py:467",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "表頭點擊排序並有排序選單；刷新保存視圖偏好。"
+    },
+    {
+      "id": "instance-start",
+      "group": "lifecycle",
+      "name": "啟動所選實例",
+      "v1Evidence": "gui/app.py:507",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "已確認保留所選目標操作；依各台狀態執行，逾時不自動強制終止。"
+    },
+    {
+      "id": "instance-stop",
+      "group": "lifecycle",
+      "name": "正常停止所選實例",
+      "v1Evidence": "gui/app.py:513",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "已確認保留所選目標操作；依各台狀態執行，逾時不自動強制終止。"
+    },
+    {
+      "id": "instance-restart",
+      "group": "lifecycle",
+      "name": "重新啟動所選實例",
+      "v1Evidence": "gui/app.py:517",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "retain",
+      "note": "已確認保留所選目標操作；依各台狀態執行，逾時不自動強制終止。 最新排程示意：正常停止各自送出且獨立等待；啟動共用有限併發名額，慢台不阻擋其他台。取消不能撤銷已送出的停止。"
+    },
+    {
+      "id": "instance-open-console",
+      "group": "terminal",
+      "name": "開啟/附加原生後台觀看視窗",
+      "v1Evidence": "gui/app.py:504",
+      "v1State": "present",
+      "v2Screen": "terminal",
+      "decision": "redesign",
+      "note": "獨立後台入口；關閉觀看窗不代表停止伺服器。"
+    },
+    {
+      "id": "batch-start",
+      "group": "lifecycle",
+      "name": "全部或選取實例批次啟動",
+      "v1Evidence": "gui/app.py:403",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "redesign",
+      "note": "已確認保留：全部操作選單與右側所選操作分開，不依選取數量換意義；每項先獨占確認，範圍不受搜尋／狀態篩選影響，不含 Agent／外部／已移除管理。有限併發、個別略過與逐台結果；目前僅離線模擬。 最新排程示意：正常停止各自送出且獨立等待；啟動共用有限併發名額，慢台不阻擋其他台。取消不能撤銷已送出的停止。"
+    },
+    {
+      "id": "batch-stop",
+      "group": "lifecycle",
+      "name": "全部或選取實例批次正常停止",
+      "v1Evidence": "gui/app.py:403",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "redesign",
+      "note": "已確認保留：全部操作選單與右側所選操作分開，不依選取數量換意義；每項先獨占確認，範圍不受搜尋／狀態篩選影響，不含 Agent／外部／已移除管理。有限併發、個別略過與逐台結果；目前僅離線模擬。 最新排程示意：正常停止各自送出且獨立等待；啟動共用有限併發名額，慢台不阻擋其他台。取消不能撤銷已送出的停止。"
+    },
+    {
+      "id": "batch-restart",
+      "group": "lifecycle",
+      "name": "全部或選取實例批次重新啟動",
+      "v1Evidence": "gui/app.py:403",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "redesign",
+      "note": "已確認保留：全部操作選單與右側所選操作分開，不依選取數量換意義；每項先獨占確認，範圍不受搜尋／狀態篩選影響，不含 Agent／外部／已移除管理。有限併發、個別略過與逐台結果；目前僅離線模擬。 最新排程示意：正常停止各自送出且獨立等待；啟動共用有限併發名額，慢台不阻擋其他台。取消不能撤銷已送出的停止。"
+    },
+    {
+      "id": "batch-cancel-remaining",
+      "group": "lifecycle",
+      "name": "取消批次操作剩餘目標",
+      "v1Evidence": "gui/app.py:415",
+      "v1State": "present",
+      "v2Screen": "activity",
+      "decision": "retain",
+      "note": "2.0保留取消剩餘；不得以關閉視窗冒充取消。"
+    },
+    {
+      "id": "batch-progress-results",
+      "group": "activity",
+      "name": "批次進度、逐台成功/失敗/取消結果",
+      "v1Evidence": "gui/app.py:1226",
+      "v1State": "present",
+      "v2Screen": "activity",
+      "decision": "redesign",
+      "note": "結果持續可查；提交狀態不確定時唯讀重新核對，不重送 mutation。 最新排程示意：正常停止各自送出且獨立等待；啟動共用有限併發名額，慢台不阻擋其他台。取消不能撤銷已送出的停止。"
+    },
+    {
+      "id": "core-batch-update",
+      "group": "core",
+      "name": "選取或全部核心批次更新",
+      "v1Evidence": "gui/app.py:409",
+      "v1State": "present",
+      "v2Screen": "core",
+      "decision": "retain",
+      "note": "批次核心更新是明確保留項；逐台結果、進度、取消剩餘與重查需保留。"
+    },
+    {
+      "id": "core-batch-recent",
+      "group": "core",
+      "name": "近期核心批次結果檢視/重開",
+      "v1Evidence": "gui/app.py:412",
+      "v1State": "present",
+      "v2Screen": "activity",
+      "decision": "retain",
+      "note": "近期核心更新結果有獨立入口，不能只保留即時進度。"
+    },
+    {
+      "id": "core-single-check",
+      "group": "core",
+      "name": "單實例核心版本查核與更新",
+      "v1Evidence": "gui/core_maintenance.py:334",
+      "v1State": "present",
+      "v2Screen": "core",
+      "decision": "retain",
+      "note": "顯示本機/候選版本、時間、結果與錯誤；更新需核對與確認。"
+    },
+    {
+      "id": "core-install-prepare",
+      "group": "core",
+      "name": "核心安裝/準備任務與進度檢視",
+      "v1Evidence": "gui/core_maintenance.py:315",
+      "v1State": "present",
+      "v2Screen": "core",
+      "decision": "retain",
+      "note": "程式包含 Install/Prepare 長任務狀態；需與更新區分。"
+    },
+    {
+      "id": "core-backup-restore",
+      "group": "backups",
+      "name": "列出備份並依備份/目前雜湊確認還原",
+      "v1Evidence": "gui/core_maintenance.py:388",
+      "v1State": "present",
+      "v2Screen": "backups",
+      "decision": "retain",
+      "note": "還原受 stopped/backup capability/hash 條件限制；有確認流程。"
+    },
+    {
+      "id": "core-unknown-resolve",
+      "group": "core",
+      "name": "處理結果不確定的核心操作",
+      "v1Evidence": "gui/core_maintenance.py:401",
+      "v1State": "present",
+      "v2Screen": "core",
+      "decision": "retain",
+      "note": "Resolve unknown operation 是進階維護入口；核對結果後才決定下一步。"
+    },
+    {
+      "id": "core-diagnostics-copy",
+      "group": "core",
+      "name": "核心維護診斷展開與複製",
+      "v1Evidence": "gui/core_maintenance.py:405",
+      "v1State": "present",
+      "v2Screen": "core",
+      "decision": "retain",
+      "note": "診斷 JSON 可展開/複製；依最新契約放在備份診斷進階內容，不要求所有技術控件同時可見。"
+    },
+    {
+      "id": "core-legacy-stop-recovery",
+      "group": "core",
+      "name": "舊停止紀錄預覽/恢復流程",
+      "v1Evidence": "gui/core_maintenance.py:329",
+      "v1State": "present",
+      "v2Screen": "core",
+      "decision": "retain",
+      "note": "底層有 legacy-stop 預覽與恢復；visibility 邏輯可能隱藏按鈕，依 1.0 已確認四按鈕主頁契約，不表示所有按鈕同時顯示。"
+    },
+    {
+      "id": "settings-global-instance",
+      "group": "runtime",
+      "name": "全域與實例設定、逐欄繼承/自訂/重設",
+      "v1Evidence": "gui/manager_settings.py:213",
+      "v1State": "present",
+      "v2Screen": "runtime",
+      "decision": "redesign",
+      "note": "1.0 有逐欄繼承與全域來源顯示；2.0 本輪改為實例獨立儲存，建立範本只在建立時複製，後續不連動。"
+    },
+    {
+      "id": "java-runtime-picker",
+      "group": "runtime",
+      "name": "Java 路徑瀏覽、手動輸入、候選清單刷新",
+      "v1Evidence": "gui/java_runtime_picker.py:28",
+      "v1State": "present",
+      "v2Screen": "runtime",
+      "decision": "redesign",
+      "note": "1.0 支援 java.exe 手選及 mise/path 候選；2.0另要求顯示版本、供應商、路徑。"
+    },
+    {
+      "id": "java-runtime-check",
+      "group": "runtime",
+      "name": "Java/JVM 組合檢查與結果",
+      "v1Evidence": "gui/manager_settings.py:313",
+      "v1State": "present",
+      "v2Screen": "runtime",
+      "decision": "retain",
+      "note": "手動查核可顯示錯誤/警告；候選可用性和相容性推測不可當保證。"
+    },
+    {
+      "id": "jvm-heap-gc-args",
+      "group": "runtime",
+      "name": "初始/最大 Heap、GC、進階 JVM 參數",
+      "v1Evidence": "gui/manager_settings.py:19",
+      "v1State": "present",
+      "v2Screen": "runtime",
+      "decision": "retain",
+      "note": "欄位包含 -Xms/-Xmx、GC、extra JVM args JSON array；實例可查看唯讀實際參數。"
+    },
+    {
+      "id": "restart-timeouts",
+      "group": "restart",
+      "name": "正常停止期限、啟動就緒期限、資源釋放緩衝",
+      "v1Evidence": "gui/manager_settings.py:21",
+      "v1State": "present",
+      "v2Screen": "restart",
+      "decision": "retain",
+      "note": "重啟設定三欄，秒/毫秒單位不同，需清楚呈現。"
+    },
+    {
+      "id": "autorestart-policy",
+      "group": "autorestart",
+      "name": "崩潰/非手動退出自動重啟策略",
+      "v1Evidence": "gui/manager_settings.py:29",
+      "v1State": "present",
+      "v2Screen": "autorestart",
+      "decision": "retain",
+      "note": "欄位含兩種觸發條件、等待秒數序列、最多次數、計數時間窗、穩定運行秒數。"
+    },
+    {
+      "id": "terminal-title-template",
+      "group": "terminal",
+      "name": "原生後台標題範本與預覽",
+      "v1Evidence": "gui/manager_settings.py:28",
+      "v1State": "present",
+      "v2Screen": "terminal",
+      "decision": "retain",
+      "note": "有 titleTemplate、延遲預覽、錯誤和占位符 catalog。"
+    },
+    {
+      "id": "appearance-theme",
+      "group": "appearance",
+      "name": "跟隨系統/淺色/深色主題",
+      "v1Evidence": "gui/display_preferences.py:85",
+      "v1State": "present",
+      "v2Screen": "appearance",
+      "decision": "retain",
+      "note": "即時預覽，取消回復；2.0保留主題偏好。"
+    },
+    {
+      "id": "appearance-selection-color",
+      "group": "appearance",
+      "name": "系統或產品選取色",
+      "v1Evidence": "gui/display_preferences.py:92",
+      "v1State": "present",
+      "v2Screen": "appearance",
+      "decision": "retain",
+      "note": "需與主題設定並列，線框不可漏掉選取色偏好。"
+    },
+    {
+      "id": "appearance-language",
+      "group": "appearance",
+      "name": "繁體中文/英文/跟隨系統與即時預覽",
+      "v1Evidence": "gui/display_preferences.py:101",
+      "v1State": "present",
+      "v2Screen": "appearance",
+      "decision": "retain",
+      "note": "Save 保存、Cancel 回復語言與外觀。"
+    },
+    {
+      "id": "appearance-time-format",
+      "group": "appearance",
+      "name": "時間格式設定與範例預覽",
+      "v1Evidence": "gui/display_preferences.py:113",
+      "v1State": "present",
+      "v2Screen": "appearance",
+      "decision": "retain",
+      "note": "GUI 有時間格式下拉及預覽；偏好保存失敗可重試。"
+    },
+    {
+      "id": "initialization-defaults",
+      "group": "initialization",
+      "name": "Human/Agent 全域初始化預設與版本支援預覽",
+      "v1Evidence": "gui/initialization_policy.py:283",
+      "v1State": "present",
+      "v2Screen": "initialization",
+      "decision": "redesign",
+      "note": "動態 catalog、分類、搜尋、逐欄來源/支援/重設、草稿恢復與 revision 衝突處理。 2.0 一般使用者頁不編輯 Agent 政策；分類為伺服器、Spigot／Bukkit、Paper、世界與遊戲規則，使用常用／進階與跨類搜尋。"
+    },
+    {
+      "id": "initialization-time",
+      "group": "initialization",
+      "name": "新實例初始世界時間政策",
+      "v1Evidence": "gui/initialization_policy.py:483",
+      "v1State": "present",
+      "v2Screen": "initialization",
+      "decision": "retain",
+      "note": "initialTime 可跟隨或設定 0-23999 ticks；屬初始化預設。 2.0 一般使用者頁不編輯 Agent 政策；分類為伺服器、Spigot／Bukkit、Paper、世界與遊戲規則，使用常用／進階與跨類搜尋。"
+    },
+    {
+      "id": "world-existing-policy",
+      "group": "world",
+      "name": "既有實例檔案政策與規則設定差異/預覽/套用",
+      "v1Evidence": "gui/world_policy.py:356",
+      "v1State": "present",
+      "v2Screen": "world",
+      "decision": "redesign",
+      "note": "設定檔與世界規則分開；直接編輯目前值並就地顯示差異，只套用實際修改。沒有選取欄；後端預覽核對整合在套用確認，不新增手動預覽步驟。"
+    },
+    {
+      "id": "world-time-policy",
+      "group": "world",
+      "name": "既有世界遊戲時間套用",
+      "v1Evidence": "gui/world_policy.py:383",
+      "v1State": "present",
+      "v2Screen": "world",
+      "decision": "retain",
+      "note": "規則頁另有 time checkbox、目前 ticks、目標 ticks；與初始化初始時間分開。"
+    },
+    {
+      "id": "world-result-diagnosis",
+      "group": "world",
+      "name": "世界政策歷史、結果重查/調和與診斷",
+      "v1Evidence": "gui/world_policy.py:177",
+      "v1State": "present",
+      "v2Screen": "world",
+      "decision": "retain",
+      "note": "可查歷史操作與技術細節、refresh/reconcile 不確定結果；需保留確認邊界。"
+    },
+    {
+      "id": "session-status",
+      "group": "instances",
+      "name": "管理服務連線、工作階段、Port 查核與時間戳",
+      "v1Evidence": "gui/app.py:524",
+      "v1State": "present",
+      "v2Screen": "instances",
+      "decision": "redesign",
+      "note": "觀察狀態、宿主身分、核對時間不等同核心 Ready 或玩家可登入；失聯保留最近資訊。"
+    },
+    {
+      "id": "operation-history",
+      "group": "activity",
+      "name": "近期操作結果及歷史重新核對",
+      "v1Evidence": "gui/app.py:544",
+      "v1State": "present",
+      "v2Screen": "activity",
+      "decision": "retain",
+      "note": "成功/失敗/取消/未確認結果需持續可查，不因刷新消失。"
+    },
+    {
+      "id": "session-diagnostics",
+      "group": "logs",
+      "name": "實例身分/程序/監聽診斷區",
+      "v1Evidence": "gui/app.py:590",
+      "v1State": "present",
+      "v2Screen": "logs",
+      "decision": "redesign",
+      "note": "右側可收合；PID/完整路徑/Host 身分放診斷。"
+    },
+    {
+      "id": "startup-log-viewer",
+      "group": "logs",
+      "name": "查看啟動紀錄與開啟紀錄資料夾",
+      "v1Evidence": "gui/app.py:597",
+      "v1State": "present",
+      "v2Screen": "logs",
+      "decision": "retain",
+      "note": "讀取範圍可含 console、host stdout/stderr、events、exit evidence；部分失敗/截斷需明示。"
+    },
+    {
+      "id": "instance-create",
+      "group": "create",
+      "name": "建立實例流程",
+      "v1Evidence": "gui/app.py:375",
+      "v1State": "absent",
+      "v2Screen": "create",
+      "decision": "new",
+      "note": "在 1.0 主 GUI 未見建立入口；2.0建立流程含核心/版本、Java、位置、初始化政策。這是原始碼入口盤點，不是後端能力判定。"
+    },
+    {
+      "id": "instance-import",
+      "group": "import",
+      "name": "匯入既有實例流程",
+      "v1Evidence": "gui/app.py:375",
+      "v1State": "absent",
+      "v2Screen": "import",
+      "decision": "new",
+      "note": "匯入只登記原位置，不搬移、套政策或啟動；補權限不足、核心無法辨識、外部程序、重複位置與重試。清除管理資料後可重新匯入，建立新的管理設定。只為離線示意。 最新：重新加入走同一匯入精靈，自動辨識原管理JSON；保留設定與新建設定在確認前明示。"
+    },
+    {
+      "id": "instance-scan-paths",
+      "group": "scan",
+      "name": "掃描允許/排除路徑管理與顯示預覽",
+      "v1Evidence": "gui/app.py:382",
+      "v1State": "absent",
+      "v2Screen": "scan",
+      "decision": "new",
+      "note": "接受相對／絕對目錄，明示相對基準與解析後完整路徑；不以用途單詞當別名。排除優先，預覽顯示／隱藏但不啟停或刪除。"
+    },
+    {
+      "id": "onboarding",
+      "group": "onboarding",
+      "name": "首次接入與辨識舊服務/實例引導",
+      "v1Evidence": "gui/app.py:2406",
+      "v1State": "backend-only",
+      "v2Screen": "onboarding",
+      "decision": "new",
+      "note": "先唯讀辨識；運作中原1.0持有則阻擋接入，不停服或接管。閒置候選可預覽設定、保存管理快照、確認登記及還原本次接入。原Host、policy、伺服器檔案保留；真實Rust交接未驗證。"
+    },
+    {
+      "id": "backend-prepare-doctor",
+      "group": "onboarding",
+      "name": "管理服務 Prepare/Doctor RPC",
+      "v1Evidence": "gui/manager_client.py:579",
+      "v1State": "backend-only",
+      "v2Screen": "onboarding",
+      "decision": "pending",
+      "note": "僅確認 GUI client 封裝有 RPC，未見 app.py 對應可操作入口；不代表後端功能已驗收或有故障。"
+    },
+    {
+      "id": "manager-connection-status",
+      "group": "onboarding",
+      "name": "啟動時管理服務連線狀態與重試提示",
+      "v1Evidence": "gui/app.py:633",
+      "v1State": "present",
+      "v2Screen": "onboarding",
+      "decision": "redesign",
+      "note": "1.0顯示 connecting/失聯等狀態；2.0首次無資料應顯示連線狀態及重試，斷線保留最後有效資料。"
+    },
+    {
+      "id": "instance-management-registration",
+      "group": "instances",
+      "name": "移除管理、清除管理資料與重新加入",
+      "v1Evidence": "2.0 使用者本輪確認需求；不作為 1.0 缺漏證據",
+      "v1State": "not-audited",
+      "v2Screen": "import",
+      "decision": "new",
+      "note": "兩種移除都保留伺服器檔案。重新加入統一走匯入：原管理JSON存在時讀回並將removed:true改false；不存在時建立新設定。沒有獨立管理登記Dialog或已移除清單。"
+    }
+  ]
+}

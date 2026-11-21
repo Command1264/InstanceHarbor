@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "source": "Synthetic example routing records",
+  "entries": [
+    {
+      "port": 20197,
+      "route": "example-paper-26.3"
+    },
+    {
+      "port": 10097,
+      "route": "lobby"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+config-version = "2.9"
+bind = "127.0.0.1:25565"
+motd = "InstanceHarbor compatibility probe"
+online-mode = true
+force-key-authentication = true
+player-info-forwarding-mode = "legacy"
+forwarding-secret-file = "forwarding.secret"
+
+[servers]
+lobby = "127.0.0.1:30566"
+paper = "127.0.0.1:30567"
+try = ["lobby"]
+
+[forced-hosts]

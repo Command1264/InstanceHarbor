@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "version": "5.5.85",
+  "preservedArtifacts": {
+    "bukkit": [
+      {
+        "version": "5.5.65",
+        "fileName": "LuckPerms-Bukkit-5.5.65.jar",
+        "sha256": "8B842D9D95C3F3C056E471214D156C0D3D704A46CBDD1A04A9BC47281D54B8A3"
+      }
+    ]
+  },
+  "artifacts": {
+    "bukkit": {
+      "fileName": "LuckPerms-Bukkit-5.5.85.jar",
+      "sha256": "DC637CE18F48D3B75A7FFD1784B85BE16A627359090DFE5ADF15DAB6D145DC7D",
+      "url": "https://download.luckperms.net/1672/bukkit/loader/LuckPerms-Bukkit-5.5.85.jar",
+      "version": "5.5.85"
+    },
+    "velocity": {
+      "fileName": "LuckPerms-Velocity-5.5.85.jar",
+      "sha256": "DBF7090EE4EF2D0EAF054A93A89AC328DDA36F7A21C4E4AB3694A00BA3D8EF44",
+      "url": "https://ci.lucko.me/job/LuckPerms/1672/artifact/velocity/build/libs/LuckPerms-Velocity-5.5.85.jar",
+      "version": "5.5.85"
+    },
+    "bukkit-java8": {
+      "version": "5.4.145",
+      "fileName": "LuckPerms-Bukkit-5.4.145.jar",
+      "sha256": "99FA6656FB3CD968ACB800A1D1D9494E34C80DEEF68145521F1F61364117C1E5",
+      "publishedSha512": "3450844775070d7ef6fcc09ee76f96e18f602e6781636c36c563b52d6faacbda1663087fe97834920a57ea3bb3ed0fa0b39d57c1faefa9ef6babd1e3ae77d085",
+      "url": "https://cdn.modrinth.com/data/Vebnzrzj/versions/cfNN7sys/LuckPerms-Bukkit-5.4.145.jar",
+      "sourcePage": "https://modrinth.com/plugin/luckperms/version/cfNN7sys"
+    }
+  }
+}

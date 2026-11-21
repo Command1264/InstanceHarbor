@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "profiles": [
+    {
+      "id": "spigot-1.8.8",
+      "implementation": "SPIGOT",
+      "minecraftVersion": "1.8.8",
+      "javaAlias": "local-8",
+      "provider": "LOCAL_BUILDTOOLS",
+      "fileName": "spigot-1.8.8.jar"
+    },
+    {
+      "id": "spigot-1.12.2",
+      "implementation": "SPIGOT",
+      "minecraftVersion": "1.12.2",
+      "javaAlias": "local-8",
+      "provider": "LOCAL_BUILDTOOLS",
+      "fileName": "spigot-1.12.2.jar"
+    },
+    {
+      "id": "spigot-1.14",
+      "implementation": "SPIGOT",
+      "minecraftVersion": "1.14",
+      "javaAlias": "local-11",
+      "provider": "LOCAL_BUILDTOOLS",
+      "fileName": "spigot-1.14.jar"
+    },
+    {
+      "id": "spigot-1.16.5",
+      "implementation": "SPIGOT",
+      "minecraftVersion": "1.16.5",
+      "javaAlias": "local-8",
+      "provider": "LOCAL_BUILDTOOLS",
+      "fileName": "spigot-1.16.5.jar"
+    },
+    {
+      "id": "spigot-latest",
+      "implementation": "SPIGOT",
+      "minecraftVersion": "26.2",
+      "javaAlias": "local-25",
+      "provider": "LOCAL_BUILDTOOLS",
+      "fileName": "spigot-26.2.jar"
+    },
+    {
+      "id": "spigot-26.2",
+      "implementation": "SPIGOT",
+      "minecraftVersion": "26.2",
+      "javaAlias": "local-25",
+      "provider": "LOCAL_BUILDTOOLS",
+      "fileName": "spigot-26.2.jar"
+    },
+    {
+      "id": "paper-1.14",
+      "implementation": "PAPER",
+      "minecraftVersion": "1.14",
+      "javaAlias": "local-11",
+      "provider": "PAPERMC",
+      "project": "paper",
+      "buildId": 17
+    },
+    {
+      "id": "paper-1.14.4",
+      "implementation": "PAPER",
+      "minecraftVersion": "1.14.4",
+      "javaAlias": "local-11",
+      "provider": "PAPERMC",
+      "project": "paper",
+      "buildId": 245
+    },
+    {
+      "id": "paper-26.2-build112",
+      "implementation": "PAPER",
+      "minecraftVersion": "26.2",
+      "javaAlias": "local-25",
+      "provider": "PAPERMC",
+      "project": "paper",
+      "buildId": 112
+    },
+    {
+      "id": "paper-1.20.6",
+      "implementation": "PAPER",
+      "minecraftVersion": "1.20.6",
+      "javaAlias": "local-21",
+      "provider": "PAPERMC",
+      "project": "paper"
+    },
+    {
+      "id": "paper-1.21.8",
+      "implementation": "PAPER",
+      "minecraftVersion": "1.21.8",
+      "javaAlias": "local-21",
+      "provider": "PAPERMC",
+      "project": "paper"
+    },
+    {
+      "id": "paper-26.1.2",
+      "implementation": "PAPER",
+      "minecraftVersion": "26.1.2",
+      "javaAlias": "local-25",
+      "provider": "PAPERMC",
+      "project": "paper"
+    },
+    {
+      "id": "paper-latest",
+      "implementation": "PAPER",
+      "minecraftVersion": "26.2",
+      "javaAlias": "local-25",
+      "provider": "PAPERMC",
+      "project": "paper"
+    },
+    {
+      "id": "paper-26.3",
+      "implementation": "PAPER",
+      "minecraftVersion": "26.3",
+      "javaAlias": "local-25",
+      "provider": "PAPERMC",
+      "project": "paper",
+      "buildId": 184
+    },
+    {
+      "id": "folia-26.1.2",
+      "implementation": "FOLIA",
+      "minecraftVersion": "26.1.2",
+      "javaAlias": "local-25",
+      "provider": "PAPERMC",
+      "project": "folia"
+    },
+    {
+      "id": "folia-latest",
+      "implementation": "FOLIA",
+      "minecraftVersion": "26.1.2",
+      "javaAlias": "local-25",
+      "provider": "PAPERMC",
+      "project": "folia"
+    }
+  ]
+}

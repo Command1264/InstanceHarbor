@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InstanceHarbor 伺服器後台</title>
+</head>
+<body>
+  <main>
+    <div id="console-tabs" role="tablist" aria-label="伺服器後台"></div>
+    <div id="console-panels"></div>
+    <p id="console-error" role="status" hidden></p>
+  </main>
+  <dialog id="console-paste-dialog" class="console-paste-dialog" aria-labelledby="console-paste-title"
+    aria-describedby="console-paste-description">
+    <h2 id="console-paste-title">確認貼上</h2>
+    <p id="console-paste-description"></p>
+    <pre id="console-paste-preview"></pre>
+    <form method="dialog">
+      <button id="console-paste-confirm" class="console-paste-primary" value="paste" autofocus>仍要貼上</button>
+      <button id="console-paste-cancel" value="cancel">取消</button>
+    </form>
+  </dialog>
+  <script type="module" src="/src/native-console.js"></script>
+</body>
+</html>

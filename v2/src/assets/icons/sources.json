@@ -1,0 +1,41 @@
+{
+  "icon": "pin",
+  "revision": "220abb1510f4d5f27a4c94accf3831f4efc32252",
+  "license": "https://lucide.dev/license",
+  "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/pin.svg",
+  "adaptation": "Rotate 45 degrees clockwise; 16px viewport; currentColor; optional solid body fill for pinned state",
+  "component": "../../components/PinIcon.vue",
+  "library": "Lucide",
+  "additionalIcons": [
+    {
+      "icon": "folder-open",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/folder-open.svg",
+      "adaptation": "16px viewport; currentColor; decorative in a labeled button",
+      "component": "../../components/PathPickerButton.vue"
+    },
+    {
+      "icon": "file-search",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/file-search.svg",
+      "adaptation": "16px viewport; currentColor; decorative in a labeled button",
+      "component": "../../components/PathPickerButton.vue"
+    },
+    {
+      "icon": "rotate-ccw",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/rotate-ccw.svg",
+      "adaptation": "16px viewport; currentColor; hidden from assistive technology inside a labeled button",
+      "component": "../../components/FieldDraftActions.vue"
+    },
+    {
+      "icon": "trash-2",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/trash-2.svg",
+      "adaptation": "16px viewport; currentColor; hidden from assistive technology inside a labeled button",
+      "component": "../../components/ManagementPathRows.vue"
+    },
+    {
+      "icon": "undo-2",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/undo-2.svg",
+      "adaptation": "16px viewport; currentColor; hidden from assistive technology inside a labeled button",
+      "component": "../../components/FieldDraftActions.vue"
+    }
+  ]
+}
