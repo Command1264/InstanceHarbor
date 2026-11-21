@@ -19,6 +19,9 @@ $stage=Join-Path $parent ('setup-input-'+[guid]::NewGuid().ToString('N').Substri
 $prepared=& (Join-Path $PSScriptRoot 'install-windows.ps1') -Action Stage -InstallRoot $stage -Package $packagePath -ExpectedPackageSha256 $ExpectedPackageSha256
 if($prepared.version -cne '1.0.0-rc2' -or !$prepared.nativeConsoleRuntime -or !$prepared.visualCppRuntime){throw 'Expected the Windows x64 RC2 distribution with both runtimes.'}
 $payload=Join-Path (Join-Path $stage 'releases') $prepared.release
+foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')) {
+    if (!(Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) { throw "Missing distribution notice: $name" }
+}
 if ((Get-Item -LiteralPath (Join-Path $payload 'InstanceHarbor.exe')).VersionInfo.ProductName -eq 'InstanceHarbor Dev') {
     throw 'Development binaries cannot be installed as the stable product.'
 }

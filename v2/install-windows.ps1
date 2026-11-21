@@ -38,7 +38,8 @@ $crtHashes = [ordered]@{
     'vcruntime140.dll' = 'd5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066'
     'vcruntime140_1.dll' = '1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f'
 }
-$allNames = $fileNames + @($consoleHashes.Keys) + @($crtHashes.Keys)
+$noticeNames = @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')
+$allNames = $fileNames + @($consoleHashes.Keys) + @($crtHashes.Keys) + $noticeNames
 $versionPattern = '^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$'
 $hashPattern = '^[a-f0-9]{64}$'
 $encoding = [Text.UTF8Encoding]::new($false, $true)
@@ -94,6 +95,11 @@ function Assert-Manifest($Manifest) {
     $expected = @($gui[0], 'ihctl.exe')
     foreach ($optional in @($consoleHashes,$crtHashes)) {
         if (@($names | Where-Object { $_ -cin $optional.Keys }).Count) { $expected += @($optional.Keys) }
+    }
+    # Earlier ZIPs and rollback receipts remain valid without the files.
+    if (@($names | Where-Object { $_ -cin $noticeNames }).Count) {
+        if (@($noticeNames | Where-Object { $_ -cnotin $names }).Count) { throw 'Incomplete package notices.' }
+        $expected += $noticeNames
     }
     if ($names.Count -ne $expected.Count) { throw 'Incomplete package runtime pair.' }
     foreach ($name in $expected) {
@@ -158,7 +164,7 @@ function Install-Stage {
                 $allowed = $allNames + 'manifest.json'
                 $entries = @($zip.Entries)
                 $entriesByName = [Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
-                if ($entries.Count -notin @(3, 5, 7)) { throw 'Unexpected ZIP entry count.' }
+                if ($entries.Count -notin @(3, 5, 6, 7, 8, 10)) { throw 'Unexpected ZIP entry count.' }
                 foreach ($entry in $entries) {
                     if ($entry.FullName -cnotin $allowed -or !$entriesByName.TryAdd($entry.FullName, $entry)) { throw 'Unexpected or duplicate ZIP entry.' }
                 }
@@ -173,6 +179,9 @@ function Install-Stage {
                     $manifest = [string]::new($characters, 0, $length) | ConvertFrom-Json -AsHashtable
                 } finally { $reader.Dispose() }
                 Assert-Manifest $manifest
+                if (!$ExpectedPackageSha256 -and @($manifest.files | Where-Object { $_.name -cin $noticeNames }).Count) {
+                    throw 'Supply ExpectedPackageSha256 to verify the unsigned distribution notices.'
+                }
                 if ($entries.Count -ne ($manifest.files.Count + 1)) { throw 'ZIP entries do not match the file manifest.' }
                 foreach ($record in $manifest.files) {
                     $entry = $entriesByName[$record.name]

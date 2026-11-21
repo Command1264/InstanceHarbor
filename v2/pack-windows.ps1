@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory)][string]$BinaryDirectory,
     [string]$ConsoleRuntimeDirectory,
     [string]$VCRuntimeDirectory,
+    [string]$NoticeDirectory,
     [Parameter(Mandatory)][string]$OutputZip,
     [Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$')][string]$Version
 )
@@ -63,6 +64,14 @@ if ($VCRuntimeDirectory) {
         throw 'The app-local Microsoft C++ runtime requires both VCRUNTIME DLLs.'
     }
 }
+$noticeNames = @()
+if ($NoticeDirectory) {
+    $noticeRoot = Get-PlainItem $NoticeDirectory
+    if (!$noticeRoot.PSIsContainer) { throw 'NoticeDirectory must be a directory.' }
+    $noticeNames = @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')
+} elseif ($Version -ceq '1.0.0-rc2') {
+    throw 'The RC2 distribution requires NoticeDirectory.'
+}
 $manifest = [ordered]@{ schema = 'instanceharbor-windows-package/v1'; version = $Version; files = @() }
 $stage = Join-Path $parent.FullName ('.instanceharbor-package-' + [guid]::NewGuid().ToString('N') + '.tmp')
 $encoding = [Text.UTF8Encoding]::new($false)
@@ -71,9 +80,10 @@ try {
     try {
         $zip = [IO.Compression.ZipArchive]::new($zipStream, [IO.Compression.ZipArchiveMode]::Create, $true)
         try {
-            foreach ($name in ($names + $consoleNames + $crtNames)) {
+            foreach ($name in ($names + $consoleNames + $crtNames + $noticeNames)) {
                 $sourceRoot = if ($name -cin $consoleNames) { $consoleRoot }
                     elseif ($name -cin $crtNames) { $crtRoot }
+                    elseif ($name -cin $noticeNames) { $noticeRoot }
                     else { $binaryRoot }
                 $item = Get-PlainItem (Join-Path $sourceRoot.FullName $name)
                 if ($item.PSIsContainer -or $item.Length -le 0 -or $item.Length -gt 256MB) { throw "Invalid package input: $name" }

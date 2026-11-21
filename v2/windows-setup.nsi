@@ -59,6 +59,9 @@ Section
   File "${PAYLOAD}\OpenConsole.exe"
   File "${PAYLOAD}\vcruntime140.dll"
   File "${PAYLOAD}\vcruntime140_1.dll"
+  File "${PAYLOAD}\LICENSE"
+  File "${PAYLOAD}\THIRD-PARTY-NOTICES.txt"
+  File "${PAYLOAD}\MPL-SOURCES.zip"
   IfErrors failed
   ClearErrors
   FileOpen $0 "$INSTDIR\${LEASE}" w
@@ -93,6 +96,9 @@ failed:
   Delete "$INSTDIR\OpenConsole.exe"
   Delete "$INSTDIR\vcruntime140.dll"
   Delete "$INSTDIR\vcruntime140_1.dll"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
+  Delete "$INSTDIR\MPL-SOURCES.zip"
   SetOutPath "$TEMP"
   RMDir "$INSTDIR"
   SetErrorLevel 1
@@ -124,6 +130,9 @@ Section "Uninstall"
   Delete "$INSTDIR\OpenConsole.exe"
   Delete "$INSTDIR\vcruntime140.dll"
   Delete "$INSTDIR\vcruntime140_1.dll"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
+  Delete "$INSTDIR\MPL-SOURCES.zip"
   IfErrors failed
   System::Call 'kernel32::CloseHandle(p r0)'
   Delete "${SHORTCUT}"
