@@ -966,7 +966,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
     :cancelling="cancellingCoreBatch" :cancel-failure="coreCancelFailure"
     @submitted="coreBatchSubmitted" @changed="refreshAfterCoreChange" @cancel="cancelCoreBatch" />
   <dialog ref="dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'}" @cancel.prevent="close">
-    <template v-if="modal==='batch'"><h2 id="operation-dialog-title">確認批次操作</h2><p>將對 {{ pendingBatch?.targets.length ?? 0 }} 台實例執行{{ pendingBatch?.action==='start'?'啟動':pendingBatch?.action==='stop'?'正常停止':'重新啟動' }}。管理服務接受後，即使關閉 GUI，仍可在操作紀錄查看同一筆工作。</p><p v-if="pendingBatch?.action==='start'" class="hint">管理服務最多同時啟動兩台。</p><p v-if="pendingBatch?.action==='restart'" class="hint">各台並行停止。正常停止並核對完成後才排入啟動，最多同時啟動兩台。停止逾時的實例不會自動啟動。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">取消</button><OperationButton class="primary" label="確認操作" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
+    <template v-if="modal==='batch'"><h2 id="operation-dialog-title">確認批次操作</h2><p>將對 {{ pendingBatch?.targets.length ?? 0 }} 台實例執行{{ pendingBatch?.action==='start'?'啟動':pendingBatch?.action==='stop'?'正常停止':'重新啟動' }}。</p><p v-if="pendingBatch?.action==='restart'" class="hint">停止逾時的實例不會自動啟動。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">取消</button><OperationButton class="primary" label="確認操作" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
     <template v-if="modal==='force'"><h2 id="operation-dialog-title">強制停止伺服器</h2><p>要強制停止 {{ target?.name }} 嗎？尚未存檔的世界變更可能遺失。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="forceStop">強制停止</button></div></template>
     <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">移除管理</h2><p>選擇 {{ target?.name }} 的管理設定處理方式。兩種方式都保留世界、插件與伺服器檔案；日後可在管理資料夾重新核對。</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">移除管理，保留管理設定</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">移除管理並刪除管理設定</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="removeManagement">確認移除</button></div></template>
     <template v-else-if="modal==='logs'"><h2 id="operation-dialog-title">{{ target?.name }} · 啟動紀錄</h2><label v-if="logs?.sources">紀錄來源
@@ -990,7 +990,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         </dl>
         <p v-if="creationPreview.whitelist" class="hint">只加入這台實例的資料夾。</p>
         <p v-if="creationPreview.initializationDefaults === false" class="hint">此版本使用核心內建預設值。</p>
-        <p class="hint">建立後會保持停止。啟動時使用全域 Java 設定。</p>
+        <p class="hint">建立後保持停止。</p>
         <div v-if="creationPhase" class="creation-progress">
           <div class="creation-progress-heading">
             <p id="creation-progress-label" role="status">{{ t(`creation.${creationPhase}`) }}</p>

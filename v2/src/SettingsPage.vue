@@ -20,7 +20,7 @@ import { displayPath } from './path-display'
 import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm, type AutoRestart, type AutoRestartStatus, type LifecycleTiming, type InstanceSettings, type JavaCandidate, type Preferences, type PreferencesSnapshot } from './manager'
 const props=defineProps<{instance?:string;instanceState?:string;instanceRun?:string;worldCommandReady?:boolean;worldRuleWork?:string;restartStatus?:AutoRestartStatus|null;instanceMeta?:InstanceMeta;preferences:Preferences;preferencesRevision:string;preferencesLoaded:boolean;preferencesReady:boolean;connected:boolean;javaCandidates:JavaCandidate[];javaChecked:boolean;refreshJava:(origin:"manual"|"background",fresh?:boolean)=>Promise<void>;retryPreferences:()=>Promise<void>}>()
 const emit=defineEmits<{(e:"language-preview",v?:LanguagePreference):void;(e:'close'):void;(e:'preferences',snapshot:PreferencesSnapshot):void;(e:'dirty',dirty:boolean):void;(e:'saving',saving:boolean):void;(e:'mutating'):void;(e:'management-changed'):void;(e:'core',name:string):void}>()
-type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'retention'|'recovery'
+type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'recovery'
 type ScanPaths={allowPaths:string[];excludePaths:string[]}
 type ScanSnapshot={policy:ScanPaths & {allow:string[];exclude:string[];managedFolders?:boolean};revision:string;base?:string;path?:string;rows?:ScanRow[]}
 type ScanRow={name:string;path:string;visible:boolean;changed:boolean;active?:boolean;reason:'Excluded'|'Default'|'Allowed'|'NotAllowed'}
@@ -995,19 +995,19 @@ async function save(confirmWorld = false, confirmScope = false){
 void load()
 </script>
 <template>
-  <OverlayScroll class="settings-scroll" label="設定內容"><header class="page-head"><div><h1>{{ instance ? `${instance} · 設定` : '應用程式設定' }}</h1><p>{{ instance ? '調整這台實例的設定' : '調整介面與新實例的預設值' }}</p></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
+  <OverlayScroll class="settings-scroll" label="設定內容"><header class="page-head"><div><h1>{{ instance ? `${instance} · 設定` : '應用程式設定' }}</h1></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
     <div class="settings-layout"><nav class="settings-nav" aria-label="設定分類">
       <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">世界政策</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
-      <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='retention'?'page':undefined" @click="switchTab('retention')">{{ t('settings.retention') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button></template>
+      <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button></template>
       </nav><section class="sheet" :aria-busy="saving">
       <OperationButton v-if="preferencesTab && tab!=='terminal' && connected && (preferencesConflict || !preferencesReady || error)"
         :label="t('action.retryRead')" :busy-label="t('activity.loading')" :busy="retryingRead" @click="retrySettings()" />
       <fieldset class="settings-fields" :disabled="saving || !connected || (preferencesTab && !preferencesLoaded)">
-      <template v-if="tab==='appearance'"><h2>{{ t('appearance.title') }}</h2><p v-if="!connected || !preferencesReady" class="form-error" role="alert">目前無法核對已儲存的外觀設定。請重新讀取。</p><div v-if="preferencesLoaded" class="field"><label for="app-theme">{{ t('appearance.theme') }}</label><div class="editor"><select id="app-theme" v-model="theme" name="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select><small class="hint">選擇立即預覽，儲存後才會保留。</small></div></div>
+      <template v-if="tab==='appearance'"><h2>{{ t('appearance.title') }}</h2><p v-if="!connected || !preferencesReady" class="form-error" role="alert">目前無法核對已儲存的外觀設定。請重新讀取。</p><div v-if="preferencesLoaded" class="field"><label for="app-theme">{{ t('appearance.theme') }}</label><div class="editor"><select id="app-theme" v-model="theme" name="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select></div></div>
         <div v-if="preferencesLoaded" class="field">
           <label for="selection-color">{{ t('appearance.selectionColor') }}</label>
           <div class="editor">
-            <select id="selection-color" v-model="selectionColor" name="selection-color" aria-describedby="selection-color-help">
+            <select id="selection-color" v-model="selectionColor" name="selection-color">
               <option value="system">{{ t('appearance.systemTheme') }}</option>
               <option value="blue">{{ t('appearance.blue') }}</option>
               <option value="red">{{ t('appearance.red') }}</option>
@@ -1017,7 +1017,6 @@ void load()
               <option value="cyan">{{ t('appearance.cyan') }}</option>
               <option value="purple">{{ t('appearance.purple') }}</option>
             </select>
-            <small id="selection-color-help" class="hint">{{ t('appearance.languageHelp') }}</small>
           </div>
         </div>
         <div v-if="preferencesLoaded" class="field">
@@ -1167,7 +1166,7 @@ void load()
         <h2>世界設定</h2>
         <template v-if="world">
           <p class="hint">{{ world.profile ? world.profile.family + ' ' + world.profile.version : '核心與 Minecraft 版本待核對' }}</p>
-          <p class="notice">伺服器運行時儲存的設定檔變更會在正常停止後套用並核對。遊戲規則優先即時套用並讀回。尚未送出且目前無法套用時，會等到下次啟動。</p>
+          <p class="notice">設定檔變更在正常停止後套用；遊戲規則即時套用。</p>
           <p v-if="world.pending" class="hint" role="status">{{ world.pending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
           <details class="world-preflight">
             <summary>啟動前 YAML 核對 <span class="hint">{{ yamlPreflightSummary }}</span></summary>
@@ -1317,7 +1316,6 @@ void load()
         <label class="check"><input v-model="corePrefetch" type="checkbox" aria-describedby="core-prefetch-help"> {{ t('settings.corePrefetch') }}</label>
         <p id="core-prefetch-help" class="hint">{{ t('settings.corePrefetchHelp') }}</p>
       </template>
-      <template v-else-if="tab==='retention'"><h2>操作紀錄保留</h2><p class="notice">可在「操作紀錄」顯示較早的已結案紀錄，並以 JSON 或 CSV 匯出目前結果。此頁未提供保存期限或清理設定。</p></template>
       <RecoveryKeyPanel v-else-if="tab==='recovery'" :connected="connected" />
       <template v-else><h2>{{ t('settings.core') }}</h2><button v-if="instance" type="button" :disabled="!connected" @click="emit('core',instance)">開啟核心維護</button></template>
       <p v-if="error && !pickerDialog?.open" role="alert" class="form-error">{{ error }}</p>

@@ -298,7 +298,6 @@ async function submit() {
 <template>
   <section aria-labelledby="recovery-heading">
     <h2 id="recovery-heading">{{ t('recovery.heading') }}</h2>
-    <p>{{ t('recovery.scope') }}</p>
     <p v-if="!connected" class="hint">{{ t('recovery.noConnection') }}</p>
     <p v-else-if="key === null">{{ t('recovery.none') }}</p>
     <template v-else-if="key">

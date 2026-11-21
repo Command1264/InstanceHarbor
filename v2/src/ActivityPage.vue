@@ -61,7 +61,7 @@ function timeName(value?: number | null) {
 }
 </script>
 <template>
-  <header class="page-head"><div><h1>{{ t('activity.heading') }}</h1><p>{{ t('activity.description') }}</p></div><div class="actions"><button :aria-pressed="!coreOnly" @click="coreOnly=false">{{ t('activity.all') }}</button><button :aria-pressed="coreOnly" @click="coreOnly=true">{{ t('activity.core') }}</button><OperationButton class="refresh-control" :label="t(feedback==='操作紀錄已讀取'?'activity.loaded':'activity.reload')" :busy-label="t('activity.loading')" :busy="feedback==='正在讀取操作紀錄'" @click="emit('refresh')" /></div></header>
+  <header class="page-head"><div><h1>{{ t('activity.heading') }}</h1></div><div class="actions"><button :aria-pressed="!coreOnly" @click="coreOnly=false">{{ t('activity.all') }}</button><button :aria-pressed="coreOnly" @click="coreOnly=true">{{ t('activity.core') }}</button><OperationButton class="refresh-control" :label="t(feedback==='操作紀錄已讀取'?'activity.loaded':'activity.reload')" :busy-label="t('activity.loading')" :busy="feedback==='正在讀取操作紀錄'" @click="emit('refresh')" /></div></header>
   <div class="actions activity-filter">
     <label>{{ t('activity.result') }} <select v-model="stateFilter" name="job-status">
       <option value="">{{ t('activity.allResults') }}</option>

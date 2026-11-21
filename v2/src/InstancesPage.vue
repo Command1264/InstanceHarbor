@@ -195,7 +195,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
 
 </script>
 <template>
-  <header class="page-head"><div><h1>實例</h1><p>查看管理狀態並操作已登記的伺服器</p></div>
+  <header class="page-head"><div><h1>實例</h1></div>
     <div class="actions"><button class="management-folder-trigger" type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button><button class="primary" type="button" :disabled="!connected" @click="emit('create')">建立實例</button></div>
   </header>
   <div class="toolbar"><label class="search-label">搜尋實例<input v-model="query" type="search" name="instance-search" autocomplete="off"></label>
@@ -210,7 +210,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
   </div>
   <p class="operation-status selectable" role="status">{{ feedback }}</p>
   <div class="workspace">
-    <section class="list-panel" aria-label="實例清單"><div class="selection-line"><span>{{ !loaded ? '尚未取得清單' : selected.length+' 台已選取 · '+visible.length+' 台符合條件' }}</span><span>Ctrl／Shift 可多選 <button v-if="selected.length" class="quiet clear-selection" @click="selected=[];anchor=null">清除選取</button></span></div>
+    <section class="list-panel" aria-label="實例清單"><div class="selection-line"><span>{{ !loaded ? '尚未取得清單' : selected.length ? `已選取 ${selected.length} 台` : '' }}</span><span><button v-if="selected.length" class="quiet clear-selection" @click="selected=[];anchor=null">清除選取</button></span></div>
       <OverlayScroll class="table-wrap" label="實例清單"><table ref="instanceTable" class="instances"><thead><tr><th :aria-sort="sort==='name' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('name')">實例 {{ sort==='name' ? (direction===1?'↑':'↓') : '' }}</button></th><th class="core-column" :aria-sort="sort==='core' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('core')">核心版本 {{ sort==='core' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='port' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('port')">Port {{ sort==='port' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='state' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('state')">觀察狀態 {{ sort==='state' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='recent' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('recent')">最近操作 {{ sort==='recent' ? (direction===1?'↑':'↓') : '' }}</button></th></tr></thead>
         <tbody><tr v-for="row in displayed" :key="row.name" :class="{selected:selected.includes(row.name),'pin-drag-source':pinDrag.dragging.value===row.name,'pinned-draggable':preferences.pins.includes(row.name)&&canDragPins}" :data-instance="row.name" tabindex="0" :aria-selected="selected.includes(row.name)" @pointerdown.capture="pinDrag.nextPointerDown" @pointerdown="pinDrag.begin($event,row.name)" :title="preferences.pins.includes(row.name)?(canDragPins?'按住此列拖曳，調整釘選順序':'清除篩選並等待儲存完成後，可拖曳調整釘選順序'):undefined" @click="choose($event,row.name)" @keydown="keySelect($event,row.name)" @contextmenu="showMenu($event,row.name)">
           <td class="instance-name-cell"><button class="pin-toggle" type="button" :class="{pinned:preferences.pins.includes(row.name)}" :aria-pressed="preferences.pins.includes(row.name)" :aria-label="`${preferences.pins.includes(row.name)?'取消釘選':'釘選'} ${row.name}`" :title="preferences.pins.includes(row.name)?'取消釘選實例':'釘選實例'" :aria-disabled="pinBusy || !connected" @click.stop="!pinBusy && connected && emit('pin',row.name)" @dblclick.stop @keydown.stop="showKeyboardMenu($event,row.name)"><PinIcon :filled="preferences.pins.includes(row.name)" /></button><span class="instance-name">{{ row.name }}</span></td>
@@ -229,7 +229,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
         </tr></tbody></table><InitialQueryProgress v-if="initialLoading" label="正在讀取實例清單" /><p v-else-if="!visible.length" class="empty">{{ !loaded ? '尚未取得實例清單，請按重新核對。' : rows.length ? '沒有符合條件的實例。' : '沒有可顯示的實例。' }}</p></OverlayScroll>
     </section>
     <aside class="detail-panel" aria-label="實例詳細資料"><OverlayScroll class="detail-scroll" label="實例詳細資料內容"><div class="detail-content">
-      <template v-if="chosen.length > 1"><h2>已選取 {{ chosen.length }} 台實例</h2><p class="hint">個別結果可在操作紀錄查看。</p>
+      <template v-if="chosen.length > 1"><h2>已選取 {{ chosen.length }} 台實例</h2>
         <div class="detail-actions">
           <button :class="{primary:canSubmitBatch('start',chosen)}" :disabled="!canSubmitBatch('start',chosen)" @click="emit('batch-action','start',batchRows('start',chosen))">啟動所選</button>
           <span class="action-tooltip" :title="consoleHint">
@@ -254,7 +254,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button @click="emit('settings',single.name)">實例設定</button>
         </div>
 
-        <div class="recent-operation detail-section"><p v-if="recent" class="hint">最近操作：{{ actionName(recent.action) }} · {{ jobStateName(recent.state) }}</p><p v-else class="hint">最近操作：尚無操作</p></div>
+        <div class="recent-operation detail-section"><p v-if="recent" class="hint">最近操作：{{ actionName(recent.action) }} · {{ jobStateName(recent.state) }}</p></div>
         <details class="detail-section diagnostics"><summary>工作階段與診斷資料</summary><p class="mono">實際程序狀態：{{ stateName(single.state) }}<br>Run：{{ single.run?.id ?? '無' }}<br>Java：{{ pathLabel(currentMeta?.java ?? '尚未提供') }}<br>位置：{{ pathLabel(currentMeta?.path ?? '尚未提供') }}</p><button @click="emit('logs',single.name)">查看啟動紀錄</button>
           <InstanceDiagnosticsPanel :key="single.name" :instance="single.name" :rows="rows" :proxies="diagnosticProxies" :connected="connected" :time-format="preferences.timeFormat" />
         </details>
