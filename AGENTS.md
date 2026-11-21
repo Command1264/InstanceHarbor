@@ -4,8 +4,9 @@
 
 ## 硬性規則
 
-- **公開內容去識別化**：commit、Issue、PR 與文件不得包含本機絕對路徑、使用者名稱、私人插件專案名稱、
+- **公開內容去識別化**：commit、Issue、PR 與文件不得包含本機絕對路徑、私人插件專案名稱、
   真人測服的 Port 或路由、玩家資料、帳密或測試管理員身分。從本機封存搬入內容前，先逐項移除上述資料。
+  維護者以個人 GitHub 帳號署名 commit 與 PR，作者身分不需匿名。
 - **測試資料邊界**：Agent 測試只使用隔離的 Agent 工作區（開發版為 `%LOCALAPPDATA%/InstanceHarbor Dev/workspaces/`）。
   不得接入、覆寫、重建或刪除 Human 測服、其世界與插件資料，也不得停止非本次測試啟動的伺服器、Host 或 Manager。
 - 使用者於 2026-09-28 明確表示已接受 Minecraft EULA，並授權 Agent 在**本 InstanceHarbor 專案**建立或啟動
