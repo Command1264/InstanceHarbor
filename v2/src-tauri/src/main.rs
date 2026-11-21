@@ -6,11 +6,14 @@ mod workspace_binding;
 #[cfg(windows)]
 mod system_accent;
 #[cfg(windows)]
+mod tray;
+#[cfg(windows)]
 use instanceharbor_v2::desktop_channel;
 use instanceharbor_v2::diagnostics;
 use serde_json::json;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static IPC_ID: AtomicU64 = AtomicU64::new(1);
+static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
 fn diagnostic_write(result: Result<(), String>) {
     if let Err(error) = result {
         eprintln!("GUI diagnostic write failed: {error}")
@@ -32,6 +35,21 @@ fn system_accent_color() -> Result<String, String> {
     #[cfg(not(windows))]
     {
         Err("SystemAccentUnavailable".into())
+    }
+}
+#[tauri::command]
+fn tray_status(app: tauri::AppHandle, running: u32, language: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use tauri::Manager;
+        let language = tray::Language::parse(&language)?;
+        let tray = app.try_state::<tray::Tray>().ok_or("TrayUnavailable")?;
+        tray.update(running, language).map_err(|error| error.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, running, language);
+        Err("TrayUnavailable".into())
     }
 }
 #[tauri::command]
@@ -158,9 +176,14 @@ fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(
         &window,
         window.theme().map_err(|error| error.to_string())? == tauri::Theme::Dark,
     );
-    if !window.is_visible().map_err(|error| error.to_string())? {
+    // Only the first call reveals the window. Later theme refreshes must not pull a
+    // window the user hid in the notification area back onto the screen.
+    if !WINDOW_REVEALED.load(Ordering::SeqCst)
+        && !window.is_visible().map_err(|error| error.to_string())?
+    {
         window.show().map_err(|error| error.to_string())?;
     }
+    WINDOW_REVEALED.store(true, Ordering::SeqCst);
     #[cfg(windows)]
     caption?;
     Ok(())
@@ -502,8 +525,22 @@ fn main() {
             pick_management_folder,
             pick_file,
             diagnostic_status,
-            report_gui_event
+            report_gui_event,
+            tray_status
         ])
+        .setup(|app| {
+            #[cfg(windows)]
+            tray::install(app.handle())?;
+            #[cfg(not(windows))]
+            let _ = app;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            #[cfg(windows)]
+            tray::window_event(window, event);
+            #[cfg(not(windows))]
+            let _ = (window, event);
+        })
         .build(context)
         .map_err(|error| error.to_string());
     match application {
