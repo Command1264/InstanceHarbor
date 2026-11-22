@@ -298,7 +298,6 @@ async function submit() {
 <template>
   <section aria-labelledby="recovery-heading">
     <h2 id="recovery-heading">{{ t('recovery.heading') }}</h2>
-    <p>{{ t('recovery.scope') }}</p>
     <p v-if="!connected" class="hint">{{ t('recovery.noConnection') }}</p>
     <p v-else-if="key === null">{{ t('recovery.none') }}</p>
     <template v-else-if="key">
@@ -323,7 +322,7 @@ async function submit() {
 
     <section class="recovery-targets" aria-labelledby="recovery-targets-title">
       <h3 id="recovery-targets-title">{{ t('recovery.targetsTitle') }}</h3>
-      <p class="hint">{{ t('recovery.targetsHelp') }}</p>
+      
       <p v-if="targetError" class="form-error" role="alert">{{ t(targetError) }}</p>
       <p v-else-if="connected && targetsObserved && !targets.length">{{ t('recovery.targetsEmpty') }}</p>
       <label v-if="targets.length" for="recovery-target-select">

@@ -203,7 +203,7 @@ defineExpose({ open })
   <dialog ref="dialog" class="management-folder-dialog" aria-labelledby="management-folder-title" @cancel.prevent="close">
     <h2 id="management-folder-title">{{ t('management.add') }}</h2>
     <OverlayScroll class="management-folder-scroll" :label="t('management.paths')">
-      <p v-if="!result" class="hint management-folder-intro">{{ t('management.intro') }}</p>
+      
       <dl v-if="directory" class="management-folder-source">
         <dt>{{ t('management.selectedFolder') }}</dt>
         <dd class="hint selectable" translate="no">{{ path(directory) }}</dd>
@@ -273,7 +273,6 @@ defineExpose({ open })
 <style scoped>
 .management-folder-dialog { width: min(760px, calc(100vw - 36px)); overflow: hidden; }
 .management-folder-dialog[open] { display: flex; flex-direction: column; }
-.management-folder-intro { margin-top: 0; }
 .management-folder-scroll { min-height: 0; }
 .management-folder-scroll :deep(.overlay-viewport) { padding: 4px 14px 8px 4px; }
 .management-folder-source { margin: 0; }

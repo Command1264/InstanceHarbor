@@ -135,7 +135,6 @@ function scrollNumber(event: WheelEvent) {
         請輸入 {{ row.min ?? 0 }} 到 {{ row.max ?? 32767 }} 的整數。
       </small>
       <small v-if="!liveRow(row) && row.status !== 'available'" class="hint">{{ row.status === 'unsupported' ? '不支援' : '尚未核對' }}。{{ row.reason }}</small>
-      <small v-else-if="!liveRow(row) && mode === 'world' && !stopped" class="hint">變更會保留，伺服器停止後自動套用。</small>
       <small v-else-if="!liveRow(row) && mode === 'world' && values[row.key] !== row.value" class="hint">
         {{ valueLabel(row.value) }} → {{ valueLabel(values[row.key]) }}
       </small>

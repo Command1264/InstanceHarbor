@@ -174,7 +174,7 @@ async function applyTime() {
   <dialog ref="dialog" class="compact" aria-labelledby="world-time-confirm" @close="dismiss">
     <h2 id="world-time-confirm">確認調整世界時間</h2>
     <p v-if="plan">核對時為 {{ plan.before }} 刻，目標為 {{ plan.target }} 刻。</p>
-    <p>確認後會立即調整這次執行的世界時間。</p>
+    
     <div class="dialog-actions">
       <button type="button" autofocus @click="dialog?.close()">{{ phase === 'applying' ? '關閉' : '取消' }}</button>
       <OperationButton class="primary" label="立即調整" busy-label="送出中" :busy="phase === 'applying'"

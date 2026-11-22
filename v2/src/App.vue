@@ -367,7 +367,12 @@ async function revealWindow(){
 }
 let timer:ReturnType<typeof setInterval>|undefined
 let refreshFeedbackTimer:ReturnType<typeof setTimeout>|undefined
-function clearRefreshFeedback(){clearTimeout(refreshFeedbackTimer);refreshFeedbackTimer=undefined}
+// Manual refresh state is kept apart from operation feedback so neither overwrites the other.
+const manualRefreshPending=ref(false), manualRefreshDone=ref(false)
+// Background polls publish a failure only after repeated misses; the last verified list stays.
+const BACKGROUND_FAILURE_LIMIT=3
+let backgroundFailures=0
+function clearRefreshFeedback(){clearTimeout(refreshFeedbackTimer);refreshFeedbackTimer=undefined;manualRefreshDone.value=false}
 let diagnosticFailureReported=false
 let pendingDiagnosticWarning=false
 const diagnosticWarning='無法完整寫入應用程式診斷紀錄。請檢查磁碟空間及 %LOCALAPPDATA%/InstanceHarbor/v2/logs 的容量與存取狀態；既有紀錄不會自動刪除。'
@@ -414,12 +419,12 @@ const accentListener=()=>{
 async function refresh(manual=false){
   if(!nativeBridge){connection.value='browser';if(manual)feedback.value='此瀏覽器沒有原生管理橋接。請使用 InstanceHarbor 桌面程式。';return}
   if(refreshActive){
-    if(manual && feedback.value==='正在核對實例清單')return
-    if(manual){clearRefreshFeedback();feedback.value='正在核對實例清單'}
+    if(manual && manualRefreshPending.value)return
+    if(manual){clearRefreshFeedback();manualRefreshPending.value=true}
     refreshQueued=true;queuedManual ||= manual;return
   }
   refreshActive=true;listReading.value=true;const epoch=++refreshEpoch
-  if(manual){clearRefreshFeedback();feedback.value='正在核對實例清單'}
+  if(manual){clearRefreshFeedback();manualRefreshPending.value=true}
   try{
     const origin=manual?'manual':'background'
     const shouldReadPreferences=!preferencesRetrying && (manual || !preferencesLoaded.value || preferencesUnavailable.value)
@@ -452,22 +457,25 @@ async function refresh(manual=false){
     for(const [name,run] of Object.entries(stopping.value))if(!canStop(live.get(name))||live.get(name)?.run?.id!==run)delete stopping.value[name]
     connection.value='connected'
     listLoaded.value=true
+    backgroundFailures=0
     if(manual){
-      feedback.value=issues.length?'已核對可讀取的實例':preferencesUnavailable.value?'實例清單已核對，無法讀取外觀設定':'實例清單已核對'
       clearRefreshFeedback()
-      const completed=feedback.value
-      refreshFeedbackTimer=setTimeout(()=>{if(feedback.value===completed)feedback.value='';refreshFeedbackTimer=undefined},1000)
+      if(issues.length)feedback.value='已核對可讀取的實例'
+      else if(preferencesUnavailable.value)feedback.value='實例清單已核對，無法讀取外觀設定'
+      manualRefreshDone.value=true
+      refreshFeedbackTimer=setTimeout(()=>{manualRefreshDone.value=false;refreshFeedbackTimer=undefined},1000)
     }
   }catch(e){
     if(epoch!==refreshEpoch)return
+    if(!manual && listLoaded.value && ++backgroundFailures<BACKGROUND_FAILURE_LIMIT)return
     const cause=rawError(e)
     if(/ManagerUnavailable|ManagerPipeUnavailable|ManagerResultUnconfirmed|PeerMismatch|MissingWorkspaceBinding/.test(cause)){
       connection.value='disconnected'
     }
     listUnavailable.value='無法讀取實例清單：'+errorText(e)
-    if(manual)feedback.value=''
   }
   finally{
+    if(manual && !queuedManual)manualRefreshPending.value=false
     refreshActive=false
     listReading.value=false
     void checkDiagnostics()
@@ -483,8 +491,10 @@ function invalidateRefresh(){
   refreshEpoch++
   if(refreshActive)refreshQueued=true
 }
+let jobsBackgroundFailures=0
+let activityFeedbackTimer:ReturnType<typeof setTimeout>|undefined
 function refreshJobs(manual=false,afterMutation=false):Promise<void>{
-  if(manual){jobsManual=true;activityFeedback.value='正在讀取操作紀錄'}
+  if(manual){jobsManual=true;clearTimeout(activityFeedbackTimer);activityFeedback.value='正在讀取操作紀錄'}
   // Background polling joins the current read instead of invalidating slow replies.
   if(jobsRead){jobsFollowup ||= afterMutation;return jobsRead}
   jobsReading.value=true
@@ -511,15 +521,24 @@ function refreshJobs(manual=false,afterMutation=false):Promise<void>{
         if(residentAtRead===residentRevision && batches.status==='fulfilled'){
           if(JSON.stringify(batches.value)!==JSON.stringify(residentJobs.value))residentJobs.value=batches.value
           residentError.value=''
-        }else if(residentAtRead===residentRevision && batches.status==='rejected')residentError.value='無法核對批次工作：'+errorText(batches.reason)
+        }else if(residentAtRead===residentRevision && batches.status==='rejected' && (jobsManual || !jobsLoaded.value || jobsBackgroundFailures+1>=BACKGROUND_FAILURE_LIMIT))residentError.value='無法核對批次工作：'+errorText(batches.reason)
         if(legacy.status==='rejected')throw legacy.reason
         if(JSON.stringify(legacy.value)!==JSON.stringify(jobs.value))jobs.value=legacy.value
         if(maintenance.status==='rejected' && (jobsManual || !jobsLoaded.value)){
           jobsError.value='無法讀取核心維護紀錄：'+errorText(maintenance.reason)
         }else if(maintenance.status==='fulfilled')jobsError.value=''
-        if(batches.status==='fulfilled' && maintenance.status==='fulfilled')jobsLoaded.value=true
-        if(jobsManual)activityFeedback.value=batches.status==='fulfilled' && maintenance.status==='fulfilled'?'操作紀錄已讀取':''
-      }catch(e){if(epoch===jobsEpoch){jobsError.value='無法讀取操作紀錄：'+errorText(e);if(jobsManual)activityFeedback.value=''}}
+        if(batches.status==='fulfilled' && maintenance.status==='fulfilled'){jobsLoaded.value=true;jobsBackgroundFailures=0}
+        else if(!jobsManual)jobsBackgroundFailures++
+        if(jobsManual){
+          activityFeedback.value=batches.status==='fulfilled' && maintenance.status==='fulfilled'?'操作紀錄已讀取':''
+          activityFeedbackTimer=setTimeout(()=>{if(activityFeedback.value==='操作紀錄已讀取')activityFeedback.value=''},1000)
+        }
+      }catch(e){
+        if(epoch!==jobsEpoch)continue
+        if(!jobsManual && jobsLoaded.value && ++jobsBackgroundFailures<BACKGROUND_FAILURE_LIMIT)continue
+        jobsError.value='無法讀取操作紀錄：'+errorText(e)
+        if(jobsManual)activityFeedback.value=''
+      }
     }while(jobsFollowup)
   })().finally(()=>{jobsRead=undefined;jobsManual=false;jobsReading.value=false})
   return jobsRead
@@ -672,7 +691,7 @@ async function operateOne(action:'start'|'stop'|'restart',row:Instance){
     if(reason === 'AutoJavaUnavailable') requests.delete(key)
     if(['stop','restart'].includes(action)&&['StopTimeout','Timeout','HostUnavailable'].some(code=>reason.includes(code))){
       requests.delete(key)
-      if(generation===forceGeneration)showOperationError(`${row.name} 停止結果未確認。請核對工作紀錄，必要時使用緊急停止。`)
+      if(generation===forceGeneration)showOperationError(`${row.name} 停止結果未確認。請核對工作紀錄，必要時使用強制停止。`)
     }else if(generation===forceGeneration)showOperationError(`${row.name} 操作失敗：${errorText(e)}`)
   }finally{
     markActiveRequest(id,false)
@@ -758,7 +777,7 @@ async function forceStop(){
   markActiveRequest(id,true)
   dialog.value?.close()
   modal.value=null
-  feedback.value='正在核對程序並執行緊急停止'
+  feedback.value='正在核對程序並執行強制停止'
   try{
     await manage<{forced?:boolean}>(['force-stop',item.name,id,item.run])
     feedback.value=''
@@ -939,7 +958,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <OverlayScroll class="registry-issues" label="無法核對的實例"><ul><li v-for="issue in registryIssues" :key="issue.file">{{ issue.file }} · {{ registryIssueLabels[issue.reason] }}</li></ul></OverlayScroll>
         </template>
       </aside>
-      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :connected="connected" :jobs="projectedJobs" :feedback="feedback" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @create="open('create')" @refresh="refresh(true)"/>
+      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @create="open('create')" @refresh="refresh(true)"/>
       <ActivityPage v-else-if="route==='activity'" :jobs="projectedJobs" :initial-loading="jobsReading && !jobsLoaded && !jobsError && !residentError" :loaded="jobsLoaded" :time-format="visiblePreferences.timeFormat" :error="jobsError" :batch-error="residentError" :cancelling-batch="cancellingBatch" :cancelling-core-batch="cancellingCoreBatch" :core-cancel-failure="coreCancelFailure" :feedback="activityFeedback" @refresh="refreshJobs(true)" @cancel-batch="cancelResidentBatch" @cancel-core-batch="cancelCoreBatch"/>
       <SettingsPage v-else :instance="settingsName" :instance-state="currentSettingsState" :instance-run="currentSettingsRow?.run?.id" :world-command-ready="worldCommandReady" :world-rule-work="worldRuleWork" :restart-status="currentSettingsRow?.autoRestartStatus" :instance-meta="currentSettingsMeta" :preferences="presentation.preferences" :preferences-revision="preferencesRevision" :preferences-loaded="preferencesLoaded" :preferences-ready="preferencesLoaded && !preferencesUnavailable" :connected="connected" :java-candidates="javaCandidates" :java-checked="javaChecked" :refresh-java="discoverJava" :retry-preferences="retryPreferences" @close="navigate('instances')" @core="openCore" @language-preview="languagePreview=$event" @dirty="settingsDirty=$event" @saving="settingsSaving=$event" @mutating="invalidateRefresh" @management-changed="invalidateRefresh(); refresh(); refreshJobs(false,true)" @preferences="next=>{invalidateRefresh();applyPreferences(next)}"/>
     </main></div>
@@ -951,10 +970,11 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
     :batches="coreBatches" :connected="connected" :blocked-names="new Set([...lifecycleBusy,...queuedStarts,...residentStarting])"
     :cancelling="cancellingCoreBatch" :cancel-failure="coreCancelFailure"
     @submitted="coreBatchSubmitted" @changed="refreshAfterCoreChange" @cancel="cancelCoreBatch" />
-  <dialog ref="dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'}" @cancel.prevent="close">
-    <template v-if="modal==='batch'"><h2 id="operation-dialog-title">確認批次操作</h2><p>將對 {{ pendingBatch?.targets.length ?? 0 }} 台實例執行{{ pendingBatch?.action==='start'?'啟動':pendingBatch?.action==='stop'?'正常停止':'重新啟動' }}。管理服務接受後，即使關閉 GUI，仍可在操作紀錄查看同一筆工作。</p><p v-if="pendingBatch?.action==='start'" class="hint">管理服務最多同時啟動兩台。</p><p v-if="pendingBatch?.action==='restart'" class="hint">各台並行停止。正常停止並核對完成後才排入啟動，最多同時啟動兩台。停止逾時的實例不會自動啟動。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">取消</button><OperationButton class="primary" label="確認操作" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
+  <dialog ref="dialog" class="overlay-dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'}" @cancel.prevent="close">
+    <OverlayScroll class="dialog-scroll" label="對話框內容">
+    <template v-if="modal==='batch'"><h2 id="operation-dialog-title">確認批次操作</h2><p>將對 {{ pendingBatch?.targets.length ?? 0 }} 台實例執行{{ pendingBatch?.action==='start'?'啟動':pendingBatch?.action==='stop'?'正常停止':'重新啟動' }}。</p><p v-if="pendingBatch?.action==='restart'" class="hint">停止逾時的實例不會自動啟動。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">取消</button><OperationButton class="primary" label="確認操作" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
     <template v-if="modal==='force'"><h2 id="operation-dialog-title">強制停止伺服器</h2><p>要強制停止 {{ target?.name }} 嗎？尚未存檔的世界變更可能遺失。</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="forceStop">強制停止</button></div></template>
-    <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">移除管理</h2><p>選擇 {{ target?.name }} 的管理設定處理方式。兩種方式都保留世界、插件與伺服器檔案；日後可在管理資料夾重新核對。</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">移除管理，保留管理設定</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">移除管理並刪除管理設定</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="removeManagement">確認移除</button></div></template>
+    <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">移除管理</h2><p>兩種方式都保留 {{ target?.name }} 的世界、插件與伺服器檔案。</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">移除管理，保留管理設定</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">移除管理並刪除管理設定</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">取消</button><button class="danger" :disabled="modalBusy" @click="removeManagement">確認移除</button></div></template>
     <template v-else-if="modal==='logs'"><h2 id="operation-dialog-title">{{ target?.name }} · 啟動紀錄</h2><label v-if="logs?.sources">紀錄來源
         <select v-model="logSource" name="log-source">
           <option v-for="source in logs.sources" :key="source.source" :value="source.source">{{ source.source==='terminal'&&logs.merged?'終端合併輸出':logLabels[source.source] }}</option>
@@ -968,15 +988,15 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <dl class="create-review">
           <dt>實例路徑</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.target) }}</dd>
           <dt>核心版本</dt><dd>{{ creationPreview.core.family }} {{ creationPreview.core.minecraft }}<span v-if="creationPreview.core.build"> · Build {{ creationPreview.core.build }}</span></dd>
-          <dt>連接埠</dt><dd>{{ draft.port }}</dd>
+          <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>建議 Java</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
           <template v-if="creationPreview.whitelist">
-            <dt>新增白名單</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
+            <dt>新增納入資料夾</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
           </template>
         </dl>
         <p v-if="creationPreview.whitelist" class="hint">只加入這台實例的資料夾。</p>
         <p v-if="creationPreview.initializationDefaults === false" class="hint">此版本使用核心內建預設值。</p>
-        <p class="hint">建立後會保持停止。啟動時使用全域 Java 設定。</p>
+        
         <div v-if="creationPhase" class="creation-progress">
           <div class="creation-progress-heading">
             <p id="creation-progress-label" role="status">{{ t(`creation.${creationPhase}`) }}</p>
@@ -1035,6 +1055,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         </div>
       </form>
     </template>
+  </OverlayScroll>
   </dialog>
   <dialog ref="routeDialog" class="compact" aria-labelledby="route-dialog-title" @cancel.prevent="routeDialog?.close()"><h2 id="route-dialog-title">放棄變更</h2><p>目前設定有尚未儲存的變更。</p><div class="dialog-actions"><button autofocus @click="routeDialog?.close()">取消</button><button class="danger" @click="confirmRoute">放棄變更</button></div></dialog>
   <dialog ref="discardProvisionDialog" class="compact" aria-labelledby="discard-provision-title" @cancel.prevent="discardProvisionDialog?.close()"><h2 id="discard-provision-title">放棄建立草稿</h2><p>目前欄位有尚未送出的內容。</p><div class="dialog-actions"><button autofocus @click="discardProvisionDialog?.close()">取消</button><button class="danger" @click="discardProvision">放棄草稿</button></div></dialog>

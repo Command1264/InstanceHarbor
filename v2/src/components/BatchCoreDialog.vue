@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch } from 'vue'
 import { isMessageId, useAppLanguage, type MessageId } from '../i18n'
 import { canCancelCoreBatchItem, manage, rawError, type CoreBatch, type CoreSource, type Instance, type InstanceMeta } from '../manager'
 import OperationButton from './OperationButton.vue'
+import OverlayScroll from './OverlayScroll.vue'
 
 const props = defineProps<{
   instances: Instance[]
@@ -182,7 +183,8 @@ defineExpose({ open })
 </script>
 
 <template>
-  <dialog ref="dialog" class="batch-core-dialog" aria-labelledby="batch-core-title" @cancel.prevent="close">
+  <dialog ref="dialog" class="batch-core-dialog overlay-dialog" aria-labelledby="batch-core-title" @cancel.prevent="close">
+    <OverlayScroll class="dialog-scroll" :label="t('core.batch.heading')">
     <h2 id="batch-core-title">{{ t(resultBatch ? 'core.batch.heading' : selected ? 'core.batch.selected' : 'core.batch.all') }}</h2>
     <p v-if="!resultBatch">{{ t('core.batch.scope', { count: formattedCount(total) }) }}</p>
     <template v-if="resultBatch">
@@ -226,6 +228,7 @@ defineExpose({ open })
           @click="apply" />
       </template>
     </div>
+  </OverlayScroll>
   </dialog>
 </template>
 

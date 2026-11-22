@@ -134,3 +134,18 @@ input,textarea,[contenteditable=true],pre,code,.mono,.selectable,.form-error,[ro
 .instances tr.selected .badge.Stopped{color:var(--row-selection-muted,var(--muted));background:var(--row-selection-muted-bg,transparent)}
 
 .field textarea{width:100%;min-width:0;padding:8px 10px;border:1px solid var(--control);border-radius:6px;background:var(--surface);resize:vertical}
+
+/* Result of the last manual operation; reserves its line so the list does not move. */
+.operation-status{min-height:1.5em;margin:-8px 0 8px;font-size:.875rem;color:var(--muted);overflow-wrap:anywhere}
+
+/* Long dialogs scroll inside an overlay scrollbar; the dialog itself never shows a native one. */
+dialog.overlay-dialog{overflow:hidden}
+dialog.overlay-dialog[open]{display:flex;flex-direction:column}
+dialog .dialog-scroll{min-height:0;flex:1}
+dialog .dialog-scroll .overlay-viewport{padding:0 14px 4px 0}
+/* Remaining native scroll areas reserve the gutter so content width stays fixed. */
+dialog,pre,.button-list,#view{scrollbar-gutter:stable;scrollbar-width:thin}
+/* An empty list shows only its message, centered in the panel. */
+.list-panel .list-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin:0;max-width:none}.list-empty p{margin:0}
+/* Settings content sizes to its own content instead of stretching to the navigation height. */
+.settings-layout>.sheet{align-self:start}

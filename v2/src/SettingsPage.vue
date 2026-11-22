@@ -20,7 +20,7 @@ import { displayPath } from './path-display'
 import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm, type AutoRestart, type AutoRestartStatus, type LifecycleTiming, type InstanceSettings, type JavaCandidate, type Preferences, type PreferencesSnapshot } from './manager'
 const props=defineProps<{instance?:string;instanceState?:string;instanceRun?:string;worldCommandReady?:boolean;worldRuleWork?:string;restartStatus?:AutoRestartStatus|null;instanceMeta?:InstanceMeta;preferences:Preferences;preferencesRevision:string;preferencesLoaded:boolean;preferencesReady:boolean;connected:boolean;javaCandidates:JavaCandidate[];javaChecked:boolean;refreshJava:(origin:"manual"|"background",fresh?:boolean)=>Promise<void>;retryPreferences:()=>Promise<void>}>()
 const emit=defineEmits<{(e:"language-preview",v?:LanguagePreference):void;(e:'close'):void;(e:'preferences',snapshot:PreferencesSnapshot):void;(e:'dirty',dirty:boolean):void;(e:'saving',saving:boolean):void;(e:'mutating'):void;(e:'management-changed'):void;(e:'core',name:string):void}>()
-type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'retention'|'recovery'
+type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'recovery'
 type ScanPaths={allowPaths:string[];excludePaths:string[]}
 type ScanSnapshot={policy:ScanPaths & {allow:string[];exclude:string[];managedFolders?:boolean};revision:string;base?:string;path?:string;rows?:ScanRow[]}
 type ScanRow={name:string;path:string;visible:boolean;changed:boolean;active?:boolean;reason:'Excluded'|'Default'|'Allowed'|'NotAllowed'}
@@ -656,7 +656,11 @@ async function readSettings(origin:'manual'|'background'='background', profileCh
     if(!current())return
     if(preferencesTab.value){preferencesDraftRevision.value=props.preferencesRevision;resetDisplayPreferences();markSaved()}
     return true
-  }catch(e){if(current() && (targetTab!=='world'||!world.value||origin==='manual'))error.value='無法讀取設定：'+errorText(e)}
+  }catch(e){
+    // A background reread keeps the last valid settings on screen; only report when the user asked or nothing is shown yet.
+    if(current() && (origin==='manual' || (!baseline.value && (targetTab!=='world'||!world.value))))error.value='無法讀取設定：'+errorText(e)
+    else console.error('背景重讀設定失敗',e)
+  }
   finally{if(javaReadEpoch===epoch)javaReadEpoch=0}
 }
 function resetJavaPicker(){
@@ -993,19 +997,19 @@ async function save(confirmWorld = false, confirmScope = false){
 void load()
 </script>
 <template>
-  <OverlayScroll class="settings-scroll" label="設定內容"><header class="page-head"><div><h1>{{ instance ? `${instance} · 設定` : '應用程式設定' }}</h1><p>{{ instance ? '調整這台實例的設定' : '調整介面與新實例的預設值' }}</p></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
+  <OverlayScroll class="settings-scroll" label="設定內容"><header class="page-head"><div><h1>{{ instance ? `${instance} · 設定` : '應用程式設定' }}</h1></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
     <div class="settings-layout"><nav class="settings-nav" aria-label="設定分類">
       <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">世界政策</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
-      <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='retention'?'page':undefined" @click="switchTab('retention')">{{ t('settings.retention') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button></template>
+      <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button></template>
       </nav><section class="sheet" :aria-busy="saving">
       <OperationButton v-if="preferencesTab && tab!=='terminal' && connected && (preferencesConflict || !preferencesReady || error)"
         :label="t('action.retryRead')" :busy-label="t('activity.loading')" :busy="retryingRead" @click="retrySettings()" />
       <fieldset class="settings-fields" :disabled="saving || !connected || (preferencesTab && !preferencesLoaded)">
-      <template v-if="tab==='appearance'"><h2>{{ t('appearance.title') }}</h2><p v-if="!connected || !preferencesReady" class="form-error" role="alert">目前無法核對已儲存的外觀設定。請重新讀取。</p><div v-if="preferencesLoaded" class="field"><label for="app-theme">{{ t('appearance.theme') }}</label><div class="editor"><select id="app-theme" v-model="theme" name="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select><small class="hint">選擇立即預覽，儲存後才會保留。</small></div></div>
+      <template v-if="tab==='appearance'"><h2>{{ t('appearance.title') }}</h2><p v-if="!connected || !preferencesReady" class="form-error" role="alert">目前無法核對已儲存的外觀設定。請重新讀取。</p><div v-if="preferencesLoaded" class="field"><label for="app-theme">{{ t('appearance.theme') }}</label><div class="editor"><select id="app-theme" v-model="theme" name="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select></div></div>
         <div v-if="preferencesLoaded" class="field">
           <label for="selection-color">{{ t('appearance.selectionColor') }}</label>
           <div class="editor">
-            <select id="selection-color" v-model="selectionColor" name="selection-color" aria-describedby="selection-color-help">
+            <select id="selection-color" v-model="selectionColor" name="selection-color">
               <option value="system">{{ t('appearance.systemTheme') }}</option>
               <option value="blue">{{ t('appearance.blue') }}</option>
               <option value="red">{{ t('appearance.red') }}</option>
@@ -1015,7 +1019,6 @@ void load()
               <option value="cyan">{{ t('appearance.cyan') }}</option>
               <option value="purple">{{ t('appearance.purple') }}</option>
             </select>
-            <small id="selection-color-help" class="hint">{{ t('appearance.languageHelp') }}</small>
           </div>
         </div>
         <div v-if="preferencesLoaded" class="field">
@@ -1042,11 +1045,10 @@ void load()
             </div>
           </div>
         </div>
-        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select><small class="hint">儲存後套用顯示偏好。管理設定統一儲存正斜線，不改動實際檔案位置。</small></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" />
+        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" />
         <template v-if="preferencesLoaded"><label class="check"><input v-model="closeToTray" type="checkbox" name="close-to-tray" aria-describedby="close-to-tray-help"> {{ t('appearance.closeToTray') }}</label><p id="close-to-tray-help" class="hint">{{ t('appearance.closeToTrayHelp') }}</p></template></template>
       <template v-else-if="tab==='java'">
         <h2>{{ t('settings.java') }}</h2>
-        <p class="hint">Java、Port 與 JVM 設定會在此實例下次啟動時使用。</p>
         <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>
         <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
         <p v-if="!settings.revision" class="notice">尚未取得可儲存的實例設定，請核對管理服務後再修改。</p>
@@ -1147,7 +1149,6 @@ void load()
       </template>
       <template v-else-if="tab==='initialization'">
         <h2>初始化預設</h2>
-        <p class="hint">選擇核心與 Minecraft 版本後，可修改之後建立的實例所使用的預設。</p>
         <template v-if="init">
           <div class="field">
             <label for="initialization-profile">核心與 Minecraft 版本</label>
@@ -1166,10 +1167,10 @@ void load()
         <h2>世界設定</h2>
         <template v-if="world">
           <p class="hint">{{ world.profile ? world.profile.family + ' ' + world.profile.version : '核心與 Minecraft 版本待核對' }}</p>
-          <p class="notice">伺服器運行時儲存的設定檔變更會在正常停止後套用並核對。遊戲規則優先即時套用並讀回。尚未送出且目前無法套用時，會等到下次啟動。</p>
+          <p class="notice">設定檔變更在正常停止後套用；遊戲規則即時套用。</p>
           <p v-if="world.pending" class="hint" role="status">{{ world.pending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
           <details class="world-preflight">
-            <summary>啟動前 YAML 核對 <span class="hint" aria-live="polite">{{ yamlPreflightSummary }}</span></summary>
+            <summary>啟動前 YAML 核對 <span class="hint">{{ yamlPreflightSummary }}</span></summary>
             <p v-if="world.yamlPreflight?.source === 'Launch' && (world.yamlPreflight.changes.length || world.yamlPreflight.filesChanged?.length)" class="hint">最近一次啟動前讀回的差異</p>
             <template v-if="world.yamlPreflight?.filesChanged?.length">
               <p class="hint">內容有變更的檔案</p>
@@ -1199,16 +1200,15 @@ void load()
       </template>
       <template v-else-if="tab==='restart'">
         <h2>停止與重啟</h2>
-        <p class="hint">停止逾時會保留結果供核對。重啟緩衝從確認原工作階段退出及 Port 釋放後開始。</p>
         <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>
         <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
-        <div class="field"><label for="stop-seconds">正常停止期限（秒）</label><input id="stop-seconds" name="stop-seconds" v-model.number="timing.stopSeconds" type="number" min="5" max="300" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"><small class="hint">留空使用 45 秒。</small></div>
-        <div class="field"><label for="ready-seconds">批次啟動就緒期限（秒）</label><input id="ready-seconds" name="ready-seconds" v-model.number="timing.readySeconds" type="number" min="10" max="600" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"><small class="hint">留空使用 150 秒。</small></div>
-        <div class="field"><label for="restart-delay">重啟緩衝（毫秒）</label><input id="restart-delay" name="restart-delay" v-model.number="timing.restartDelayMs" type="number" min="0" max="5000" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"><small class="hint">留空使用 0 毫秒。</small></div>
+        <div class="field"><label for="stop-seconds">正常停止期限（秒）</label><input id="stop-seconds" name="stop-seconds" v-model.number="timing.stopSeconds" type="number" min="5" max="300" placeholder="45" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <div class="field"><label for="ready-seconds">批次啟動就緒期限（秒）</label><input id="ready-seconds" name="ready-seconds" v-model.number="timing.readySeconds" type="number" min="10" max="600" placeholder="150" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <div class="field"><label for="restart-delay">重啟緩衝（毫秒）</label><input id="restart-delay" name="restart-delay" v-model.number="timing.restartDelayMs" type="number" min="0" max="5000" placeholder="0" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
       </template>
       <template v-else-if="tab==='autorestart'">
         <h2>自動重啟</h2>
-        <p class="hint">管理服務持續運作時，依可核對的退出結果與 Port 狀態重啟。正常停止或緊急停止永遠優先。</p>
+        
         <div v-if="restartStatus" class="hint" role="status">
           <p>{{ t(`settings.restartState.${restartStatus.phase}`) }}</p>
           <p v-if="restartAttemptCount!==undefined">{{ t('settings.restartAttemptCount',{ count:restartAttemptCount }) }}</p>
@@ -1266,7 +1266,7 @@ void load()
       </template>
       <template v-else-if="tab==='scan'">
         <h2>{{ t('management.paths') }}</h2>
-        <p id="scan-help" class="hint">白名單指定要管理的資料夾。黑名單只接受白名單下的子資料夾，並優先排除。可使用完整路徑，或以工作區為起點的相對路徑，例如 ./instances。</p>
+        <p id="scan-help" class="hint">可用完整路徑或 ./instances 等相對路徑。</p>
         <template v-if="scan">
           <p v-if="scan.policy.allow.length || scan.policy.exclude.length" class="hint">既有名稱規則仍有效。允許 {{ scan.policy.allow.join('、') || '無' }}，排除 {{ scan.policy.exclude.join('、') || '無' }}。</p>
           <ManagementPathRows v-for="kind in scanKinds" :key="kind" :kind="kind" :rows="scanDraft[kind]"
@@ -1279,7 +1279,7 @@ void load()
       </template>
       <template v-else-if="tab==='global-java'">
         <h2>{{ t('management.globalJava') }}</h2>
-        <p class="hint">{{ t('management.globalJavaHelp') }}</p>
+        
         <template v-if="savedGlobalJava">
           <div class="field">
             <label for="global-java-mode">{{ t('management.javaSelection') }}</label>
@@ -1313,10 +1313,9 @@ void load()
       <template v-else-if="tab==='updates'">
         <h2>{{ t('settings.coreUpdates') }}</h2>
         <p v-if="!preferencesReady" class="form-error" role="alert">{{ t('settings.corePrefetchUnavailable') }}</p>
-        <label class="check"><input v-model="corePrefetch" type="checkbox" aria-describedby="core-prefetch-help"> {{ t('settings.corePrefetch') }}</label>
-        <p id="core-prefetch-help" class="hint">{{ t('settings.corePrefetchHelp') }}</p>
+        <label class="check"><input v-model="corePrefetch" type="checkbox"> {{ t('settings.corePrefetch') }}</label>
+        
       </template>
-      <template v-else-if="tab==='retention'"><h2>操作紀錄保留</h2><p class="notice">可在「操作紀錄」顯示較早的已結案紀錄，並以 JSON 或 CSV 匯出目前結果。此頁未提供保存期限或清理設定。</p></template>
       <RecoveryKeyPanel v-else-if="tab==='recovery'" :connected="connected" />
       <template v-else><h2>{{ t('settings.core') }}</h2><button v-if="instance" type="button" :disabled="!connected" @click="emit('core',instance)">開啟核心維護</button></template>
       <p v-if="error && !pickerDialog?.open" role="alert" class="form-error">{{ error }}</p>
@@ -1369,7 +1368,6 @@ void load()
   </dialog>
   <dialog ref="pickerDialog" aria-labelledby="java-picker-title" @close="handleJavaPickerClose">
     <h2 id="java-picker-title">{{ t(javaDialogMode==='choose' ? 'management.javaPickerTitle' : 'management.javaResultsTitle') }}</h2>
-    <p v-if="javaDialogMode==='choose'" class="hint">{{ t('management.javaPickerDraftHelp') }}</p>
     <p v-if="javaPickerDraft" class="hint">{{ t('management.javaPickerPreview') }}</p>
     <button class="java-rescan" type="button" :aria-disabled="javaBusy" @click="refreshJavaPicker">
       <span class="java-rescan-label">{{ t(javaBusy ? 'management.discoveringJava' : 'management.rediscoverJava') }}<span v-if="javaBusy" class="java-rescan-spinner" aria-hidden="true"></span></span>

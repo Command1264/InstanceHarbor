@@ -68,6 +68,12 @@ function pointerMove(event: PointerEvent) {
   if (drag.horizontal) viewport.value.scrollLeft = value
   else viewport.value.scrollTop = value
 }
+// The track sits beside the viewport, so forward wheel input that lands on it.
+function wheel(event: WheelEvent) {
+  if (!viewport.value) return
+  viewport.value.scrollBy({ top: event.deltaY, left: event.deltaX })
+  event.preventDefault()
+}
 function pointerUp(event: PointerEvent) {
   if (drag?.pointer === event.pointerId) drag = null
 }
@@ -107,7 +113,7 @@ onUnmounted(() => {
          :aria-label="`${props.label}水平捲軸`" aria-orientation="horizontal" :aria-valuemin="0" :aria-controls="viewportId"
          :aria-valuemax="Math.round(maximumX)" :aria-valuenow="Math.round(currentX)"
          @pointerdown="pointerDown($event, true)" @pointermove="pointerMove" @pointerup="pointerUp"
-         @lostpointercapture="drag = null" @keydown="keydown($event, true)">
+         @lostpointercapture="drag = null" @keydown="keydown($event, true)" @wheel="wheel">
       <div class="overlay-thumb horizontal-thumb" :style="{width: `${thumbWidth}px`, transform: `translateX(${thumbLeft}px)`}" />
     </div>
     <div v-if="needed" ref="track" class="overlay-track" role="scrollbar" tabindex="0"
@@ -115,7 +121,7 @@ onUnmounted(() => {
          :aria-controls="viewportId"
          :aria-valuemax="Math.round(maximum)" :aria-valuenow="Math.round(current)"
          @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"
-         @lostpointercapture="drag = null" @keydown="keydown">
+         @lostpointercapture="drag = null" @keydown="keydown" @wheel="wheel">
       <div class="overlay-thumb" :style="{height: `${thumbHeight}px`, transform: `translateY(${thumbTop}px)`}" />
     </div>
   </div>
