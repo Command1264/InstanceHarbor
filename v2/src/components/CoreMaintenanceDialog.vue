@@ -60,7 +60,7 @@ async function copyDiagnostics() {
   } finally { copying.value = false }
 }
 const sourceTime = computed(() => source.value?.checkedAt
-  ? formatDisplayTime(source.value.checkedAt, locale.value, props.timeFormat) : '尚未核對')
+  ? formatDisplayTime(source.value.checkedAt, locale.value, props.timeFormat) : t('components.coreMaintenance.notChecked'))
 function sourceStatus(value: CoreSource | undefined) {
   if (value?.status === 'NativeBehind' && typeof value.nativeVersion?.behind === 'number') {
     const count = new Intl.NumberFormat(locale.value).format(value.nativeVersion.behind)
@@ -70,7 +70,7 @@ function sourceStatus(value: CoreSource | undefined) {
   if (value?.status === 'Current') return t('core.source.current')
   if (value?.status === 'NoStableBuild') return t('core.source.noStableBuild')
 }
-const statusText = computed(() => (prepared.value ? t('core.source.prepared') : result.value) || sourceStatus(source.value) || '尚未核對')
+const statusText = computed(() => (prepared.value ? t('core.source.prepared') : result.value) || sourceStatus(source.value) || t('components.coreMaintenance.notChecked'))
 const primaryEnabled = computed(() => state.value?.canWrite === true
   && (!!candidate.value || !source.value || state.value.installed?.family==='SPIGOT'))
 const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string }>()
@@ -99,17 +99,17 @@ async function check() {
     if (!dialog.value?.open || name !== props.name) return
     const checked = reply.rows.find(row=>row.name===name)
     if (checked?.sha256 && state.value && checked.sha256 !== state.value.currentSha256) {
-      result.value = '核心已變更，請重新核對更新'
+      result.value = t('components.coreMaintenance.changed')
       return
     }
     if (checked && checked.status !== 'Unknown') manualSource.value = {...checked,checkedAt:reply.checkedAt}
-    result.value = sourceStatus(checked) ?? '未能核對更新來源'
+    result.value = sourceStatus(checked) ?? t('components.coreMaintenance.sourceUnavailable')
     if (checked?.reason === 'CoreSourceSpigotLocalRefsUnverified') error.value = t('core.source.spigotRefsUnverified')
     else if (checked?.reason === 'CoreSourceSpigotNativeCheckFailed') error.value = t('core.source.spigotNativeFailed')
     else if (checked?.reason) error.value = errorText(checked.reason)
   } catch (failure) {
     if (!dialog.value?.open || name !== props.name) return
-    result.value = '更新核對失敗'
+    result.value = t('components.coreMaintenance.checkFailed')
     error.value = errorText(failure)
   } finally { checking.value = false }
 }
@@ -151,7 +151,7 @@ async function apply() {
   }, 250)
   try {
     const outcome = await manage<{ outcome: string }>(args)
-    result.value = outcome.outcome === 'applied' ? '已核對核心維護結果' : '已核對，未替換核心'
+    result.value = outcome.outcome === 'applied' ? t('components.coreMaintenance.verified') : t('components.coreMaintenance.notReplaced')
     manualSource.value = undefined
     emit('changed')
   } catch (failure) { error.value = errorText(failure) }
@@ -169,38 +169,38 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
 </script>
 <template>
   <dialog ref="dialog" class="compact" aria-labelledby="core-dialog-title" @cancel.prevent="close">
-    <h2 id="core-dialog-title">{{ name }} · 核心維護</h2>
+    <h2 id="core-dialog-title">{{ t('components.coreMaintenance.title', { name }) }}</h2>
     <dl class="import-preview">
-      <dt>目前版本</dt><dd>{{ state?.installed ? [state.installed.family,state.installed.minecraft,'build',state.installed.build].join(' ') : '尚未核對' }}</dd>
-      <dt>最新版本</dt><dd>{{ source?.remoteBuild ?? candidate?.build ?? '尚未核對' }}</dd>
-      <dt>核對時間</dt><dd>{{ sourceTime }}</dd>
-      <dt>更新狀態</dt><dd role="status">{{ statusText }}</dd>
+      <dt>{{ t('components.coreMaintenance.currentVersion') }}</dt><dd>{{ state?.installed ? [state.installed.family,state.installed.minecraft,'build',state.installed.build].join(' ') : t('components.coreMaintenance.notChecked') }}</dd>
+      <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ source?.remoteBuild ?? candidate?.build ?? t('components.coreMaintenance.notChecked') }}</dd>
+      <dt>{{ t('components.coreMaintenance.checkedAt') }}</dt><dd>{{ sourceTime }}</dd>
+      <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
     </dl>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <div class="core-dialog-actions">
       <button class="primary" :disabled="!primaryEnabled" :title="state?.reason ? errorText(state.reason) : undefined"
-        @click="primaryAction">{{ candidate ? '更新核心' : '選擇本機核心' }}</button>
-      <OperationButton label="檢查更新" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
-      <button @click="diagnostics?.showModal()">備份與診斷</button>
-      <button autofocus @click="close">關閉</button>
+        @click="primaryAction">{{ candidate ? t('components.coreMaintenance.update') : t('components.coreMaintenance.chooseLocal') }}</button>
+      <OperationButton :label="t('components.coreMaintenance.check')" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
+      <button @click="diagnostics?.showModal()">{{ t('components.coreMaintenance.diagnostics') }}</button>
+      <button autofocus @click="close">{{ t('action.close') }}</button>
     </div>
   </dialog>
   <dialog ref="diagnostics" aria-labelledby="core-diagnostics-title">
-      <h2 id="core-diagnostics-title">備份與診斷</h2>
+      <h2 id="core-diagnostics-title">{{ t('components.coreMaintenance.diagnostics') }}</h2>
       <p v-if="state?.reason" class="hint">{{ errorText(state.reason) }}</p>
       <p v-if="result" role="status">{{ result }}</p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <div class="field">
-        <label for="local-core-path">核心 JAR</label>
+        <label for="local-core-path">{{ t('components.coreMaintenance.coreJar') }}</label>
         <div class="core-path-editor">
           <input id="local-core-path" v-model.trim="path" name="local-core-path" autocomplete="off" spellcheck="false">
           <PathPickerButton kind="jar" :current="path" :disabled="busy"
-            @selected="path = $event" @failed="error = '無法開啟檔案選取器。'" />
+            @selected="path = $event" @failed="error = t('components.coreMaintenance.pickerFailed')" />
         </div>
       </div>
       <div class="field"><label for="local-core-sha256">SHA-256</label><input id="local-core-sha256" v-model.trim="sha" name="local-core-sha256" autocomplete="off" spellcheck="false"></div>
-      <button :disabled="!state?.canWrite || !path || !/^[0-9a-f]{64}$/i.test(sha)" @click="ask('core-install')">更新核心</button>
-      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">Build {{ backup.profile.build }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">還原</button></li></ul>
+      <button :disabled="!state?.canWrite || !path || !/^[0-9a-f]{64}$/i.test(sha)" @click="ask('core-install')">{{ t('components.coreMaintenance.update') }}</button>
+      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">Build {{ backup.profile.build }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
       <details v-if="state" class="detail-section">
         <summary>{{ t('core.diagnostics.show') }}</summary>
         <pre class="selectable" tabindex="0" :aria-label="t('core.diagnostics.show')" translate="no">{{ diagnosticText }}</pre>
@@ -209,21 +209,21 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
         <p v-if="copyFeedback==='failed'" class="form-error" role="alert">{{ t('core.diagnostics.copyFailed') }}</p>
       </details>
       <div class="dialog-actions">
-        <button v-if="state?.pending" @click="ask('core-reconcile')">核對未完成工作</button>
-        <button autofocus @click="diagnostics?.close()">關閉</button>
+        <button v-if="state?.pending" @click="ask('core-reconcile')">{{ t('components.coreMaintenance.reconcile') }}</button>
+        <button autofocus @click="diagnostics?.close()">{{ t('action.close') }}</button>
       </div>
   </dialog>
   <dialog ref="confirm" class="compact" aria-labelledby="core-confirm-title" @cancel="busy && $event.preventDefault()">
-    <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?'還原核心':choice?.action==='core-reconcile'?'核對維護結果':'更新核心' }}</h2>
-    <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">目標版本為 Build {{ choice.candidateBuild }}。</p>
-    <p>替換前會再次核對並保留備份。</p>
+    <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?t('components.coreMaintenance.restoreTitle'):choice?.action==='core-reconcile'?t('components.coreMaintenance.reconcileTitle'):t('components.coreMaintenance.update') }}</h2>
+    <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">{{ t('components.coreMaintenance.targetBuild', { build: choice.candidateBuild }) }}</p>
+    <p>{{ t('components.coreMaintenance.backupNote') }}</p>
     <div class="dialog-actions">
-      <button autofocus :disabled="busy" @click="confirm?.close()">取消</button>
-      <OperationButton class="primary" label="確認" :busy-label="t('action.submitting')" :busy="confirming" @click="apply" />
+      <button autofocus :disabled="busy" @click="confirm?.close()">{{ t('action.cancel') }}</button>
+      <OperationButton class="primary" :label="t('action.confirm')" :busy-label="t('action.submitting')" :busy="confirming" @click="apply" />
     </div>
   </dialog>
   <dialog ref="progress" class="compact" tabindex="-1" aria-labelledby="core-progress-title" @cancel.prevent @keydown.esc.stop.prevent>
-    <h2 id="core-progress-title">核心維護進行中</h2><p>請等待管理服務核對檔案寫入結果。</p><progress aria-label="核心維護"></progress>
+    <h2 id="core-progress-title">{{ t('components.coreMaintenance.progressTitle') }}</h2><p>{{ t('components.coreMaintenance.progressBody') }}</p><progress :aria-label="t('components.coreMaintenance.progressLabel')"></progress>
   </dialog>
 </template>
 <style scoped>

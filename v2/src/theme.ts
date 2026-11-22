@@ -118,7 +118,7 @@ export async function refreshSelectionColor(preference: SelectionColorPreference
     if (epoch === accentEpoch && root.dataset.selectionColor === 'system')
       applySelectionColor('system', accent, resolveSelectionOpacity(Number(root.dataset.selectionOpacity)))
   } catch (error) {
-    console.error('無法讀取 Windows 系統強調色', error)
+    console.error('Could not read the Windows accent color', error)
   }
 }
 

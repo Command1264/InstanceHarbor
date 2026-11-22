@@ -10,7 +10,7 @@ import InstanceDiagnosticsPanel from './components/InstanceDiagnosticsPanel.vue'
 import {usePinnedDrag} from './usePinnedDrag'
 import {keepEditingContext} from './context-menu'
 import { displayPath } from './path-display'
-import { useAppLanguage } from './i18n'
+import { useAppLanguage, type MessageId } from './i18n'
 import { actionName, batchItemState, canOpenConsole, canRestart, canStop, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
 
 const props = defineProps<{coreCheckRows?:Record<string,CoreSource>;
@@ -99,8 +99,8 @@ const menu=ref<{name:string;x:number;y:number;trigger:HTMLElement}>()
 const menuItems=computed(()=>{
  const name=menu.value?.name??'',row=props.rows.find(row=>row.name===name)
  const index=props.preferences.pins.indexOf(name),blocked=!!props.pinBusy||!props.connected
- const pins=index<0?[{id:'pin',label:'釘選',disabled:blocked}]:[{id:'up',label:'釘選上移',disabled:blocked||index===0},{id:'down',label:'釘選下移',disabled:blocked||index===props.preferences.pins.length-1},{id:'pin',label:'取消釘選',disabled:blocked}]
- return [...pins,{id:'remove',label:'移除管理',danger:true,disabled:!props.connected||!row||row.state!=='Stopped'||props.busyNames.has(name)||!!props.queuedNames?.has(name)}]
+ const pins=index<0?[{id:'pin',label:t('instances.pin'),disabled:blocked}]:[{id:'up',label:t('instances.pinUp'),disabled:blocked||index===0},{id:'down',label:t('instances.pinDown'),disabled:blocked||index===props.preferences.pins.length-1},{id:'pin',label:t('instances.unpin'),disabled:blocked}]
+ return [...pins,{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!props.connected||!row||row.state!=='Stopped'||props.busyNames.has(name)||!!props.queuedNames?.has(name)}]
 })
 function showMenu(event:MouseEvent,name:string){
  if(keepEditingContext(event.target,event))return
@@ -125,20 +125,20 @@ function menuAction(id:string){
 watch(()=>visible.value.map(row=>row.name).join('\u0000'),()=>{if(menu.value&&!visible.value.some(row=>row.name===menu.value!.name))closeMenu(false)})
 const chosen = computed(() => props.rows.filter(row => selected.value.includes(row.name)))
 const consoleTargets = computed(() => chosen.value.filter(canOpenConsole))
-const consoleHint = '只開啟具備後台且正在啟動或監聽中的所選實例。'
+const consoleHint = computed(() => t('instances.consoleHint'))
 const single = computed(() => chosen.value.length === 1 ? chosen.value[0] : undefined)
 const currentMeta = computed(() => single.value && metaByName.value.get(single.value.name))
 const diagnosticProxies = computed(() => props.meta.filter(item => item.core?.family?.toLowerCase() === 'velocity').map(item => item.name))
 function isQueued(row:Instance){return row.state==='Stopped' && !!props.queuedNames?.has(row.name)}
 function starting(row:Instance){return row.state==='Stopped' && !!props.startingNames?.has(row.name)}
 function stateClass(row:Instance){return isQueued(row)?'Queued':starting(row)?'Starting':row.state}
-function displayState(row:Instance){const state=stateClass(row);return state==='Queued'?'排隊中':stateName(state)}
+function displayState(row:Instance){const state=stateClass(row);return state==='Queued'?t('activity.state.Queued'):stateName(state)}
 const emergency = computed(() => !!single.value && canStop(single.value) &&
   !!(single.value.stopPhase || props.stopping[single.value.name] === single.value.run?.id))
 const recent = computed(() => single.value && recentByName.value.get(single.value.name))
 const refreshBusy=computed(()=>!!props.refreshPending)
-const refreshLabel=computed(()=>props.refreshDone?'已核對':'重新核對')
-function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? core.label ?? `${core.family} ${core.minecraft}${core.build ? ` build ${core.build}` : ''}` : '尚未核對'}
+const refreshLabel=computed(()=>props.refreshDone?t('instances.refreshDone'):t('action.refresh'))
+function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? core.label ?? `${core.family} ${core.minecraft}${core.build ? ` build ${core.build}` : ''}` : t('instances.coreUnchecked')}
 const coreVersions = computed(() => new Map<string, {version:string;build?:string;update?:string}>(props.meta.map(({ name, core }) => {
   if (core?.state !== 'known') return [name, { version: coreLabel(name) }]
   const source = props.coreCheckRows?.[name]
@@ -154,7 +154,8 @@ const coreVersions = computed(() => new Map<string, {version:string;build?:strin
   }]
 })))
 function pathLabel(path:string){return displayPath(path,props.preferences.pathSeparator)}
-const jobStateName=(state:string)=>({Completed:'已完成',Unconfirmed:'結果未確認',Failed:'失敗',Pending:'處理中',Cancelled:'已取消',Skipped:'已略過'} as Record<string,string>)[state]??'結果未確認'
+const jobStateIds:Record<string,MessageId>={Completed:'activity.state.Completed',Unconfirmed:'activity.state.Unconfirmed',Failed:'activity.state.Failed',Pending:'activity.state.Pending',Cancelled:'activity.state.Cancelled',Skipped:'activity.state.Skipped'}
+const jobStateName=(state:string)=>t(Object.hasOwn(jobStateIds,state)?jobStateIds[state]:'activity.state.Unconfirmed')
 watch(() => props.rows.map(row => row.name).join('\u0000'), () => {
   const names = new Set(props.rows.map(row => row.name))
   selected.value = selected.value.filter(name => names.has(name))
@@ -195,28 +196,28 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
 
 </script>
 <template>
-  <header class="page-head"><div><h1>實例</h1></div>
-    <div class="actions"><button class="management-folder-trigger" type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button><button class="primary" type="button" :disabled="!connected" @click="emit('create')">建立實例</button></div>
+  <header class="page-head"><div><h1>{{ t('nav.instances') }}</h1></div>
+    <div class="actions"><button class="management-folder-trigger" type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button><button class="primary" type="button" :disabled="!connected" @click="emit('create')">{{ t('instances.createInstance') }}</button></div>
   </header>
-  <div class="toolbar"><label class="search-label">搜尋實例<input v-model="query" type="search" name="instance-search" autocomplete="off"></label>
-    <label>狀態<select v-model="filter" name="status-filter"><option value="all">全部</option><option value="running">正在監聽</option><option value="stopped">已停止</option><option value="attention">需查看</option></select></label>
+  <div class="toolbar"><label class="search-label">{{ t('instances.searchLabel') }}<input v-model="query" type="search" name="instance-search" autocomplete="off"></label>
+    <label>{{ t('instances.statusLabel') }}<select v-model="filter" name="status-filter"><option value="all">{{ t('activity.allResults') }}</option><option value="running">{{ t('instance.state.listening') }}</option><option value="stopped">{{ t('instance.state.stopped') }}</option><option value="attention">{{ t('instances.filterAttention') }}</option></select></label>
     <div class="actions toolbar-controls"><OperationButton class="refresh-control" :label="refreshLabel" :busy-label="t('action.checking')" :busy="refreshBusy" @click="emit('refresh')" />
-    <ActionMenu label="全部操作">
-      <button :disabled="!canSubmitBatch('start',rows)" @click="emit('batch-action','start',batchRows('start',rows))">全部啟動</button>
-      <button :disabled="!canSubmitBatch('stop',rows)" @click="emit('batch-action','stop',batchRows('stop',rows))">全部正常停止</button>
-      <button :disabled="!canSubmitBatch('restart',rows)" @click="emit('batch-action','restart',batchRows('restart',rows))">全部重新啟動</button>
+    <ActionMenu :label="t('instances.allActions')">
+      <button :disabled="!canSubmitBatch('start',rows)" @click="emit('batch-action','start',batchRows('start',rows))">{{ t('instances.startAll') }}</button>
+      <button :disabled="!canSubmitBatch('stop',rows)" @click="emit('batch-action','stop',batchRows('stop',rows))">{{ t('instances.stopAll') }}</button>
+      <button :disabled="!canSubmitBatch('restart',rows)" @click="emit('batch-action','restart',batchRows('restart',rows))">{{ t('instances.restartAll') }}</button>
       <button type="button" :disabled="!connected" @click="emit('batch-core')">{{ t('core.batch.all') }}</button>
     </ActionMenu></div>
   </div>
   <p class="operation-status selectable" role="status">{{ feedback }}</p>
   <div class="workspace">
-    <section class="list-panel" aria-label="實例清單"><div v-if="!loaded || selected.length" class="selection-line"><span>{{ !loaded ? '尚未取得清單' : selected.length ? `已選取 ${selected.length} 台` : '' }}</span><span><button v-if="selected.length" class="quiet clear-selection" @click="selected=[];anchor=null">清除選取</button></span></div>
-      <OverlayScroll v-if="initialLoading || visible.length" class="table-wrap" label="實例清單"><table ref="instanceTable" class="instances"><thead><tr><th :aria-sort="sort==='name' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('name')">實例 {{ sort==='name' ? (direction===1?'↑':'↓') : '' }}</button></th><th class="core-column" :aria-sort="sort==='core' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('core')">核心版本 {{ sort==='core' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='port' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('port')">Port {{ sort==='port' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='state' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('state')">觀察狀態 {{ sort==='state' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='recent' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('recent')">最近操作 {{ sort==='recent' ? (direction===1?'↑':'↓') : '' }}</button></th></tr></thead>
-        <tbody><tr v-for="row in displayed" :key="row.name" :class="{selected:selected.includes(row.name),'pin-drag-source':pinDrag.dragging.value===row.name,'pinned-draggable':preferences.pins.includes(row.name)&&canDragPins}" :data-instance="row.name" tabindex="0" :aria-selected="selected.includes(row.name)" @pointerdown.capture="pinDrag.nextPointerDown" @pointerdown="pinDrag.begin($event,row.name)" :title="preferences.pins.includes(row.name)?(canDragPins?'按住此列拖曳，調整釘選順序':'清除篩選並等待儲存完成後，可拖曳調整釘選順序'):undefined" @click="choose($event,row.name)" @keydown="keySelect($event,row.name)" @contextmenu="showMenu($event,row.name)">
-          <td class="instance-name-cell"><button class="pin-toggle" type="button" :class="{pinned:preferences.pins.includes(row.name)}" :aria-pressed="preferences.pins.includes(row.name)" :aria-label="`${preferences.pins.includes(row.name)?'取消釘選':'釘選'} ${row.name}`" :title="preferences.pins.includes(row.name)?'取消釘選實例':'釘選實例'" :aria-disabled="pinBusy || !connected" @click.stop="!pinBusy && connected && emit('pin',row.name)" @dblclick.stop @keydown.stop="showKeyboardMenu($event,row.name)"><PinIcon :filled="preferences.pins.includes(row.name)" /></button><span class="instance-name">{{ row.name }}</span></td>
+    <section class="list-panel" :aria-label="t('instances.listLabel')"><div v-if="!loaded || selected.length" class="selection-line"><span>{{ !loaded ? t('instances.listNotLoaded') : selected.length ? t('instances.selectedCount', { count: selected.length }) : '' }}</span><span><button v-if="selected.length" class="quiet clear-selection" @click="selected=[];anchor=null">{{ t('instances.clearSelection') }}</button></span></div>
+      <OverlayScroll v-if="initialLoading || visible.length" class="table-wrap" :label="t('instances.listLabel')"><table ref="instanceTable" class="instances"><thead><tr><th :aria-sort="sort==='name' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('name')">{{ t('nav.instances') }} {{ sort==='name' ? (direction===1?'↑':'↓') : '' }}</button></th><th class="core-column" :aria-sort="sort==='core' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('core')">{{ t('instances.colCore') }} {{ sort==='core' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='port' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('port')">Port {{ sort==='port' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='state' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('state')">{{ t('instances.observedState') }} {{ sort==='state' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='recent' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('recent')">{{ t('instances.recentAction') }} {{ sort==='recent' ? (direction===1?'↑':'↓') : '' }}</button></th></tr></thead>
+        <tbody><tr v-for="row in displayed" :key="row.name" :class="{selected:selected.includes(row.name),'pin-drag-source':pinDrag.dragging.value===row.name,'pinned-draggable':preferences.pins.includes(row.name)&&canDragPins}" :data-instance="row.name" tabindex="0" :aria-selected="selected.includes(row.name)" @pointerdown.capture="pinDrag.nextPointerDown" @pointerdown="pinDrag.begin($event,row.name)" :title="preferences.pins.includes(row.name)?(canDragPins?t('instances.pinDragHint'):t('instances.pinDragBlocked')):undefined" @click="choose($event,row.name)" @keydown="keySelect($event,row.name)" @contextmenu="showMenu($event,row.name)">
+          <td class="instance-name-cell"><button class="pin-toggle" type="button" :class="{pinned:preferences.pins.includes(row.name)}" :aria-pressed="preferences.pins.includes(row.name)" :aria-label="preferences.pins.includes(row.name)?t('instances.unpinNamed',{name:row.name}):t('instances.pinNamed',{name:row.name})" :title="preferences.pins.includes(row.name)?t('instances.unpinInstance'):t('instances.pinInstance')" :aria-disabled="pinBusy || !connected" @click.stop="!pinBusy && connected && emit('pin',row.name)" @dblclick.stop @keydown.stop="showKeyboardMenu($event,row.name)"><PinIcon :filled="preferences.pins.includes(row.name)" /></button><span class="instance-name">{{ row.name }}</span></td>
           <td class="core-column">
             <div class="core-version">
-              <span>{{ coreVersions.get(row.name)?.version ?? '尚未核對' }}</span>
+              <span>{{ coreVersions.get(row.name)?.version ?? t('instances.coreUnchecked') }}</span>
               <small v-if="coreVersions.get(row.name)?.build" class="core-build" translate="no">
                 Build {{ coreVersions.get(row.name)?.build }}
                 <template v-if="coreVersions.get(row.name)?.update">
@@ -225,43 +226,43 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
                 </template>
               </small>
             </div>
-          </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : '尚無操作' }}</td>
-        </tr></tbody></table><InitialQueryProgress v-if="initialLoading" label="正在讀取實例清單" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? '尚未取得實例清單，請按重新核對。' : rows.length ? '沒有符合條件的實例。' : '還沒有實例。' }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">建立實例</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
+          </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : t('instances.noActions') }}</td>
+        </tr></tbody></table><InitialQueryProgress v-if="initialLoading" :label="t('instances.loadingList')" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? t('instances.emptyNotLoaded') : rows.length ? t('instances.emptyNoMatch') : t('instances.emptyNone') }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">{{ t('instances.createInstance') }}</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
     </section>
-    <aside class="detail-panel" aria-label="實例詳細資料"><OverlayScroll class="detail-scroll" label="實例詳細資料內容"><div class="detail-content">
-      <template v-if="chosen.length > 1"><h2>已選取 {{ chosen.length }} 台實例</h2>
+    <aside class="detail-panel" :aria-label="t('instances.detailLabel')"><OverlayScroll class="detail-scroll" :label="t('instances.detailContentLabel')"><div class="detail-content">
+      <template v-if="chosen.length > 1"><h2>{{ t('instances.selectedHeading', { count: chosen.length }) }}</h2>
         <div class="detail-actions">
-          <button :class="{primary:canSubmitBatch('start',chosen)}" :disabled="!canSubmitBatch('start',chosen)" @click="emit('batch-action','start',batchRows('start',chosen))">啟動所選</button>
+          <button :class="{primary:canSubmitBatch('start',chosen)}" :disabled="!canSubmitBatch('start',chosen)" @click="emit('batch-action','start',batchRows('start',chosen))">{{ t('instances.startSelected') }}</button>
           <span class="action-tooltip" :title="consoleHint">
-            <button :class="{primary:connected && consoleTargets.length && !canSubmitBatch('start',chosen)}" :disabled="!connected || consoleBusy || !consoleTargets.length" aria-describedby="selected-console-hint" @click="emit('console',consoleTargets)">開啟所選後台</button>
+            <button :class="{primary:connected && consoleTargets.length && !canSubmitBatch('start',chosen)}" :disabled="!connected || consoleBusy || !consoleTargets.length" aria-describedby="selected-console-hint" @click="emit('console',consoleTargets)">{{ t('instances.consoleSelected') }}</button>
             <span id="selected-console-hint" class="sr-only">{{ consoleHint }}</span>
           </span>
-          <button :disabled="!canSubmitBatch('stop',chosen)" @click="emit('batch-action','stop',batchRows('stop',chosen))">正常停止所選</button>
-          <button :disabled="!canSubmitBatch('restart',chosen)" @click="emit('batch-action','restart',batchRows('restart',chosen))">重新啟動所選</button>
+          <button :disabled="!canSubmitBatch('stop',chosen)" @click="emit('batch-action','stop',batchRows('stop',chosen))">{{ t('instances.stopSelected') }}</button>
+          <button :disabled="!canSubmitBatch('restart',chosen)" @click="emit('batch-action','restart',batchRows('restart',chosen))">{{ t('instances.restartSelected') }}</button>
         </div>
         <button type="button" :disabled="!connected" @click="emit('batch-core',chosen.map(row=>row.name))">{{ t('core.batch.selected') }}</button>
-        <details><summary>查看所選目標</summary><p v-for="row in chosen" :key="row.name" class="small">{{ row.name }} · {{ displayState(row) }}</p></details>
+        <details><summary>{{ t('instances.viewTargets') }}</summary><p v-for="row in chosen" :key="row.name" class="small">{{ row.name }} · {{ displayState(row) }}</p></details>
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
-        <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><button type="button" :disabled="!connected" @click="emit('core',single.name)">核心維護</button>
-        <dl><dt>觀察狀態</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">管理範圍</dt><dd v-if="single.outsideManagement">已排除，仍可正常停止</dd><dt>監聽程序</dt><dd>{{ single.ownerPid ? `${single.ownerName ?? '名稱未確認'} · PID ${single.ownerPid}` : '未確認' }}</dd></dl>
+        <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
+        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd></dl>
         <div class="detail-actions">
-          <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">強制停止</button>
-          <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?'啟動中':isQueued(single)?'排隊中':'啟動' }}</button>
-          <button v-else :disabled="!connected || busyNames.has(single.name) || !canStop(single)" @click="emit('action','stop',[single])">正常停止</button>
-          <button :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">開啟後台</button>
-          <button :disabled="!connected || busyNames.has(single.name) || isQueued(single) || startingNames?.has(single.name) || !canRestart(single)" @click="emit('action','restart',[single])">重新啟動</button>
-          <button @click="emit('settings',single.name)">實例設定</button>
+          <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>
+          <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?t('instance.state.starting'):isQueued(single)?t('activity.state.Queued'):t('activity.action.start') }}</button>
+          <button v-else :disabled="!connected || busyNames.has(single.name) || !canStop(single)" @click="emit('action','stop',[single])">{{ t('instances.stop') }}</button>
+          <button :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">{{ t('instances.openConsole') }}</button>
+          <button :disabled="!connected || busyNames.has(single.name) || isQueued(single) || startingNames?.has(single.name) || !canRestart(single)" @click="emit('action','restart',[single])">{{ t('instances.restart') }}</button>
+          <button @click="emit('settings',single.name)">{{ t('instances.settings') }}</button>
         </div>
 
-        <div class="recent-operation detail-section"><p v-if="recent" class="hint">最近操作：{{ actionName(recent.action) }} · {{ jobStateName(recent.state) }}</p></div>
-        <details class="detail-section diagnostics"><summary>工作階段與診斷資料</summary><p class="mono">實際程序狀態：{{ stateName(single.state) }}<br>Run：{{ single.run?.id ?? '無' }}<br>Java：{{ pathLabel(currentMeta?.java ?? '尚未提供') }}<br>位置：{{ pathLabel(currentMeta?.path ?? '尚未提供') }}</p><button @click="emit('logs',single.name)">查看啟動紀錄</button>
+        <div class="recent-operation detail-section"><p v-if="recent" class="hint">{{ t('instances.recentLine', { action: actionName(recent.action), state: jobStateName(recent.state) }) }}</p></div>
+        <details class="detail-section diagnostics"><summary>{{ t('instances.diagnosticsSummary') }}</summary><p class="mono">{{ t('instances.processState', { state: stateName(single.state) }) }}<br>{{ t('instances.run', { id: single.run?.id ?? t('instances.none') }) }}<br>{{ t('instances.java', { path: pathLabel(currentMeta?.java ?? t('instances.notProvided')) }) }}<br>{{ t('instances.location', { path: pathLabel(currentMeta?.path ?? t('instances.notProvided')) }) }}</p><button @click="emit('logs',single.name)">{{ t('instances.viewStartupLog') }}</button>
           <InstanceDiagnosticsPanel :key="single.name" :instance="single.name" :rows="rows" :proxies="diagnosticProxies" :connected="connected" :time-format="preferences.timeFormat" />
         </details>
       </template>
-      <template v-else><h2>選取實例</h2><p class="hint">選一台查看資訊與操作，或按 Ctrl／Shift 選取多台。</p></template>
+      <template v-else><h2>{{ t('instances.selectInstance') }}</h2><p class="hint">{{ t('instances.selectHint') }}</p></template>
     </div></OverlayScroll></aside>
   </div>
   <ContextMenu v-if="menu" :key="menu.name+':'+menu.x+':'+menu.y" :x="menu.x" :y="menu.y" :label="menu.name" :items="menuItems" @action="menuAction" @close="closeMenu" />
-  <span class="sr-only" role="status">{{ pinDrag.dragging.value?'正在調整 '+pinDrag.dragging.value+' 的釘選順序':'' }}</span>
+  <span class="sr-only" role="status">{{ pinDrag.dragging.value?t('instances.reordering',{name:pinDrag.dragging.value}):'' }}</span>
 </template>
