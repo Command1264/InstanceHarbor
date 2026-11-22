@@ -54,9 +54,9 @@ function insertPlaceholder() {
       <input id="app-console-title" ref="titleField" v-model="titleTemplate" name="console-title"
         type="text" maxlength="256" autocomplete="off" :spellcheck="false" translate="no"
         :aria-invalid="touchedTitle && !!titleError"
-        :aria-describedby="touchedTitle && titleError ? 'app-console-title-help app-console-title-error' : preview ? 'app-console-title-help app-console-title-preview' : 'app-console-title-help'"
+        :aria-describedby="[inheritedTitle ? 'app-console-title-help' : '', touchedTitle && titleError ? 'app-console-title-error' : preview ? 'app-console-title-preview' : ''].filter(Boolean).join(' ') || undefined"
         @blur="touchedTitle=true">
-      <small id="app-console-title-help" class="hint">{{ t(inheritedTitle ? 'appearance.inheritedTitleHelp' : 'appearance.consoleTitleHelp') }}</small>
+      <small v-if="inheritedTitle" id="app-console-title-help" class="hint">{{ t('appearance.inheritedTitleHelp') }}</small>
       <small v-if="touchedTitle && titleError" id="app-console-title-error" class="form-error" role="status">
         {{ t(titleError === 'invalid' ? 'appearance.titleLength' : 'appearance.titlePlaceholder') }}
       </small>

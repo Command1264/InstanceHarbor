@@ -145,3 +145,5 @@ dialog .dialog-scroll{min-height:0;flex:1}
 dialog .dialog-scroll .overlay-viewport{padding:0 14px 4px 0}
 /* Remaining native scroll areas reserve the gutter so content width stays fixed. */
 dialog,pre,.button-list,#view{scrollbar-gutter:stable;scrollbar-width:thin}
+/* An empty list shows only its message, centered in the panel. */
+.list-panel .list-empty{flex:1;display:flex;align-items:center;justify-content:center;margin:0;max-width:none}

@@ -1043,10 +1043,9 @@ void load()
             </div>
           </div>
         </div>
-        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select><small class="hint">儲存後套用顯示偏好。管理設定統一儲存正斜線，不改動實際檔案位置。</small></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" /></template>
+        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" /></template>
       <template v-else-if="tab==='java'">
         <h2>{{ t('settings.java') }}</h2>
-        <p class="hint">Java、Port 與 JVM 設定會在此實例下次啟動時使用。</p>
         <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>
         <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
         <p v-if="!settings.revision" class="notice">尚未取得可儲存的實例設定，請核對管理服務後再修改。</p>
@@ -1147,7 +1146,6 @@ void load()
       </template>
       <template v-else-if="tab==='initialization'">
         <h2>初始化預設</h2>
-        <p class="hint">選擇核心與 Minecraft 版本後，可修改之後建立的實例所使用的預設。</p>
         <template v-if="init">
           <div class="field">
             <label for="initialization-profile">核心與 Minecraft 版本</label>
@@ -1199,16 +1197,15 @@ void load()
       </template>
       <template v-else-if="tab==='restart'">
         <h2>停止與重啟</h2>
-        <p class="hint">停止逾時會保留結果供核對。重啟緩衝從確認原工作階段退出及 Port 釋放後開始。</p>
         <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>
         <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
-        <div class="field"><label for="stop-seconds">正常停止期限（秒）</label><input id="stop-seconds" name="stop-seconds" v-model.number="timing.stopSeconds" type="number" min="5" max="300" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"><small class="hint">留空使用 45 秒。</small></div>
-        <div class="field"><label for="ready-seconds">批次啟動就緒期限（秒）</label><input id="ready-seconds" name="ready-seconds" v-model.number="timing.readySeconds" type="number" min="10" max="600" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"><small class="hint">留空使用 150 秒。</small></div>
-        <div class="field"><label for="restart-delay">重啟緩衝（毫秒）</label><input id="restart-delay" name="restart-delay" v-model.number="timing.restartDelayMs" type="number" min="0" max="5000" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"><small class="hint">留空使用 0 毫秒。</small></div>
+        <div class="field"><label for="stop-seconds">正常停止期限（秒）</label><input id="stop-seconds" name="stop-seconds" v-model.number="timing.stopSeconds" type="number" min="5" max="300" placeholder="45" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <div class="field"><label for="ready-seconds">批次啟動就緒期限（秒）</label><input id="ready-seconds" name="ready-seconds" v-model.number="timing.readySeconds" type="number" min="10" max="600" placeholder="150" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <div class="field"><label for="restart-delay">重啟緩衝（毫秒）</label><input id="restart-delay" name="restart-delay" v-model.number="timing.restartDelayMs" type="number" min="0" max="5000" placeholder="0" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
       </template>
       <template v-else-if="tab==='autorestart'">
         <h2>自動重啟</h2>
-        <p class="hint">管理服務持續運作時，依可核對的退出結果與 Port 狀態重啟。正常停止或強制停止永遠優先。</p>
+        <p class="hint">正常停止與強制停止不會觸發自動重啟。</p>
         <div v-if="restartStatus" class="hint" role="status">
           <p>{{ t(`settings.restartState.${restartStatus.phase}`) }}</p>
           <p v-if="restartAttemptCount!==undefined">{{ t('settings.restartAttemptCount',{ count:restartAttemptCount }) }}</p>
@@ -1266,7 +1263,7 @@ void load()
       </template>
       <template v-else-if="tab==='scan'">
         <h2>{{ t('management.paths') }}</h2>
-        <p id="scan-help" class="hint">納入資料夾指定要管理的資料夾。排除資料夾只接受納入資料夾下的子資料夾，並優先排除。可使用完整路徑，或以工作區為起點的相對路徑，例如 ./instances。</p>
+        <p id="scan-help" class="hint">排除資料夾須位於納入資料夾之下。可用完整路徑或 ./instances 等相對路徑。</p>
         <template v-if="scan">
           <p v-if="scan.policy.allow.length || scan.policy.exclude.length" class="hint">既有名稱規則仍有效。允許 {{ scan.policy.allow.join('、') || '無' }}，排除 {{ scan.policy.exclude.join('、') || '無' }}。</p>
           <ManagementPathRows v-for="kind in scanKinds" :key="kind" :kind="kind" :rows="scanDraft[kind]"
@@ -1368,7 +1365,6 @@ void load()
   </dialog>
   <dialog ref="pickerDialog" aria-labelledby="java-picker-title" @close="handleJavaPickerClose">
     <h2 id="java-picker-title">{{ t(javaDialogMode==='choose' ? 'management.javaPickerTitle' : 'management.javaResultsTitle') }}</h2>
-    <p v-if="javaDialogMode==='choose'" class="hint">{{ t('management.javaPickerDraftHelp') }}</p>
     <p v-if="javaPickerDraft" class="hint">{{ t('management.javaPickerPreview') }}</p>
     <button class="java-rescan" type="button" :aria-disabled="javaBusy" @click="refreshJavaPicker">
       <span class="java-rescan-label">{{ t(javaBusy ? 'management.discoveringJava' : 'management.rediscoverJava') }}<span v-if="javaBusy" class="java-rescan-spinner" aria-hidden="true"></span></span>
