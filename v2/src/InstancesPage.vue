@@ -226,7 +226,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
               </small>
             </div>
           </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : '尚無操作' }}</td>
-        </tr></tbody></table><InitialQueryProgress v-if="initialLoading" label="正在讀取實例清單" /></OverlayScroll><p v-else class="empty list-empty">{{ !loaded ? '尚未取得實例清單，請按重新核對。' : rows.length ? '沒有符合條件的實例。' : '沒有可顯示的實例。' }}</p>
+        </tr></tbody></table><InitialQueryProgress v-if="initialLoading" label="正在讀取實例清單" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? '尚未取得實例清單，請按重新核對。' : rows.length ? '沒有符合條件的實例。' : '還沒有實例。' }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">建立實例</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
     </section>
     <aside class="detail-panel" aria-label="實例詳細資料"><OverlayScroll class="detail-scroll" label="實例詳細資料內容"><div class="detail-content">
       <template v-if="chosen.length > 1"><h2>已選取 {{ chosen.length }} 台實例</h2>
