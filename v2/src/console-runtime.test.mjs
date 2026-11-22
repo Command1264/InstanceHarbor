@@ -44,3 +44,32 @@ test('the retired workspace switch file is gone', () => {
     assert.doesNotMatch(read(path), /native-console\.enabled"\)\.(is_file|exists)\(\)|console_marker/, path)
   }
 })
+
+test('stable executables need no Visual C++ Redistributable', () => {
+  assert.match(read('../.cargo/config.toml'), /\[target\.x86_64-pc-windows-msvc\]\s*rustflags = \["-C", "target-feature=\+crt-static"\]/)
+  const pack = read('../pack-windows.ps1')
+  assert.ok(pack.includes(String.raw`Where-Object { $_ -match '^(vcruntime|msvcp)\d' }`))
+  assert.doesNotMatch(read('../windows-setup.nsi'), /VC_RUNTIME|vc_redist/i)
+})
+
+test('Setup checks WebView2 on every run and compares the installed version', () => {
+  const setup = read('../windows-setup.nsi')
+  const init = setup.slice(setup.indexOf('Function .onInit'), setup.indexOf('FunctionEnd', setup.indexOf('Function .onInit')))
+  // Before any installed-version branch, so an update or repair also checks it.
+  assert.ok(init.indexOf('Call RequireWebView2') < init.indexOf('ReadRegStr $0 HKCU "${UNINSTALL_KEY}"'))
+  assert.match(init, /Call CompareVersions/)
+  assert.match(init, /\$\(DowngradeAsk\)" \/SD IDNO/)
+  for (const name of ['WebView2Missing', 'UpdateAsk', 'RepairAsk', 'DowngradeAsk', 'InUse']) {
+    for (const language of ['LANG_TRADCHINESE', 'LANG_ENGLISH']) {
+      assert.ok(setup.includes(`LangString ${name} ${'$'}{${language}}`), `${name} ${language}`)
+    }
+  }
+  assert.ok(setup.includes('linkid=2124701'))
+  assert.ok(read('../src-tauri/src/webview_runtime.rs').includes('linkid=2124701'))
+})
+
+test('the GUI checks WebView2 before it takes the single-instance lock', () => {
+  const main = read('../src-tauri/src/main.rs')
+  const check = main.indexOf('webview_runtime::ensure_available()')
+  assert.ok(check > 0 && check < main.indexOf('gui_singleton::acquire()'))
+})

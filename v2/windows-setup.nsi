@@ -1,16 +1,16 @@
 ﻿Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
-!include "WordFunc.nsh"
+!include "windows-setup-version.nsh"
 
 !define APP "InstanceHarbor"
 !define ROOT "$LOCALAPPDATA\Programs\InstanceHarbor"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\InstanceHarbor-Desktop"
 !define SHORTCUT "$SMPROGRAMS\InstanceHarbor.lnk"
 !define LEASE "instanceharbor.install"
-!define VC_RUNTIME_KEY "SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
-!define VC_RUNTIME_MIN "14.44.35211.0"
-!define VC_RUNTIME_URL "https://aka.ms/vc14/vc_redist.x64.exe"
+!define WEBVIEW2_CLIENT "Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+; Microsoft's permanent link to the WebView2 Evergreen Standalone Installer for x64.
+!define WEBVIEW2_URL "https://go.microsoft.com/fwlink/?linkid=2124701"
 
 Name "${APP} ${VERSION}"
 OutFile "${OUTPUT}"
@@ -34,35 +34,41 @@ VIAddVersionKey "LegalCopyright" "InstanceHarbor contributors"
 !insertmacro MUI_LANGUAGE "TradChinese"
 !insertmacro MUI_LANGUAGE "English"
 
-LangString RuntimeMissing ${LANG_ENGLISH} "Microsoft Visual C++ x64 Runtime is missing."
-LangString RuntimeOld ${LANG_ENGLISH} "Microsoft Visual C++ x64 Runtime is too old ($0)."
-LangString RuntimeDownload ${LANG_ENGLISH} "Install Microsoft's official x64 Runtime (${VC_RUNTIME_MIN} or newer), then run InstanceHarbor Setup again.$\r$\n$\r$\nOpen the Microsoft download?"
-LangString RuntimeMissing ${LANG_TRADCHINESE} "缺少 Microsoft Visual C++ x64 Runtime。"
-LangString RuntimeOld ${LANG_TRADCHINESE} "Microsoft Visual C++ x64 Runtime 版本過舊（$0）。"
-LangString RuntimeDownload ${LANG_TRADCHINESE} "請安裝 Microsoft 官方 x64 Runtime（${VC_RUNTIME_MIN} 或更新版本），再重新執行 InstanceHarbor Setup。$\r$\n$\r$\n要開啟 Microsoft 下載連結嗎？"
+; The version recorded by the installation that this Setup replaces, or empty.
+Var Installed
 
-Function RequireVCRuntime
-  ; The x86 NSIS stub uses the 64-bit registry view selected by .onInit.
-  ReadRegDWORD $0 HKLM "${VC_RUNTIME_KEY}" "Installed"
-  StrCmp $0 "1" 0 missing
-  ClearErrors
-  ReadRegDWORD $0 HKLM "${VC_RUNTIME_KEY}" "Major"
-  ReadRegDWORD $1 HKLM "${VC_RUNTIME_KEY}" "Minor"
-  ReadRegDWORD $2 HKLM "${VC_RUNTIME_KEY}" "Bld"
-  ReadRegDWORD $3 HKLM "${VC_RUNTIME_KEY}" "Rbld"
-  IfErrors missing
-  StrCpy $0 "$0.$1.$2.$3"
-  ${VersionCompare} "$0" "${VC_RUNTIME_MIN}" $1
-  StrCmp $1 "2" outdated
+; The binaries link the Visual C++ runtime statically; only WebView2 comes from the system.
+LangString NeedX64 ${LANG_ENGLISH} "A Windows x64 system is required."
+LangString WebView2Missing ${LANG_ENGLISH} "Microsoft Edge WebView2 Runtime was not found. InstanceHarbor needs it to show its window.$\r$\n$\r$\nInstall Microsoft's Evergreen Standalone Installer for x64, then run InstanceHarbor Setup again.$\r$\n$\r$\nDownload that installer from Microsoft now (about 280 MB)?"
+LangString Unverified ${LANG_ENGLISH} "InstanceHarbor files or a shortcut already exist, but the installed version cannot be verified. Close InstanceHarbor and uninstall it before installing. Your workspace is stored separately."
+LangString UpdateAsk ${LANG_ENGLISH} "InstanceHarbor $Installed is installed.$\r$\nUpdate it to ${VERSION}?$\r$\n$\r$\nYour workspace is kept."
+LangString RepairAsk ${LANG_ENGLISH} "InstanceHarbor ${VERSION} is already installed.$\r$\nReinstall its program files (repair)?$\r$\n$\r$\nYour workspace is kept."
+LangString DowngradeAsk ${LANG_ENGLISH} "A newer InstanceHarbor $Installed is installed.$\r$\nReplace it with the older ${VERSION}?$\r$\n$\r$\nYour workspace is kept, but the older version may not read settings or data that the newer version wrote."
+LangString InUse ${LANG_ENGLISH} "InstanceHarbor is still running. Close InstanceHarbor, including its Manager and Hosts, then run Setup again."
+LangString ReplaceFailed ${LANG_ENGLISH} "Some program files could not be replaced. Close InstanceHarbor and run Setup again to repair it. Your workspace is kept."
+LangString NeedX64 ${LANG_TRADCHINESE} "需要 Windows x64 系統。"
+LangString WebView2Missing ${LANG_TRADCHINESE} "找不到 Microsoft Edge WebView2 Runtime，InstanceHarbor 需要它才能顯示視窗。$\r$\n$\r$\n請安裝 Microsoft 官方的「Evergreen 獨立安裝程式」x64 版（Evergreen Standalone Installer），再重新執行 InstanceHarbor Setup。$\r$\n$\r$\n要現在從 Microsoft 下載這個安裝程式嗎？（約 280 MB）"
+LangString Unverified ${LANG_TRADCHINESE} "已有 InstanceHarbor 的檔案或捷徑，但無法確認已安裝的版本。請先關閉並解除安裝 InstanceHarbor，再進行安裝。工作區另外存放，不受影響。"
+LangString UpdateAsk ${LANG_TRADCHINESE} "已安裝 InstanceHarbor $Installed。$\r$\n要更新為 ${VERSION} 嗎？$\r$\n$\r$\n工作區資料會保留。"
+LangString RepairAsk ${LANG_TRADCHINESE} "已安裝相同版本的 InstanceHarbor ${VERSION}。$\r$\n要重新安裝程式檔案（修復）嗎？$\r$\n$\r$\n工作區資料會保留。"
+LangString DowngradeAsk ${LANG_TRADCHINESE} "已安裝較新的 InstanceHarbor $Installed。$\r$\n確定要退回舊版 ${VERSION} 嗎？$\r$\n$\r$\n工作區資料會保留，但舊版可能無法讀取新版寫入的設定或資料。"
+LangString InUse ${LANG_TRADCHINESE} "InstanceHarbor 仍在執行。請關閉 InstanceHarbor（包含 Manager 與 Host）後，再重新執行 Setup。"
+LangString ReplaceFailed ${LANG_TRADCHINESE} "部分程式檔案無法替換。請關閉 InstanceHarbor 後重新執行 Setup 進行修復。工作區資料會保留。"
+
+Function RequireWebView2
+  ; Microsoft's documented detection: a non-empty pv other than 0.0.0.0, per machine or per user.
+  ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\${WEBVIEW2_CLIENT}" "pv"
+  StrCmp $0 "" user
+  StrCmp $0 "0.0.0.0" user
   Return
-outdated:
-  StrCpy $1 "$(RuntimeOld)"
-  Goto prompt
+user:
+  ReadRegStr $0 HKCU "Software\${WEBVIEW2_CLIENT}" "pv"
+  StrCmp $0 "" missing
+  StrCmp $0 "0.0.0.0" missing
+  Return
 missing:
-  StrCpy $1 "$(RuntimeMissing)"
-prompt:
-  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "$1$\r$\n$\r$\n$(RuntimeDownload)" /SD IDNO IDNO abort
-  ExecShell "open" "${VC_RUNTIME_URL}"
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION "$(WebView2Missing)" /SD IDNO IDNO abort
+  ExecShell "open" "${WEBVIEW2_URL}"
 abort:
   SetErrorLevel 3
   Abort
@@ -70,26 +76,58 @@ FunctionEnd
 
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "A Windows x64 system is required." /SD IDOK
+    MessageBox MB_ICONSTOP "$(NeedX64)" /SD IDOK
     SetErrorLevel 2
     Abort
   ${EndIf}
   SetShellVarContext current
   SetRegView 64
   StrCpy $INSTDIR "${ROOT}"
+  StrCpy $Installed ""
+  ; Checked on every run, updates included, in case WebView2 was removed later.
+  Call RequireWebView2
   ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "InstallLocation"
-  StrCmp $0 "" 0 occupied
-  IfFileExists "$INSTDIR" occupied 0
-  IfFileExists "${SHORTCUT}" occupied 0
-  Call RequireVCRuntime
+  StrCmp $0 "" fresh
+  ; Replace only an installation this Setup can identify: its folder, version and marker.
+  StrCmp $0 "${ROOT}" 0 unverified
+  ReadRegStr $Installed HKCU "${UNINSTALL_KEY}" "DisplayVersion"
+  StrCmp $Installed "" unverified
+  IfFileExists "$INSTDIR\${LEASE}" 0 unverified
+  StrCpy $R5 $Installed
+  StrCpy $R6 "${VERSION}"
+  Call CompareVersions
+  StrCmp $R0 "1" update
+  StrCmp $R0 "2" downgrade
+  MessageBox MB_YESNO|MB_ICONQUESTION "$(RepairAsk)" /SD IDYES IDYES proceed
+  Goto cancel
+update:
+  MessageBox MB_YESNO|MB_ICONQUESTION "$(UpdateAsk)" /SD IDYES IDYES proceed
+  Goto cancel
+downgrade:
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "$(DowngradeAsk)" /SD IDNO IDYES proceed
+cancel:
+  SetErrorLevel 4
+  Abort
+proceed:
   Return
-occupied:
-  MessageBox MB_ICONSTOP "InstanceHarbor installation files or a shortcut already exist. Close InstanceHarbor and uninstall the previous version before reinstalling. Your workspace is stored separately." /SD IDOK
+fresh:
+  IfFileExists "$INSTDIR" unverified 0
+  IfFileExists "${SHORTCUT}" unverified 0
+  Return
+unverified:
+  StrCpy $Installed ""
+  MessageBox MB_ICONSTOP "$(Unverified)" /SD IDOK
   SetErrorLevel 2
   Abort
 FunctionEnd
 
 Section
+  StrCmp $Installed "" copy
+  ; Every installed process keeps a shared read handle to the marker until it exits.
+  ; Hold it without sharing while the program files are replaced.
+  System::Call 'kernel32::CreateFileW(w "$INSTDIR\${LEASE}", i 0x80000000, i 0, p 0, i 3, i 0x00200080, p 0) p.r9'
+  IntCmp $9 -1 busy
+copy:
   ClearErrors
   SetOutPath "$INSTDIR"
   File "${PAYLOAD}\InstanceHarbor.exe"
@@ -100,6 +138,8 @@ Section
   File "${PAYLOAD}\LICENSE"
   File "${PAYLOAD}\THIRD-PARTY-NOTICES.txt"
   File "${PAYLOAD}\MPL-SOURCES.zip"
+  StrCmp $Installed "" +2
+  System::Call 'kernel32::CloseHandle(p r9)'
   IfErrors failed
   ClearErrors
   FileOpen $0 "$INSTDIR\${LEASE}" w
@@ -123,7 +163,17 @@ Section
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
   IfErrors failed
   Goto done
+busy:
+  MessageBox MB_ICONSTOP "$(InUse)" /SD IDOK
+  SetErrorLevel 2
+  Abort
 failed:
+  ; Never delete an existing installation; running Setup again repairs it.
+  StrCmp $Installed "" remove
+  MessageBox MB_ICONSTOP "$(ReplaceFailed)" /SD IDOK
+  SetErrorLevel 1
+  Abort
+remove:
   Delete "${SHORTCUT}"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"
   Delete "$INSTDIR\Uninstall.exe"

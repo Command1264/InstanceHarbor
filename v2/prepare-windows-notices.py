@@ -13,7 +13,7 @@ from zipfile import ZipFile, ZIP_DEFLATED
 ROOT = Path(__file__).resolve().parent.parent
 TARGET = "x86_64-pc-windows-msvc"
 TERMINAL_RELEASE = "https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0"
-VC_DOWNLOAD = "https://aka.ms/vc14/vc_redist.x64.exe"
+WEBVIEW2_DOWNLOAD = "https://developer.microsoft.com/microsoft-edge/webview2/#download-section"
 MOZILLA = "https://www.mozilla.org/en-US/MPL/2.0/"
 NOTICE_NAME = re.compile(r"^(licen[cs]e|copying|notice|unlicense|copyright|authors)", re.I)
 FALLBACKS = {
@@ -153,10 +153,10 @@ for the Windows distribution. The Cargo dependency inventory also includes build
 components conservatively.
 
 Windows prerequisites obtained separately
-  The Microsoft Visual C++ v14 x64 Runtime is installed by users from Microsoft.
-  Setup requires version 14.44.35211.0 or newer. Use the latest supported version.
-  {VC_DOWNLOAD}
-  Microsoft Edge WebView2 is supplied separately by Windows or Microsoft.
+  InstanceHarbor.exe and ihctl.exe link the Microsoft C runtime statically;
+  no Visual C++ Redistributable is needed.
+  Microsoft Edge WebView2 Runtime is supplied separately by Windows or Microsoft:
+  {WEBVIEW2_DOWNLOAD}
 
 {source_index}
 The source archives are located in MPL-SOURCES.zip beside this file, also available offline.

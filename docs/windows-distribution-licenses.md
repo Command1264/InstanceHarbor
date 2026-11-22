@@ -9,8 +9,8 @@ Open `MPL-SOURCES.zip` without a network connection. `SOURCE-INDEX.txt` lists ea
 ## Microsoft runtime
 
 - `conpty.dll` and `OpenConsole.exe` are the original x64 files from Microsoft's signed ConPTY NuGet release `1.25.260930003`. Include the Windows Terminal MIT license and upstream notice. [Windows Terminal v1.25.2733.0](https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0)
-- The ZIP and Setup use the system Microsoft Visual C++ v14 x64 Runtime. Setup checks for version 14.44.35211.0 or newer. Users can install the latest supported version from Microsoft. [Microsoft x64 Runtime](https://aka.ms/vc14/vc_redist.x64.exe)
-- WebView2 is obtained separately from Windows or Microsoft. The release packages contain no WebView2 runtime, Java runtime, Paper or Minecraft server JAR.
+- From 1.0.0, `InstanceHarbor.exe` and `ihctl.exe` link the Microsoft C runtime (the Visual C++ runtime and the Universal C Runtime) statically (`v2/.cargo/config.toml`), so users need no Visual C++ Redistributable. `pack-windows.ps1` refuses a stable version whose executables import `VCRUNTIME` or `MSVCP` DLLs. 1.0.0-rc2 used the system Visual C++ v14 x64 Runtime.
+- WebView2 is obtained separately from Windows or Microsoft. Setup checks for it on every run and InstanceHarbor checks for it on every start; both name Microsoft's Evergreen Standalone Installer for x64 and offer its download. The release packages contain no WebView2 runtime, Java runtime, Paper or Minecraft server JAR.
 
 ## Console runtime source
 
@@ -29,7 +29,7 @@ Open `MPL-SOURCES.zip` without a network connection. `SOURCE-INDEX.txt` lists ea
 
 ## Build a distribution
 
-A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must contain the console runtime, the license notices and the startup guide, and must not contain an app-local Visual C++ runtime. `pack-windows.ps1` and `pack-windows-setup.ps1` refuse a stable version without the console runtime. Run these steps from the repository root in PowerShell 7. The publisher downloads the two upstream files; no script downloads them.
+A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must contain the console runtime, the license notices and the startup guide, and must not contain app-local Visual C++ DLLs. `pack-windows.ps1` and `pack-windows-setup.ps1` refuse a stable version without the console runtime. Run these steps from the repository root in PowerShell 7. The publisher downloads the two upstream files; no script downloads them.
 
 1. Download the ConPTY package and check its SHA-256. Optionally verify its NuGet signature with the .NET SDK.
 
@@ -65,6 +65,12 @@ A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must conta
    v2/pack-windows-setup.ps1 -Package $zip -ExpectedPackageSha256 $packed.sha256 -Compiler $makensis -Output $setup
    ```
 
-6. Before distribution, check that the ZIP manifest lists `conpty.dll` and `OpenConsole.exe` with the pinned hashes, then install the Setup on a test machine, start a Paper instance and confirm that the instance details show **Console: InstanceHarbor console** (tier 1).
+6. Check the Setup's version order with the same compiler. The test installer writes to a temporary folder and installs nothing.
+
+   ```powershell
+   v2/tests/verify-windows-setup-version.ps1 -Compiler $makensis
+   ```
+
+7. Before distribution, check that the ZIP manifest lists `conpty.dll` and `OpenConsole.exe` with the pinned hashes, then install the Setup on a test machine, start a Paper instance and confirm that the instance details show **Console: InstanceHarbor console** (tier 1). Run the Setup again to see the repair prompt, and run an older Setup to see the downgrade prompt.
 
 The version passed to `-Version` is the package version. Release the matching product version (Cargo, Tauri and npm metadata) separately.
