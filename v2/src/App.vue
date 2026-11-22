@@ -607,23 +607,48 @@ async function showModalError(message:string){
     modalErrorElement.value?.focus()
   }
 }
-async function loadLogs(name:string, run?:string){
-  const epoch=++logsEpoch
+async function loadLogs(name:string, run?:string, background=false){
+  const epoch=background?logsEpoch:++logsEpoch
   const current=()=>epoch===logsEpoch && modal.value==='logs' && target.value?.name===name
-  logsReading.value=true
+  if(!background)logsReading.value=true
   try{
-    const result=await manage<Logs>(['logs',name])
+    const result=await manage<Logs>(['logs',name],background?'background':'manual')
     if(!current())return
-    logs.value=result
     if(result.run && result.run===run)lastLogs={name,run,result}
+    // A quiet refresh changes nothing on screen unless the log itself changed.
+    if(background && JSON.stringify(result)===JSON.stringify(logs.value))return
+    const view=logsScroll.value?.viewport
+    const following=!view || view.scrollHeight-view.scrollTop-view.clientHeight<8
+    logs.value=result
+    if(background && following){
+      await nextTick()
+      if(view)view.scrollTop=view.scrollHeight
+    }
   }catch(e){
-    if(current())logsError.value=rawError(e).includes('LogRunChanged')
+    // A quiet refresh keeps the last log; only a changed session needs the user.
+    if(current() && (!background || rawError(e).includes('LogRunChanged')))logsError.value=rawError(e).includes('LogRunChanged')
       ? t('app.logs.runChanged')
       : t('app.logs.readError',{error:errorText(e)})
   }finally{
-    if(current())logsReading.value=false
+    if(current() && !background)logsReading.value=false
   }
 }
+// While its server runs, the open log follows new output every two seconds.
+const logsScroll=ref<{viewport?:HTMLDivElement}>()
+const followedLogRun=computed(()=>{
+  if(modal.value!=='logs'||!target.value)return undefined
+  const row=rows.value.find(item=>item.name===target.value?.name)
+  return row?.run && ['Starting','Listening'].includes(row.state)?row.run.id:undefined
+})
+let logsFollowTimer:ReturnType<typeof setInterval>|undefined
+watch(followedLogRun,run=>{
+  clearInterval(logsFollowTimer)
+  logsFollowTimer=run?setInterval(()=>{
+    const name=target.value?.name
+    if(name && !logsReading.value && !logsError.value)void loadLogs(name,run,true)
+  },2000):undefined
+})
+onUnmounted(()=>clearInterval(logsFollowTimer))
 async function openConsoles(selection:Instance[]){
   if(openingConsoles.value || !connected.value)return
   const targets=selection.filter(canOpenConsole)
@@ -1003,7 +1028,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         </select>
       </label>
       <p class="hint selectable">{{ selectedLog?.path ?? logs?.path ?? t('app.logs.noPath') }}</p>
-      <p v-if="logs" class="hint">{{ t(logs.consoleReady?'app.logs.readyFound':'app.logs.readyUnverified') }}</p><p v-if="logsError" class="form-error" role="alert">{{ logsError }}</p><p v-if="logsMessage" role="status">{{ logsMessage }}</p><InitialQueryProgress v-if="logsReading && !logs && !logsError" :label="t('app.logs.reading')" /><OverlayScroll v-else-if="logs" class="logs-scroll" :label="t('app.logs.content')"><pre>{{ selectedLog ? selectedLog.text ?? logAvailability[selectedLog.state] : logs?.text ?? t('app.logs.none') }}</pre></OverlayScroll><div class="dialog-actions"><button @click="openLogFolder">{{ t('app.logs.openFolder') }}</button><button ref="cancelButton" autofocus @click="close">{{ t('action.close') }}</button></div></template>
+      <p v-if="logs" class="hint">{{ t(logs.consoleReady?'app.logs.readyFound':'app.logs.readyUnverified') }}</p><p v-if="logsError" class="form-error" role="alert">{{ logsError }}</p><p v-if="logsMessage" role="status">{{ logsMessage }}</p><InitialQueryProgress v-if="logsReading && !logs && !logsError" :label="t('app.logs.reading')" /><OverlayScroll v-else-if="logs" ref="logsScroll" class="logs-scroll" :label="t('app.logs.content')"><pre>{{ selectedLog ? selectedLog.text ?? logAvailability[selectedLog.state] : logs?.text ?? t('app.logs.none') }}</pre></OverlayScroll><div class="dialog-actions"><button @click="openLogFolder">{{ t('app.logs.openFolder') }}</button><button ref="cancelButton" autofocus @click="close">{{ t('action.close') }}</button></div></template>
     <template v-else-if="modal==='create'">
       <h2 id="operation-dialog-title">{{ t(creationPreview ? 'app.create.confirmTitle' : 'app.create.title') }}</h2>
       <template v-if="creationPreview">

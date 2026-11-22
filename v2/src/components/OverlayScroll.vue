@@ -19,6 +19,8 @@ const currentX = ref(0)
 const thumbWidth = ref(28)
 const thumbLeft = ref(0)
 let observer: ResizeObserver | undefined
+// Lets a parent keep a live view pinned to its end across content updates.
+defineExpose({ viewport })
 let frame = 0
 let drag: { pointer: number; startPosition: number; startScroll: number; horizontal: boolean } | null = null
 

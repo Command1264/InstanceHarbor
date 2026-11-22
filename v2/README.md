@@ -405,7 +405,8 @@ Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>
 `ihctl WORKSPACE console-plan <實例>` 回傳下次啟動預計的層、跳過原因與是否需要確認。
 開發版另有 `ihctl WORKSPACE console-io <實例> <run> input <JSON 字串>`（或 `read <offset>`），經與後台視窗相同的 Named Pipe 送出輸入，用於不開 GUI 的自動驗證；正式版沒有此指令。
 
-**日誌**：「啟動日誌」對話框把 pseudoconsole 寫入的 VT 控制碼轉成純文字行；`stdout.log` 原檔不變。
+**日誌**：「查看啟動紀錄」對話框把 pseudoconsole 寫入的 VT 控制碼轉成純文字行；`stdout.log` 原檔不變。
+伺服器啟動中或監聽中時，對話框每 2 秒在背景重讀；內容沒變不重繪。捲到底部時會跟著新輸出，往上捲時保留位置。背景讀取失敗時保留最後內容。
 
 ### Windows 原生後台視窗
 
