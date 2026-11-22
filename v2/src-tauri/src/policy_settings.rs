@@ -13,7 +13,7 @@ pub(super) mod yaml_preflight;
 mod resource_pack;
 #[path = "policy_settings/world_batch_preview.rs"]
 mod world_batch_preview;
-use policy_catalog::{Binding, Field, Profile, FIELDS, PROFILES};
+use policy_catalog::{reason_text, Binding, Field, Profile, FIELDS, PROFILES};
 
 const BASE_FIELDS: &[(&str, &str, u64)] = &[
     ("viewDistance", "view-distance", 10),
@@ -849,23 +849,23 @@ impl WorldSnapshot {
 
     fn reason(&self, field: &Field) -> &str {
         let Some(profile) = self.profile else {
-            return "無法核對核心與 Minecraft 版本。";
+            return "profileUnknown";
         };
         let (status, reason) = field.gate(profile, true);
         if status != "available" {
             return reason;
         }
         if field.section == "serverProperties" && self.distance_overrides.contains(field.key) {
-            return "Spigot 可能覆寫此值，需先核對有效設定。";
+            return "spigotOverride";
         }
         let Some(row) = self.observe(field) else {
-            return "找不到唯一的目前值，需先核對設定檔。";
+            return "noUniqueValue";
         };
         if !row.editable {
-            return "此值的格式需要人工處理。";
+            return "manualFormat";
         }
         if logical_value(field, &row.value, profile).is_err() {
-            return "目前值超出此欄位可核對的格式。";
+            return "valueOutOfFormat";
         }
         ""
     }
@@ -894,7 +894,8 @@ impl WorldSnapshot {
                 if editable {
                     row["file"] = json!(self.source(field).0);
                 }
-                row["reason"] = json!(reason);
+                row["reason"] = json!(reason_text(reason));
+                row["reasonCode"] = json!(reason);
                 if !editable && row["status"] == "available" {
                     row["status"] = json!("unverified");
                 }
@@ -931,7 +932,7 @@ impl WorldSnapshot {
             };
             let reason = self.reason(field);
             if !reason.is_empty() {
-                return Err(format!("WorldFieldUnavailable: {id} ({reason})"));
+                return Err(format!("WorldFieldUnavailable: {id} ({})", reason_text(reason)));
             }
             let before = self.observe(field).ok_or("WorldFieldUnconfirmed")?;
             let target = field.normalize(value.as_str().ok_or("InvalidWorldSettings")?, profile)?;

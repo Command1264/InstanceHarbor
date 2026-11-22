@@ -1,3 +1,5 @@
+import { isMessageId, tr } from './i18n'
+
 export type PolicyProfile = { family: string; version: string }
 
 export type PolicyRow = {
@@ -14,6 +16,9 @@ export type PolicyRow = {
   status: 'available' | 'unsupported' | 'unverified'
   evidence: 'unverified' | 'unsupported'
   reason: string
+  reasonCode?: string
+  sourceKind?: 'file' | 'rule' | 'time' | ''
+  sourceKey?: string
   editable?: boolean
   file?: string
 }
@@ -77,4 +82,21 @@ export function validWorldRuleValue(row: PolicyRow, value: string) {
   const number = Number(value)
   return /^\d+$/.test(value) && Number.isSafeInteger(number)
     && number >= (row.min ?? 0) && number <= (row.max ?? 32767)
+}
+
+// The backend sends Chinese text plus language-neutral codes; prefer the codes so the label follows the app language.
+export function policyLabel(row: Pick<PolicyRow, 'key' | 'label'>): string {
+  const id = 'policy.field.' + row.key
+  return isMessageId(id) ? tr(id) : row.label
+}
+
+export function policyReason(row: Pick<PolicyRow, 'reason' | 'reasonCode'>): string {
+  const id = 'policy.reason.' + (row.reasonCode ?? '')
+  return row.reasonCode && isMessageId(id) ? tr(id) : row.reason
+}
+
+export function policySource(row: Pick<PolicyRow, 'source' | 'sourceKind' | 'sourceKey'>): string {
+  if (row.sourceKind === 'rule' && row.sourceKey) return tr('policy.source.rule', { key: row.sourceKey })
+  if (row.sourceKind === 'time') return tr('policy.source.time')
+  return row.source
 }
