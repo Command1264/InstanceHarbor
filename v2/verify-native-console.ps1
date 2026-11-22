@@ -37,6 +37,5 @@ if ($Mode -eq 'Paper') {
 foreach ($name in 'conpty.dll','OpenConsole.exe') {
     Copy-Item -LiteralPath (Join-Path $Runtime $name) -Destination (Join-Path $Evidence 'native')
 }
-New-Item -ItemType File -Path (Join-Path $Evidence 'workspace/native-console.enabled') | Out-Null
 node (Join-Path $PSScriptRoot 'verify-native-console-window.mjs') $Evidence $Mode.ToLowerInvariant()
 if ($LASTEXITCODE -ne 0) { throw 'Native console verification failed.' }

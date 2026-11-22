@@ -19,11 +19,11 @@ import {validPinOrder} from './pin-order'
 import {suppressBrowserMenu} from './context-menu'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
-import { canOpenConsole, canStop, confirmCreation, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
+import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
-type Mode='create'|'force'|'remove'|'logs'|'batch'|null
+type Mode='create'|'force'|'remove'|'logs'|'batch'|'console-window'|null
 const coreDialog = ref<InstanceType<typeof CoreMaintenanceDialog>>()
 const coreTarget = ref<string>()
 const managementFolderDialog = ref<InstanceType<typeof ManagementFolderDialog>>()
@@ -661,18 +661,40 @@ function markBusy(name:string,value:boolean){
   else next.delete(name)
   busyNames.value=next
 }
-async function operateOne(action:'start'|'stop'|'restart',row:Instance){
+// A start that would need a separate console window asks first, every time.
+const consoleWindowStart=ref<{row:Instance;reason:string}>()
+async function confirmConsoleWindow(row:Instance){
+  let plan:ConsolePlan
+  try{plan=await manage<ConsolePlan>(['console-plan',row.name])}
+  // The Host checks again at start and never opens a window without this confirmation.
+  catch(e){console.warn('Console plan unavailable',e);return false}
+  if(!plan.needsConfirmation)return false
+  consoleWindowStart.value={row,reason:consoleFallbackReason(plan)??''}
+  open('console-window',{name:row.name})
+  return true
+}
+function startFromConsoleDialog(consoleWindow:boolean){
+  const pending=consoleWindowStart.value
+  if(!pending)return
+  dialog.value?.close()
+  modal.value=null
+  consoleWindowStart.value=undefined
+  void operateOne('start',pending.row,{consoleWindow,asked:true})
+}
+async function operateOne(action:'start'|'stop'|'restart',row:Instance,options:{consoleWindow?:boolean;asked?:boolean}={}){
   if(!connected.value||lifecycleBusy.value.has(row.name)||queuedStarts.value.has(row.name)||(action!=='stop'&&residentStarting.value.has(row.name)))return
   if(action!=='stop' && row.outsideManagement)return
+  if(action==='start'&&!options.asked&&await confirmConsoleWindow(row))return
+  const consoleWindow=action==='start'&&options.consoleWindow===true
   const needsRun=action==='stop'||(action==='restart'&&row.state!=='Stopped')
   if(needsRun&&!row.run)return
   invalidateRefresh()
   const previousRun=row.run?.id??null
   const stopToken=row.stopToken??null
-  const key=JSON.stringify([action,row.name,previousRun,stopToken])
+  const key=JSON.stringify([action,row.name,previousRun,stopToken,consoleWindow])
   const id=requestId(key)
   const args=[action==='start'?'start-if-current':action,row.name,id]
-  if(action==='start')args.push(JSON.stringify({previousRun,stopToken}))
+  if(action==='start')args.push(JSON.stringify(consoleWindow?{previousRun,stopToken,consoleWindow}:{previousRun,stopToken}))
   else if(needsRun)args.push(row.run!.id)
   if(action==='stop')stopping.value[row.name]=row.run!.id
   else manualStarts.value.add(row.name)
@@ -969,10 +991,11 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
     :batches="coreBatches" :connected="connected" :blocked-names="new Set([...lifecycleBusy,...queuedStarts,...residentStarting])"
     :cancelling="cancellingCoreBatch" :cancel-failure="coreCancelFailure"
     @submitted="coreBatchSubmitted" @changed="refreshAfterCoreChange" @cancel="cancelCoreBatch" />
-  <dialog ref="dialog" class="overlay-dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'}" @cancel.prevent="close">
+  <dialog ref="dialog" class="overlay-dialog" aria-labelledby="operation-dialog-title" :class="{compact:modal==='force'||modal==='remove'||modal==='console-window'}" @cancel.prevent="close">
     <OverlayScroll class="dialog-scroll" :label="t('app.dialog.content')">
     <template v-if="modal==='batch'"><h2 id="operation-dialog-title">{{ t('app.batch.title') }}</h2><p>{{ t('app.batch.body',{count:pendingBatch?.targets.length ?? 0,action:t(pendingBatch?.action==='start'?'app.batch.start':pendingBatch?.action==='stop'?'app.batch.stop':'app.batch.restart')}) }}</p><p v-if="pendingBatch?.action==='restart'" class="hint">{{ t('app.batch.restartHint') }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">{{ t('action.cancel') }}</button><OperationButton class="primary" :label="t('app.batch.confirm')" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
-    <template v-if="modal==='force'"><h2 id="operation-dialog-title">{{ t('app.force.title') }}</h2><p>{{ t('app.force.body',{name:target?.name ?? ''}) }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="forceStop">{{ t('app.force.confirm') }}</button></div></template>
+    <template v-if="modal==='console-window'"><h2 id="operation-dialog-title">{{ t('console.confirm.title') }}</h2><p>{{ t('console.confirm.body',{name:target?.name ?? '',reason:consoleWindowStart?.reason ?? ''}) }}</p><p class="notice">{{ t('console.confirm.warning') }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus @click="close">{{ t('action.cancel') }}</button><button @click="startFromConsoleDialog(false)">{{ t('console.confirm.plain') }}</button><button class="danger" @click="startFromConsoleDialog(true)">{{ t('console.confirm.window') }}</button></div></template>
+    <template v-else-if="modal==='force'"><h2 id="operation-dialog-title">{{ t('app.force.title') }}</h2><p>{{ t('app.force.body',{name:target?.name ?? ''}) }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="forceStop">{{ t('app.force.confirm') }}</button></div></template>
     <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">{{ t('app.remove.title') }}</h2><p>{{ t('app.remove.keep',{name:target?.name ?? ''}) }}</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">{{ t('app.remove.retain') }}</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">{{ t('app.remove.delete') }}</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="removeManagement">{{ t('app.remove.confirm') }}</button></div></template>
     <template v-else-if="modal==='logs'"><h2 id="operation-dialog-title">{{ t('app.logs.title',{name:target?.name ?? ''}) }}</h2><label v-if="logs?.sources">{{ t('app.logs.source') }}
         <select v-model="logSource" name="log-source">

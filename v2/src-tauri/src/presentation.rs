@@ -370,8 +370,8 @@ fn chinese_interface(language: DisplayLanguage) -> bool {
     match language {
         DisplayLanguage::TraditionalChinese => true,
         DisplayLanguage::English => false,
-        // LANG_CHINESE, matching how the GUI resolves the system language.
-        DisplayLanguage::System => (unsafe { GetUserDefaultUILanguage() } & 0x3ff) == 0x04,
+        // Like the GUI's resolveLanguage: English only for an English system (LANG_ENGLISH).
+        DisplayLanguage::System => (unsafe { GetUserDefaultUILanguage() } & 0x3ff) != 0x09,
     }
 }
 

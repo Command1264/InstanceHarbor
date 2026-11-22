@@ -308,6 +308,7 @@ pub fn safe_action(action: &str) -> &str {
         | "batch-list"
         | "batch-connect"
         | "console-open"
+        | "console-plan"
         | "batch-start"
         | "batch-stop"
         | "batch-restart"

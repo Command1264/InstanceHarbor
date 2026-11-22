@@ -44,10 +44,17 @@ const clipboard = attachConsoleClipboard({
   },
 })
 
+let windowTitle = ''
 function updateLanguage() {
   locale = resolveLanguage(languagePreference, navigator.languages)
   document.documentElement.lang = locale
+  document.title = t('console.windowTitle')
   tabs.setAttribute('aria-label', t('console.tabs'))
+  if (windowTitle !== document.title && !active) {
+    windowTitle = document.title
+    pendingTitle = pendingTitle.then(() => !active && invoke('terminal_window_title', { title: windowTitle }))
+      .catch(error => console.warn('Could not update console window title', error))
+  }
   clipboard.updateLanguage()
   for (const session of sessions.values()) {
     labelClose(session)
@@ -377,6 +384,8 @@ async function readSession(session, exchange) {
 }
 
 async function run() {
+  // Label the hidden window now; the first tab then applies the saved language.
+  updateLanguage()
   try {
     await loadScript(new URL('../../experiments/conpty-a-prototype/ui/vendor/xterm.js', import.meta.url).href)
     await loadScript(new URL('../../experiments/conpty-a-prototype/ui/vendor/graphemes.js', import.meta.url).href)

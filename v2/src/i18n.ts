@@ -11,6 +11,7 @@ import { settingsMessages } from './messages/settings.ts'
 import { managerMessages } from './messages/manager.ts'
 import { componentsMessages } from './messages/components.ts'
 import { policyMessages } from './messages/policy.ts'
+import { consoleMessages } from './messages/console.ts'
 
 export { consoleTitleTokens }
 export const defaultConsoleTitleTemplate = '{instance}'
@@ -616,7 +617,7 @@ const baseMessages = {
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
 } as const satisfies Record<string, readonly [string, string]>
 
-const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages] as const
+const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages, consoleMessages] as const
 const messages = {
   ...baseMessages,
   ...appMessages,
@@ -625,6 +626,7 @@ const messages = {
   ...managerMessages,
   ...componentsMessages,
   ...policyMessages,
+  ...consoleMessages,
 }
 
 export function duplicateMessageIds(): string[] {
