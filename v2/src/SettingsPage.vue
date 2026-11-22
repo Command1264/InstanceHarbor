@@ -70,6 +70,7 @@ watch(()=>props.preferences.language,value=>{
 })
 const theme=ref(props.preferences.theme)
 const corePrefetch=ref(props.preferences.corePrefetch ?? false)
+const closeToTray=ref(props.preferences.closeToTray ?? true)
 const selectionColor=ref(resolveSelectionColor(props.preferences.selectionColor))
 const selectionOpacity=ref(resolveSelectionOpacity(props.preferences.selectionOpacity))
 const selectionOpacityInput=ref(String(selectionOpacity.value))
@@ -103,6 +104,7 @@ const consoleTitleTemplate=ref(props.preferences.consoleTitleTemplate ?? '{insta
 const instanceConsoleTitle=ref(props.preferences.consoleTitleOverrides?.[props.instance ?? ''] ?? '')
 function resetDisplayPreferences(){
   corePrefetch.value=props.preferences.corePrefetch ?? false
+  closeToTray.value=props.preferences.closeToTray ?? true
   selectionColor.value=resolveSelectionColor(props.preferences.selectionColor)
   setSelectionOpacity(resolveSelectionOpacity(props.preferences.selectionOpacity))
   timeFormat.value=props.preferences.timeFormat??'local24'
@@ -512,7 +514,7 @@ const retryingRead=computed(()=>settingsRetry.value?.tab===tab.value && settings
 const editableTab=computed(()=>['appearance','updates','global-java','java','initialization','world','scan','restart','autorestart','terminal'].includes(tab.value))
 const preferencesTab=computed(()=>['appearance','terminal','updates'].includes(tab.value))
 const globalJavaDraft=computed(()=>({mode:globalJavaMode.value,manualPath:globalJavaPath.value.trim()}))
-const draftSignature=computed(()=>JSON.stringify(tab.value==='appearance'?{theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,invalidOpacity:selectionOpacityInvalid.value?selectionOpacityInput.value:null,language:language.value,pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value}:tab.value==='updates'?corePrefetch.value:tab.value==='terminal'?instanceConsoleTitle.value:tab.value==='global-java'?globalJavaDraft.value:tab.value==='java'?{java:settings.java,port:settings.port,jvm:{...jvm},advancedJvm:advancedJvm.value}:tab.value==='restart'?timing:tab.value==='autorestart'?autoRestart:tab.value==='initialization'?initValues.value:tab.value==='world'?{files:worldValues.value,rules:worldRuleDraft.value}:tab.value==='scan'?scanPaths():null))
+const draftSignature=computed(()=>JSON.stringify(tab.value==='appearance'?{theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,invalidOpacity:selectionOpacityInvalid.value?selectionOpacityInput.value:null,language:language.value,pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value,closeToTray:closeToTray.value}:tab.value==='updates'?corePrefetch.value:tab.value==='terminal'?instanceConsoleTitle.value:tab.value==='global-java'?globalJavaDraft.value:tab.value==='java'?{java:settings.java,port:settings.port,jvm:{...jvm},advancedJvm:advancedJvm.value}:tab.value==='restart'?timing:tab.value==='autorestart'?autoRestart:tab.value==='initialization'?initValues.value:tab.value==='world'?{files:worldValues.value,rules:worldRuleDraft.value}:tab.value==='scan'?scanPaths():null))
 const draftDirty=computed(()=>baseline.value!=='' && draftSignature.value!==baseline.value)
 const dirty=computed(()=>draftDirty.value || (tab.value==='global-java' && javaSearchDirty.value))
 const globalJavaCanSave=computed(()=>!!savedGlobalJava.value && dirty.value &&
@@ -908,7 +910,7 @@ async function save(confirmWorld = false, confirmScope = false){
       if(tab.value==='appearance'){
         const before=baseline.value ? JSON.parse(baseline.value) : {}
         const fields={theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,language:language.value,
-          pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value}
+          pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value,closeToTray:closeToTray.value}
         const changed=Object.entries(fields).filter(([key,value])=>before[key]!==value)
         Object.assign(next,Object.fromEntries(changed))
       }else if(tab.value==='updates'){
@@ -1043,7 +1045,8 @@ void load()
             </div>
           </div>
         </div>
-        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" /></template>
+        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" />
+        <template v-if="preferencesLoaded"><label class="check"><input v-model="closeToTray" type="checkbox" name="close-to-tray" aria-describedby="close-to-tray-help"> {{ t('appearance.closeToTray') }}</label><p id="close-to-tray-help" class="hint">{{ t('appearance.closeToTrayHelp') }}</p></template></template>
       <template v-else-if="tab==='java'">
         <h2>{{ t('settings.java') }}</h2>
         <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>

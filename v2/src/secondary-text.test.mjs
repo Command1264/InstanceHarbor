@@ -7,6 +7,7 @@ import { test } from 'node:test'
 // Always-visible hint and notice lines must be listed below on purpose.
 const ALLOWED_ALWAYS_VISIBLE = [
   'InstancesPage.vue: 選一台查看資訊與操作，或按 Ctrl／Shift 選取多台。',
+  "SettingsPage.vue: {{ t('appearance.closeToTrayHelp') }}",
   "SettingsPage.vue: {{ t('settings.javaCheckHelp') }}",
   "SettingsPage.vue: {{ t('settings.restartScheduleHelp') }}",
   'SettingsPage.vue: 每行一個旗標，可用 ActiveProcessorCount、ParallelGCThreads、ConcGCThreads、MaxGCPauseMillis、InitiatingHeapOccupancyPercent、G1ReservePercent。例如 -XX:MaxGCPauseMillis=100。',

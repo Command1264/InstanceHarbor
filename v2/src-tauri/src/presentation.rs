@@ -31,6 +31,9 @@ struct Preferences {
     console_title_overrides: BTreeMap<String, String>,
     #[serde(default, rename = "corePrefetch")]
     core_prefetch: bool,
+    // Omit the default so 1.0.0-rc2, which rejects unknown fields, can still read the file.
+    #[serde(default = "default_close_to_tray", rename = "closeToTray", skip_serializing_if = "is_default_close_to_tray")]
+    close_to_tray: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -81,6 +84,14 @@ fn default_console_title() -> String {
     DEFAULT_CONSOLE_TITLE.into()
 }
 
+fn default_close_to_tray() -> bool {
+    true
+}
+
+fn is_default_close_to_tray(value: &bool) -> bool {
+    *value == default_close_to_tray()
+}
+
 impl Default for Preferences {
     fn default() -> Self {
         Self {
@@ -94,6 +105,7 @@ impl Default for Preferences {
             console_title_template: default_console_title(),
             console_title_overrides: BTreeMap::new(),
             core_prefetch: false,
+            close_to_tray: default_close_to_tray(),
         }
     }
 }
@@ -104,6 +116,12 @@ fn preferences_path(root: &Path) -> PathBuf {
 
 pub(super) fn core_prefetch_enabled(root: &Path) -> Result<bool> {
     Ok(load_preferences(root)?.core_prefetch)
+}
+
+/// Accepts the workspace as configured; resolves it the same way `dispatch` does.
+pub(super) fn close_to_tray_enabled(workspace: &Path) -> Result<bool> {
+    let root = safe_directory(workspace)?;
+    Ok(load_preferences(&root)?.close_to_tray)
 }
 
 fn load_preferences(root: &Path) -> Result<Preferences> {
@@ -380,6 +398,9 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
     }
     if input.get("corePrefetch").is_none() {
         value.core_prefetch = previous.core_prefetch;
+    }
+    if input.get("closeToTray").is_none() {
+        value.close_to_tray = previous.close_to_tray;
     }
     validate_preferences(&value, &names)?;
     if value.core_prefetch && !previous.core_prefetch {
@@ -1387,6 +1408,35 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn close_to_tray_defaults_on_and_is_only_written_when_off() {
+        let fixture = std::env::temp_dir().join(format!("ih-tray-pref-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&fixture).unwrap();
+        let root = fs::canonicalize(&fixture).unwrap();
+        assert!(close_to_tray_enabled(&root).unwrap());
+
+        // The default stays out of the file so rc2 can still read it after a rollback.
+        save_preferences(&root, r#"{"theme":"dark","pins":[]}"#, None).unwrap();
+        let saved = fs::read_to_string(preferences_path(&root)).unwrap();
+        assert!(!saved.contains("closeToTray"));
+        assert!(close_to_tray_enabled(&root).unwrap());
+
+        save_preferences(&root, r#"{"theme":"dark","pins":[],"closeToTray":false}"#, None).unwrap();
+        assert!(!close_to_tray_enabled(&root).unwrap());
+        // The GUI passes IH_V2_WORKSPACE as given, without the extended-length prefix.
+        assert!(!fixture.to_string_lossy().starts_with(r"\\?\"));
+        assert!(!close_to_tray_enabled(&fixture).unwrap());
+        // Saves from other settings tabs omit the field and keep the stored choice.
+        save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
+        assert!(!close_to_tray_enabled(&root).unwrap());
+
+        save_preferences(&root, r#"{"theme":"light","pins":[],"closeToTray":true}"#, None).unwrap();
+        assert!(close_to_tray_enabled(&root).unwrap());
+        assert!(!fs::read_to_string(preferences_path(&root)).unwrap().contains("closeToTray"));
+        fs::remove_file(preferences_path(&root)).unwrap();
+        fs::remove_dir(&fixture).unwrap();
+    }
 
     #[test]
     fn preferences_reject_invalid_or_duplicate_pins() {

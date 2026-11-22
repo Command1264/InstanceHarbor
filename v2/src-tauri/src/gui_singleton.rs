@@ -22,6 +22,7 @@ unsafe extern "system" {
     fn GetWindowThreadProcessId(window: Handle, pid: *mut u32) -> u32;
     fn GetWindowTextW(window: Handle, title: *mut u16, capacity: i32) -> i32;
     fn IsIconic(window: Handle) -> i32;
+    fn IsWindowVisible(window: Handle) -> i32;
     fn ShowWindowAsync(window: Handle, command: i32) -> i32;
     fn SetForegroundWindow(window: Handle) -> i32;
     fn FlashWindow(window: Handle, invert: i32) -> i32;
@@ -65,6 +66,9 @@ pub fn focus_existing() -> bool {
         }
         if IsIconic(window) != 0 {
             ShowWindowAsync(window, 9);
+        } else if IsWindowVisible(window) == 0 {
+            // The window may be hidden in the notification area; SW_SHOW restores it.
+            ShowWindowAsync(window, 5);
         }
         if SetForegroundWindow(window) == 0 {
             FlashWindow(window, 1);

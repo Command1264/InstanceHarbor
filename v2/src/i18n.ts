@@ -146,6 +146,8 @@ const messages = {
   'appearance.selectionColor': ['清單選取色', 'List selection color'],
   'appearance.selectionOpacity': ['清單選取底色不透明度', 'List selection opacity'],
   'appearance.selectionOpacityValue': ['不透明度百分比', 'Opacity percentage'],
+  'appearance.closeToTray': ['關閉視窗時縮到系統匣', 'Keep running in the notification area when the window is closed'],
+  'appearance.closeToTrayHelp': ['兩種方式都不會停止伺服器。', 'Servers keep running either way.'],
   'settings.coreUpdates': ['核心更新', 'Core updates'],
   'settings.corePrefetch': ['預先下載核心更新', 'Download core updates in advance'],
   'settings.corePrefetchUnavailable': ['目前無法核對已儲存的核心更新設定。', 'Could not verify the saved core update settings.'],
