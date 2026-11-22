@@ -114,7 +114,7 @@ fn project(
     let mut result = json!({"rows":rows,"issues":issues});
     if include_metadata {
         result["instances"] = json!(instances);
-        result["capabilities"] = presentation::capabilities();
+        result["capabilities"] = presentation::capabilities(root);
     }
     result
 }

@@ -430,6 +430,27 @@ async function readWorldLive() {
       worldLiveError.value = t('settingsPage.worldRuleRangeFailed', { reason: errorText(failure) })
   }
 }
+// Rules the Host has not settled yet (a console line is still being typed, or a
+// command is in flight) are read again quietly until they settle.
+const settlingWorldRule = (value?: WorldLiveValue) => value?.state === 'LiveRetry' || value?.state === 'Applying'
+let worldSettleTimer: ReturnType<typeof setInterval> | undefined
+watch(() => tab.value === 'world' && Object.values(worldLiveValues.value).some(settlingWorldRule), settling => {
+  clearInterval(worldSettleTimer)
+  worldSettleTimer = settling ? setInterval(() => void readWorldLive(), 2000) : undefined
+}, { immediate: true })
+onUnmounted(() => clearInterval(worldSettleTimer))
+// The save message follows the rules it reported on until they settle, unless
+// another message has replaced it in the meantime.
+let ruleSaveMessage: { name: string; fileMessage: string; keys: string[]; text: string } | undefined
+watch(worldLiveValues, values => {
+  const pending = ruleSaveMessage
+  if (!pending || pending.name !== props.instance || message.value !== pending.text) { ruleSaveMessage = undefined; return }
+  const rows = Object.fromEntries(pending.keys.filter(key => values[key])
+    .map(key => [key, { target: values[key]!.target ?? '', state: values[key]!.state as WorldRuleSaveReceipt['rows'][string]['state'] }]))
+  const outcome = worldRuleSummary(rows)
+  pending.text = message.value = [pending.fileMessage, ...outcome.messages].filter(Boolean).join(' ')
+  if (!pending.keys.some(key => settlingWorldRule(values[key]))) ruleSaveMessage = undefined
+}, { deep: true })
 const worldValues = ref<Record<string,string>>({})
 const worldRuleDraft = ref<Record<string,string>>({})
 type WorldFilePlan = { values: Record<string, string>; preview: WorldPreview }
@@ -781,13 +802,16 @@ async function previewWorldFile(name: string, revision: string, values: Record<s
 function worldRuleSummary(rows: WorldRuleSaveReceipt['rows']) {
   const outcomes = Object.values(rows)
   const queued = outcomes.filter(({state}) => state === 'Queued').length
+  // A command still in flight is not verified yet; it reads like a waiting rule.
+  const retrying = outcomes.filter(({state}) => state === 'LiveRetry' || (state as string) === 'Applying').length
   const unconfirmed = outcomes.filter(({state}) => state === 'Unconfirmed').length
-  const verified = outcomes.length - queued - unconfirmed
+  const verified = outcomes.length - queued - retrying - unconfirmed
   const messages = []
   if (verified) messages.push(t('settingsPage.worldRulesVerified', { count: verified }))
+  if (retrying) messages.push(t('settingsPage.worldRulesLiveRetry', { count: retrying }))
   if (queued) messages.push(t('settingsPage.worldRulesQueued', { count: queued }))
   if (unconfirmed) messages.push(t('settingsPage.worldRulesUnconfirmed', { count: unconfirmed }))
-  return { unconfirmed, messages }
+  return { unconfirmed, messages, keys: Object.keys(rows) }
 }
 async function saveWorld(confirmWorld: boolean) {
   const name = props.instance
@@ -872,6 +896,7 @@ async function saveWorld(confirmWorld: boolean) {
     markSaved()
     const fileMessage = filesQueued ? t('settingsPage.filesSavedQueued') : savedFiles ? t('settingsPage.filesSaved') : ''
     message.value = [fileMessage, ...(ruleOutcome?.messages ?? [])].filter(Boolean).join(' ') || (savedText.value = t('settings.saved'))
+    ruleSaveMessage = ruleOutcome?.keys.length ? { name, fileMessage, keys: ruleOutcome.keys, text: message.value } : undefined
     saveNeedsVerification.value = Boolean(ruleOutcome?.unconfirmed)
     saveSucceeded.value = !saveNeedsVerification.value
   } catch (failure) {
@@ -1007,7 +1032,7 @@ void load()
 <template>
   <OverlayScroll class="settings-scroll" :label="t('settings.content')"><header class="page-head"><div><h1>{{ instance ? t('settings.instanceTitle', { name: instance }) : t('nav.settings') }}</h1></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
     <div class="settings-layout"><nav class="settings-nav" :aria-label="t('settings.category')">
-      <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">{{ t('settingsPage.worldPolicy') }}</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
+      <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">{{ t('settings.world') }}</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
       <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button></template>
       </nav><section class="sheet" :aria-busy="saving">
       <OperationButton v-if="preferencesTab && tab!=='terminal' && connected && (preferencesConflict || !preferencesReady || error)"

@@ -13,7 +13,6 @@ const native = join(evidence, 'native')
 const cli = join(native, 'ihctl.exe')
 const guiPath = join(native, 'InstanceHarbor.exe')
 assert.match(evidence, /[\\/]\.evidence[\\/]native-console-[a-z0-9-]+$/i)
-assert.ok(existsSync(join(workspace, 'native-console.enabled')))
 
 mkdirSync(join(evidence, 'appdata'), { recursive: true })
 const env = { ...process.env, IH_V2_WORKSPACE: workspace,

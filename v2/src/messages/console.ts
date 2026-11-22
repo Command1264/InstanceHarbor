@@ -1,0 +1,26 @@
+// Messages for the server console: its tier, fallback reasons, the console
+// window warning and the viewer window. Each entry is [zh-TW, en].
+export const consoleMessages = {
+  'console.windowTitle': ['InstanceHarbor 伺服器後台', 'InstanceHarbor server console'],
+  'console.tier.label': ['後台', 'Console'],
+  'console.tier.bundled': ['InstanceHarbor 後台', 'InstanceHarbor console'],
+  'console.tier.system': ['InstanceHarbor 後台（使用 Windows 內建主控台元件）', 'InstanceHarbor console (using the Windows built-in console)'],
+  'console.tier.window': ['獨立主控台視窗', 'Separate console window'],
+  'console.tier.plain': ['本次沒有後台', 'No console for this run'],
+  'console.tier.because': ['{tier}。原因：{reason}', '{tier}. Reason: {reason}'],
+  'console.windowWarning': ['這台伺服器在獨立的主控台視窗執行。關閉那個視窗會立即停止伺服器，尚未存檔的世界變更可能遺失。請用「正常停止」結束。', 'This server runs in a separate console window. Closing that window stops the server at once, and unsaved world changes may be lost. Use Stop to end it.'],
+  'console.reason.ConsoleRuntimeMissing': ['找不到隨附的後台元件（conpty.dll、OpenConsole.exe）', 'The bundled console files (conpty.dll, OpenConsole.exe) are missing'],
+  'console.reason.ConsoleRuntimeMismatch': ['隨附的後台元件與已核對的版本不符', 'The bundled console files do not match the verified version'],
+  'console.reason.ConsoleSystemUnavailable': ['這個 Windows 版本沒有內建主控台元件', 'This Windows version has no built-in console'],
+  'console.reason.ConsoleCoreUnsupported': ['後台只支援 Paper、Folia 與 Velocity', 'The console supports only Paper, Folia and Velocity'],
+  'console.reason.ConsolePathUnsupported': ['Java、伺服器目錄或核心的路徑太長（260 個字元以上）或經過重新導向', 'The Java, server folder or core path is too long (260 characters or more) or redirected'],
+  'console.reason.ConsoleWindowNotConfirmed': ['沒有確認使用獨立主控台視窗', 'Using a separate console window was not confirmed'],
+  'console.reason.ConsoleTierLimited': ['開發版測試設定限制了可用的後台', 'A development test setting limited the console'],
+  'console.reason.other': ['後台無法建立（{code}）', 'The console could not be created ({code})'],
+  'console.confirm.title': ['以獨立主控台視窗啟動？', 'Start in a separate console window?'],
+  'console.confirm.body': ['{name} 這次無法使用 InstanceHarbor 後台：{reason}。可以改用獨立的主控台視窗啟動。', 'The InstanceHarbor console is not available for {name} this time: {reason}. It can start in a separate console window instead.'],
+  'console.confirm.warning': ['關閉主控台視窗會立即停止伺服器，尚未存檔的世界變更可能遺失。在視窗中輸入時，InstanceHarbor 送出的世界設定指令可能與正在輸入的內容混在一起。', 'Closing the console window stops the server at once, and unsaved world changes may be lost. While you type in that window, world setting commands sent by InstanceHarbor can mix with your input.'],
+  'console.confirm.window': ['以主控台視窗啟動', 'Start in a console window'],
+  'console.confirm.plain': ['不使用後台啟動', 'Start without a console'],
+  'console.inputBusy': ['後台有尚未送出的輸入。請在後台按 Enter 或清除該行，再套用世界設定。', 'The console has an unsent line. Press Enter or clear that line in the console, then apply the world settings again.'],
+} as const satisfies Record<string, readonly [string, string]>

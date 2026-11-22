@@ -1,5 +1,6 @@
 //! Bound automatic restart decisions to a drained same-run exit and durable budget.
 use super::*;
+use std::io::{Seek, SeekFrom};
 
 const EXIT: &str = "auto-restart-exit.json";
 const STATE: &str = "auto-restart-state.json";
@@ -14,7 +15,45 @@ pub(super) struct Exit {
     ready_at: Option<u64>,
     manual_stop: bool,
     native_console: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    console_window: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    console_stop_unverified: bool,
     policy: String,
+}
+
+/// An Enter after an edit the Host could not read back (for example a recalled
+/// `stop`) counts as a possible manual stop for this long before the exit.
+const UNVERIFIED_STOP_WINDOW_MS: u64 = 120_000;
+
+/// Exit codes a console window run reports when the user closes the window or
+/// stops the server there. The Host cannot see what was typed in that window.
+fn window_stop_code(code: i32) -> bool {
+    matches!(code, 0 | 130 | 143) || code == 0xC000_013A_u32 as i32
+}
+
+/// Reads the end of the run's console output for the feedback of a stop
+/// command issued from the console itself.
+fn console_stop_logged(stdout: &Path) -> bool {
+    const TAIL: u64 = 256 * 1024;
+    let Ok(mut file) = File::open(stdout) else { return false };
+    let size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(size.saturating_sub(TAIL))).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return false;
+    }
+    console_stop_line(&presentation::readable_terminal(&String::from_utf8_lossy(&bytes)))
+}
+
+fn console_stop_line(text: &str) -> bool {
+    text.lines().any(|line| {
+        line.split_once("]: ").is_some_and(|(_, message)| message.trim() == "Stopping the server")
+    })
+}
+
+fn unverified_stop(folder: &Path, observed_at: u64) -> Result<bool> {
+    let entered: Option<u64> = optional(&folder.join(native_console::LINE_UNVERIFIED))?;
+    Ok(entered.is_some_and(|at| at <= observed_at && observed_at - at <= UNVERIFIED_STOP_WINDOW_MS))
 }
 
 fn policy_revision(policy: &AutoRestart) -> Result<String> {
@@ -28,15 +67,25 @@ pub(super) fn record_exit(
     code: i32,
     observed_at: u64,
     ready_at: Option<u64>,
-    native_console: bool,
+    console: Option<native_console::Tier>,
+    velocity: bool,
 ) -> Result<()> {
+    let pseudoconsole = matches!(console, Some(native_console::Tier::Bundled | native_console::Tier::System));
+    // Paper and Folia answer a stop typed in their own console with a bare
+    // "Stopping the server" line; RCON and players show as "[Rcon: ...]".
+    let console_stop = console.is_some_and(|tier| tier != native_console::Tier::Plain)
+        && !velocity
+        && console_stop_logged(&folder.join("stdout.log"));
     let exit = Exit {
         run: run.clone(),
         code,
         observed_at,
         ready_at,
-        native_console,
-        manual_stop: manual_stop(folder)?,
+        native_console: pseudoconsole,
+        console_window: console == Some(native_console::Tier::Window),
+        // Velocity has no such line, so a recent unreadable Enter stays ambiguous there.
+        console_stop_unverified: pseudoconsole && velocity && unverified_stop(folder, observed_at)?,
+        manual_stop: console_stop || manual_stop(folder)?,
         policy: policy_revision(policy)?,
     };
     core_maintenance::write_durable(&folder.join(EXIT), &exit, false)
@@ -61,7 +110,7 @@ fn optional<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>> {
 }
 
 fn manual_stop(folder: &Path) -> Result<bool> {
-    for marker in ["stop-queued", "stop-sent", "batch-stop-accepted.json"] {
+    for marker in ["stop-queued", "stop-sent", "batch-stop-accepted.json", native_console::STOP_TYPED] {
         let path = folder.join(marker);
         match fs::symlink_metadata(&path) {
             Ok(_) => {
@@ -77,18 +126,16 @@ fn manual_stop(folder: &Path) -> Result<bool> {
 
 impl Exit {
     fn reason(&self, policy: &AutoRestart) -> Option<&'static str> {
-        match (
-            self.code,
-            self.ready_at,
-            self.manual_stop,
-            self.native_console,
-        ) {
-            (_, _, true, _) | (FORCE_EXIT, _, _, _) => Some("ManualStop"),
-            (0, Some(_), false, true) => Some("NativeConsoleStopNotDistinguishable"),
-            (0, Some(_), false, false) if !policy.on_unexpected_exit => {
-                Some("UnexpectedExitDisabled")
+        // A stop typed in our viewer is recorded as a manual stop, so other
+        // clean exits of a pseudoconsole run restart like those of a plain run.
+        match (self.code, self.ready_at, self.manual_stop) {
+            (_, _, true) | (FORCE_EXIT, _, _) => Some("ManualStop"),
+            (0, _, false) if self.console_stop_unverified => Some("ConsoleStopNotVerified"),
+            (code, _, false) if self.console_window && window_stop_code(code) => {
+                Some("ConsoleWindowStopNotDistinguishable")
             }
-            (0, Some(_), false, false) => None,
+            (0, Some(_), false) if !policy.on_unexpected_exit => Some("UnexpectedExitDisabled"),
+            (0, Some(_), false) => None,
             _ if !policy.on_crash => Some("CrashRestartDisabled"),
             _ => None,
         }
@@ -347,6 +394,8 @@ mod tests {
             observed_at,
             ready_at,
             native_console: false,
+            console_window: false,
+            console_stop_unverified: false,
             manual_stop: false,
             policy: String::new(),
         }
@@ -420,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn manual_stop_and_ambiguous_native_exit_never_restart() {
+    fn manual_stop_never_restarts_and_console_clean_exits_restart_like_plain_runs() {
         let mut policy = policy();
         let mut stopped = exit(0, 4000, Some(2000));
         assert_eq!(stopped.reason(&policy), None);
@@ -428,13 +477,64 @@ mod tests {
         assert_eq!(stopped.reason(&policy), Some("ManualStop"));
         stopped.manual_stop = false;
         stopped.native_console = true;
-        assert_eq!(
-            stopped.reason(&policy),
-            Some("NativeConsoleStopNotDistinguishable")
-        );
+        assert_eq!(stopped.reason(&policy), None);
+        policy.on_unexpected_exit = false;
+        assert_eq!(stopped.reason(&policy), Some("UnexpectedExitDisabled"));
+        policy.on_unexpected_exit = true;
+        stopped.console_stop_unverified = true;
+        assert_eq!(stopped.reason(&policy), Some("ConsoleStopNotVerified"));
+        stopped.code = 1;
+        assert_eq!(stopped.reason(&policy), None, "a crash is never a typed stop");
+        stopped.console_stop_unverified = false;
         stopped.ready_at = None;
         policy.on_crash = false;
         assert_eq!(stopped.reason(&policy), Some("CrashRestartDisabled"));
+    }
+
+    #[test]
+    fn console_window_exits_are_ambiguous_but_crashes_restart() {
+        let policy = policy();
+        let mut closed = exit(143, 4000, Some(2000));
+        closed.console_window = true;
+        assert_eq!(closed.reason(&policy), Some("ConsoleWindowStopNotDistinguishable"));
+        closed.code = 0xC000_013A_u32 as i32;
+        assert_eq!(closed.reason(&policy), Some("ConsoleWindowStopNotDistinguishable"));
+        closed.code = -1;
+        assert_eq!(closed.reason(&policy), None);
+    }
+
+    #[test]
+    fn typed_stop_marker_and_recent_unverified_enter_suppress_restart() {
+        let fixture = std::env::temp_dir().join(format!("ih-auto-console-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&fixture).unwrap();
+        let folder = fs::canonicalize(&fixture).unwrap();
+        assert!(!manual_stop(&folder).unwrap());
+        save(&folder.join(native_console::LINE_UNVERIFIED), &10_000u64).unwrap();
+        assert!(unverified_stop(&folder, 10_000 + UNVERIFIED_STOP_WINDOW_MS).unwrap());
+        assert!(!unverified_stop(&folder, 10_001 + UNVERIFIED_STOP_WINDOW_MS).unwrap());
+        assert!(!unverified_stop(&folder, 9_999).unwrap());
+        fs::write(folder.join(native_console::STOP_TYPED), b"").unwrap();
+        assert!(manual_stop(&folder).unwrap());
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_stop_typed_in_the_console_is_told_apart_from_rcon_and_players() {
+        // Lines as Paper writes them through a pseudoconsole and to latest.log.
+        assert!(console_stop_line("[20:03:33 INFO]: Stopping the server\n[20:03:33 INFO]: Stopping server"));
+        assert!(console_stop_line("> [20:03:07] [Server thread/INFO]: Stopping the server"));
+        assert!(!console_stop_line("[20:51:53 INFO]: [Rcon: Stopping the server]\n[20:51:53 INFO]: Stopping server"));
+        assert!(!console_stop_line("[20:51:53 INFO]: [Steve: Stopping the server]"));
+        assert!(!console_stop_line("[20:51:53 INFO]: <Steve> Stopping the server"));
+        assert!(!console_stop_line("[20:51:53 INFO]: Stopping server"));
+    }
+
+    #[test]
+    fn exit_records_from_before_console_windows_still_read() {
+        let old = json!({"run":{"id":"r","host":{"pid":1,"created":1},"java":{"pid":2,"created":2}},
+            "code":0,"observedAt":5,"readyAt":1,"manualStop":false,"nativeConsole":true,"policy":"p"});
+        let exit: Exit = serde_json::from_value(old).unwrap();
+        assert!(exit.native_console && !exit.console_window && !exit.console_stop_unverified);
     }
 
     #[test]

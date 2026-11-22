@@ -11,6 +11,7 @@ import { settingsMessages } from './messages/settings.ts'
 import { managerMessages } from './messages/manager.ts'
 import { componentsMessages } from './messages/components.ts'
 import { policyMessages } from './messages/policy.ts'
+import { consoleMessages } from './messages/console.ts'
 
 export { consoleTitleTokens }
 export const defaultConsoleTitleTemplate = '{instance}'
@@ -402,7 +403,7 @@ const baseMessages = {
   'activity.action.force-stop': ['強制停止', 'Force stop'],
   'activity.action.core-install': ['更新核心', 'Update core'],
   'activity.action.core-restore': ['還原核心', 'Restore core'],
-  'activity.action.core-reconcile': ['核對核心維護', 'Reconcile core maintenance'],
+  'activity.action.core-reconcile': ['核對核心維護', 'Check core maintenance'],
   'activity.action.core-batch-install': ['批次核心更新', 'Batch core update'],
   'activity.action.world-live-rule': ['套用遊戲規則', 'Apply game rule'],
   'core.source.spigotRefsUnverified': ['已查到同版本的發布資訊。請從備份與診斷核對本機核心的來源。', 'Release information is available. Verify the installed JAR under Backups and Diagnostics.'],
@@ -556,7 +557,7 @@ const baseMessages = {
   'settings.category': ['設定分類', 'Settings categories'],
   'settings.content': ['設定內容', 'Settings content'],
   'settings.back': ['返回實例', 'Back to instances'],
-  'settings.instanceTitle': ['{name} · 設定', '{name} · Settings'],
+  'settings.instanceTitle': ['{name} · 實例設定', '{name} · Instance settings'],
   'settings.java': ['Java 與 JVM', 'Java and JVM'],
   'settings.restart': ['停止與重啟', 'Stop and restart'],
   'settings.autoRestart': ['自動重啟', 'Automatic restart'],
@@ -586,7 +587,7 @@ const baseMessages = {
   'settings.restartDue': ['預計重試時間：{time}', 'Scheduled retry: {time}'],
   'settings.terminal': ['後台', 'Console'],
   'settings.world': ['世界設定', 'World settings'],
-  'settings.core': ['核心維護', 'Server core maintenance'],
+  'settings.core': ['核心維護', 'Core maintenance'],
   'settings.initialization': ['初始化預設', 'Initialization defaults'],
   'settings.scan': ['管理資料夾', 'Managed folders'],
   'settings.saved': ['設定已儲存', 'Settings saved'],
@@ -616,7 +617,7 @@ const baseMessages = {
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
 } as const satisfies Record<string, readonly [string, string]>
 
-const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages] as const
+const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages, consoleMessages] as const
 const messages = {
   ...baseMessages,
   ...appMessages,
@@ -625,6 +626,7 @@ const messages = {
   ...managerMessages,
   ...componentsMessages,
   ...policyMessages,
+  ...consoleMessages,
 }
 
 export function duplicateMessageIds(): string[] {

@@ -53,7 +53,7 @@ export type WorldPreview = {
 
 export type WorldLiveValue = { value?: string | null; target?: string | null; state: string }
 
-const worldRuleSaveStates = ['Queued', 'AwaitingNormalStop', 'Unconfirmed', 'Saved'] as const
+const worldRuleSaveStates = ['Queued', 'LiveRetry', 'AwaitingNormalStop', 'Unconfirmed', 'Saved'] as const
 export type WorldRuleSaveState = typeof worldRuleSaveStates[number]
 export type WorldRuleSaveReceipt = {
   name: string

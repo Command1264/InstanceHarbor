@@ -56,6 +56,7 @@ function liveLabel(row: PolicyRow) {
   const value = valueLabel(observation.target ?? observation.value)
   switch (observation.state) {
     case 'Queued': return t('components.policy.live.queued', { value })
+    case 'LiveRetry': return t('components.policy.live.liveRetry', { value })
     case 'Applying': return t('components.policy.live.applying', { value })
     case 'AwaitingNormalStop': return t('components.policy.live.awaitingNormalStop', { value })
     case 'Unconfirmed': return t('components.policy.live.unconfirmed')

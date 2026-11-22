@@ -16,6 +16,8 @@ const ALLOWED_ALWAYS_VISIBLE = [
   "SettingsPage.vue: {{ t('settingsPage.yamlChangedFiles') }}",
   "SettingsPage.vue: {{ t('settingsPage.scanHelp') }}",
   "App.vue: {{ selectedLog?.path ?? logs?.path ?? t('app.logs.noPath') }}",
+  // Starting in a console window needs this consequence stated before the user decides.
+  "App.vue: {{ t('console.confirm.warning') }}",
   "components/DisplayPreferencesFields.vue: {{ t('appearance.preview') }} · {{ formatDisplayTime(sampleTime, locale, timeFormat) }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.jarHelp') }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.source', { source: sourceText(signal.source) }) }}",

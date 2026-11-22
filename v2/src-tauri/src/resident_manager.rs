@@ -97,6 +97,8 @@ impl Item {
         StartGuard {
             registration: Some(self.registration.clone()),
             previous_identity: self.stop_run.clone(),
+            // Batch starts never open a console window; it needs a per-start confirmation.
+            console_window: false,
             ..self.target.guard.clone()
         }
     }
@@ -1129,6 +1131,7 @@ fn auto_restart_one(root: &Path, name: &str) -> Result<bool> {
     let guard = StartGuard {
         previous_run: Some(run.id.clone()), stop_token: None,
         registration: Some(registration), previous_identity: Some(run), auto_attempt: Some(attempt),
+        console_window: false,
     };
     lifecycle(root, &config, "start-if-current", &request, None, Some(&guard)).map(|_| true)
 }

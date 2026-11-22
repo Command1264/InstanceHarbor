@@ -19,8 +19,8 @@ test('system respects order and skips unsupported, malformed and explicitly simp
 test('reviewed messages have paired translations and preserve supplied values', () => {
   assert.deepEqual(messageParameterMismatches(), [])
   assert.deepEqual(duplicateMessageIds(), [])
-  assert.equal(translate('en', 'settings.instanceTitle', {name: '測試-{label}'}), '測試-{label} · Settings')
-  assert.equal(translate('zh-TW', 'settings.instanceTitle', {name: 'Example'}), 'Example · 設定')
+  assert.equal(translate('en', 'settings.instanceTitle', {name: '測試-{label}'}), '測試-{label} · Instance settings')
+  assert.equal(translate('zh-TW', 'settings.instanceTitle', {name: 'Example'}), 'Example · 實例設定')
 })
 
 test('activity time honors the selected clock and UTC without changing locale', () => {

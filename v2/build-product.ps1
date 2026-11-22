@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param([switch]$Acceptance,[switch]$Release,[switch]$Development)
+# ConsoleRuntimeSource: a directory or local .nupkg holding the pinned console runtime
+# (console-runtime.json). Defaults to IH_V2_CONSOLE_RUNTIME_SOURCE. Never downloaded here.
+param([switch]$Acceptance,[switch]$Release,[switch]$Development,[string]$ConsoleRuntimeSource=$env:IH_V2_CONSOLE_RUNTIME_SOURCE)
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
 Push-Location $PSScriptRoot
@@ -53,7 +55,22 @@ try {
     }else{
         New-Item -ItemType Directory -Path $folder -Force|Out-Null
     }
-    @{assets=$assets;frontendDirectory=(Resolve-Path -LiteralPath $frontendDirectory).Path;binary=$binary;sha256=(Get-FileHash -LiteralPath $binary).Hash;cliSha256=(Get-FileHash -LiteralPath $cli).Hash;indexSha256=(Get-FileHash -LiteralPath $index).Hash;acceptanceUi=[bool]$Acceptance;development=[bool]$Development}|
+    # Tier 1 of the server console: the pinned runtime beside the binaries. Without it a
+    # run falls back to the Windows built-in console, which release builds must not rely on.
+    $runtimeTarget=Split-Path -Parent $binary
+    $runtimeNames=@('conpty.dll','OpenConsole.exe')
+    $runtimeSource=if($ConsoleRuntimeSource){$ConsoleRuntimeSource}
+        elseif(@($runtimeNames|Where-Object{Test-Path -LiteralPath (Join-Path $runtimeTarget $_)}).Count -eq 2){$runtimeTarget}
+        elseif($Acceptance -and @($runtimeNames|Where-Object{Test-Path -LiteralPath (Join-Path $binaryDirectory $_)}).Count -eq 2){$binaryDirectory}
+    $consoleRuntime=$null
+    if($runtimeSource){
+        $consoleRuntime=(& (Join-Path $PSScriptRoot 'provision-console-runtime.ps1') -Source $runtimeSource -Destination $runtimeTarget).version
+    }elseif($Release){
+        throw '發行建置需要已核對的後台元件。請以 -ConsoleRuntimeSource 指定 conpty.dll／OpenConsole.exe 的本機來源。'
+    }else{
+        Write-Warning '未提供後台元件（conpty.dll、OpenConsole.exe）。此建置的伺服器後台會改用 Windows 內建主控台。'
+    }
+    @{assets=$assets;frontendDirectory=(Resolve-Path -LiteralPath $frontendDirectory).Path;binary=$binary;sha256=(Get-FileHash -LiteralPath $binary).Hash;cliSha256=(Get-FileHash -LiteralPath $cli).Hash;indexSha256=(Get-FileHash -LiteralPath $index).Hash;acceptanceUi=[bool]$Acceptance;development=[bool]$Development;consoleRuntime=$consoleRuntime}|
         ConvertTo-Json|Set-Content -LiteralPath (Join-Path $folder 'build-manifest.json')
     'Vue 與原生候選資產已核對。'
 } finally {Pop-Location}

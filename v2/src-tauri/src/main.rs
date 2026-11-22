@@ -351,6 +351,16 @@ fn terminal_title(
     window.set_title(&viewer.title(&run)?).map_err(|error| error.to_string())
 }
 
+/// Sets the translated window title while no tab supplies its own.
+#[cfg(windows)]
+#[tauri::command]
+fn terminal_window_title(window: tauri::WebviewWindow, title: String) -> Result<(), String> {
+    if title.trim().is_empty() || title.chars().count() > 256 || title.chars().any(char::is_control) {
+        return Err("InvalidConsoleRequest".into());
+    }
+    window.set_title(&title).map_err(|error| error.to_string())
+}
+
 #[cfg(windows)]
 #[tauri::command]
 fn terminal_close(
@@ -386,6 +396,7 @@ fn run_console(workspace: &str) -> Result<(), String> {
             terminal_present,
             terminal_pending,
             terminal_title,
+            terminal_window_title,
             terminal_close
         ])
         .setup(move |app| {
@@ -394,7 +405,8 @@ fn run_console(workspace: &str) -> Result<(), String> {
                 "console",
                 tauri::WebviewUrl::App("console.html".into()),
             )
-            .title(format!("{} 伺服器後台", desktop_channel::TITLE))
+            // The viewer replaces this with its translated title before the window is shown.
+            .title(desktop_channel::TITLE)
             .inner_size(1020.0, 820.0)
             .min_inner_size(460.0, 280.0)
             .resizable(true)
@@ -440,7 +452,7 @@ fn main() {
     if let [_, workspace, mode] = std::env::args().collect::<Vec<_>>().as_slice() {
         if mode == "native-console" {
             if let Err(error) = run_console(workspace) {
-                eprintln!("InstanceHarbor 伺服器後台啟動失敗：{error}");
+                eprintln!("InstanceHarbor server console failed to start: {error}");
                 std::process::exit(1);
             }
             return;

@@ -1,6 +1,8 @@
 import { Channel, invoke } from '@tauri-apps/api/core'
 import { tr, type LanguagePreference, type MessageId, type TimeFormat } from './i18n'
 import type { SelectionColorPreference } from './theme'
+import type { ConsoleChoice } from './console-tier.ts'
+export { consoleFallbackReason, consoleSummary, type ConsoleChoice, type ConsolePlan } from './console-tier.ts'
 
 export interface Instance {
   name: string
@@ -11,6 +13,7 @@ export interface Instance {
   listenAddress?: string | null
   consoleReady?: boolean
   nativeConsole?: boolean
+  console?: ConsoleChoice | null
   outsideManagement?: boolean
   autoRestartStatus?: AutoRestartStatus | null
   stopPhase?: string
@@ -26,7 +29,7 @@ export interface InstanceSnapshot extends Omit<Presentation, 'preferences'> { ro
 export interface Presentation {
   preferences: Preferences
   instances: InstanceMeta[]
-  capabilities?: Record<string, boolean>
+  capabilities?: Record<string, unknown>
 }
 export interface BatchItem {
   name: string
@@ -171,6 +174,7 @@ export function errorText(error: unknown) {
   if (raw.includes('WorldRunChanged') || raw.includes('WorldRunNotReady')) return tr('manager.error.worldRunChanged')
   if (raw.includes('WorldConsoleUnavailable')) return tr('manager.error.worldConsoleUnavailable')
   if (raw.includes('WorldConsoleInputNotVerified')) return tr('manager.error.worldConsoleInputNotVerified')
+  if (raw.includes('WorldConsoleInputBusy')) return tr('console.inputBusy')
   if (/World(Reply|Outcome|Command)Unconfirmed/.test(raw)) return tr('manager.error.worldOutcomeUnconfirmed')
   if (raw.includes('InvalidScanPath')) return tr('manager.error.invalidScanPath')
   if (raw.includes('ScanWouldHideActiveInstance')) return tr('manager.error.scanWouldHideActiveInstance')

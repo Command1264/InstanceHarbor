@@ -16,6 +16,10 @@ struct Edit {
     readback_attempts: u8,
     #[serde(default)]
     persistence_checked: bool,
+    /// A live-first save that could not be sent yet, for example while the user
+    /// was typing in the console. The Host retries it during the same run.
+    #[serde(default, skip_serializing_if = "is_false")]
+    live_retry: bool,
 }
 
 type Edits = BTreeMap<String, Edit>;
@@ -248,7 +252,11 @@ fn batch_receipt(name: &str, batch: &Batch, edits: &Edits, replayed: bool) -> Va
         let rows: BTreeMap<_, _> = batch
             .targets
             .iter()
-            .map(|(key, target)| (key, json!({"target":target,"state":states[key]})))
+            .map(|(key, target)| {
+                let retry = states[key] == "Queued"
+                    && edits.get(key).is_some_and(|edit| edit.request == batch.request && edit.live_retry);
+                (key, json!({"target":target,"state":if retry { "LiveRetry" } else { states[key].as_str() }}))
+            })
             .collect();
         receipt["rows"] = json!(rows);
     } else {
@@ -366,6 +374,7 @@ fn submit(
                 created_at,
                 readback_attempts: 0,
                 persistence_checked: false,
+                live_retry: false,
             },
         );
     }
@@ -422,6 +431,7 @@ fn explicitly_not_sent(error: &str) -> bool {
             | "WorldCommandUnavailable"
             | "WorldConsoleUnavailable"
             | "WorldConsoleInputNotVerified"
+            | "WorldConsoleInputBusy"
     )
 }
 
@@ -444,8 +454,10 @@ fn apply_live_rule(
     set: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let Ok(before) = query() else {
-        // Only a read was attempted, so the durable queued edit may run later.
-        return Ok(());
+        // Only a read was attempted. The Host retries the edit while this run lasts.
+        let edit = queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?;
+        edit.live_retry = true;
+        return core_maintenance::write_durable(path, queue, true);
     };
     let edit = queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?;
     edit.attempted_run = Some(run.into());
@@ -465,6 +477,7 @@ fn apply_live_rule(
         let edit = queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?;
         edit.attempted_run = None;
         edit.state = "Queued".into();
+        edit.live_retry = true;
     } else {
         let verified = query().is_ok_and(|actual| actual == value);
         let edit = queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?;
@@ -546,6 +559,8 @@ pub(super) fn values(root: &Path, name: &str) -> Result<Value> {
         let edit = edits.get(key);
         let state = match edit {
             Some(edit) if edit.sha256 != core.sha256 => "Unconfirmed",
+            Some(edit) if edit.state == "Queued" && edit.live_retry && !stopped
+                && observation["run"]["id"].as_str() == edit.queued_after.as_deref() => "LiveRetry",
             Some(edit) => edit.state.as_str(),
             None if saved.contains_key(key) && stopped => "Saved",
             None if saved.contains_key(key) => "LastSaved",
@@ -569,6 +584,14 @@ fn eligible(edit: &Edit, run: &str) -> bool {
         && edit.attempted_run.is_none()
 }
 
+/// A live-first edit saved during this run that the Host could not send yet.
+fn live_retry_due(edit: &Edit, run: &str) -> bool {
+    edit.state == "Queued"
+        && edit.live_retry
+        && edit.queued_after.as_deref() == Some(run)
+        && edit.attempted_run.is_none()
+}
+
 pub(in crate::windows) fn has_queued(root: &Path, name: &str, run: &str) -> Result<bool> {
     Ok(load(&entry(root, name)?)?
         .edits
@@ -576,11 +599,39 @@ pub(in crate::windows) fn has_queued(root: &Path, name: &str, run: &str) -> Resu
         .any(|edit| eligible(edit, run)))
 }
 
+pub(in crate::windows) fn has_live_retry(root: &Path, name: &str, run: &str) -> Result<bool> {
+    Ok(load(&entry(root, name)?)?
+        .edits
+        .values()
+        .any(|edit| live_retry_due(edit, run)))
+}
+
+/// Applies edits queued before this run started.
 pub(in crate::windows) fn apply_queued(
     root: &Path,
     config: &Instance,
     run: &Run,
     write: impl Fn(&str, Instant) -> Result<()>,
+) -> Result<()> {
+    apply_matching(root, config, run, write, eligible)
+}
+
+/// Applies live-first edits of this run once the console can take them.
+pub(in crate::windows) fn apply_live_retry(
+    root: &Path,
+    config: &Instance,
+    run: &Run,
+    write: impl Fn(&str, Instant) -> Result<()>,
+) -> Result<()> {
+    apply_matching(root, config, run, write, live_retry_due)
+}
+
+fn apply_matching(
+    root: &Path,
+    config: &Instance,
+    run: &Run,
+    write: impl Fn(&str, Instant) -> Result<()>,
+    due: fn(&Edit, &str) -> bool,
 ) -> Result<()> {
     let (directory, core) = verified(root, config)?;
     let name = &config.name;
@@ -596,7 +647,7 @@ pub(in crate::windows) fn apply_queued(
             let Some(edit) = current
                 .edits
                 .get_mut(key)
-                .filter(|edit| eligible(edit, &run.id))
+                .filter(|edit| due(edit, &run.id))
             else {
                 continue;
             };
@@ -618,7 +669,7 @@ pub(in crate::windows) fn apply_queued(
                 let edit = current
                     .edits
                     .get_mut(key)
-                    .filter(|edit| edit.request == target.request && eligible(edit, &run.id))
+                    .filter(|edit| edit.request == target.request && due(edit, &run.id))
                     .ok_or("WorldRuleRequestChanged")?;
                 edit.state = "Applying".into();
                 edit.attempted_run = Some(run.id.clone());
@@ -654,6 +705,7 @@ pub(in crate::windows) fn apply_queued(
                 .filter(|edit| edit.request == target.request)
             {
                 if rejected.get() {
+                    // Not sent; a live retry stays due for the next attempt.
                     edit.state = "Queued".into();
                     edit.attempted_run = None;
                 } else {
@@ -741,6 +793,7 @@ pub(super) fn activity(root: &Path, name: &str) -> Result<Vec<Value>> {
         let (rank, state, message) = match edit.state.as_str() {
             "Saved" => (0, "Completed", "已核對世界存檔"),
             "AwaitingNormalStop" => (1, "VerifiedLive", "正常停止後自動核對存檔"),
+            "Queued" if edit.live_retry => (2, "Pending", "等後台輸入完成後即時套用；未送出時下次啟動套用"),
             "Queued" => (2, "Pending", "下次啟動套用"),
             "Applying" => (3, "Pending", "世界變更待核對"),
             "Unconfirmed" if !edit.persistence_checked => {
@@ -838,6 +891,7 @@ mod tests {
                 created_at: 1,
                 readback_attempts: 0,
                 persistence_checked: false,
+                live_retry: false,
             },
         )]);
         save(&path, &legacy).unwrap();
@@ -929,7 +983,22 @@ mod tests {
         let replay = save_rules(root, "paper", "live-batch", batch).unwrap();
         assert_eq!(replay["replayed"], true);
         assert_eq!(replay["rows"][pvp]["state"], "Unconfirmed");
-        assert_eq!(replay["rows"][mobs]["state"], "Queued");
+        // Not sent during this run: the Host retries it live, then the next start applies it.
+        assert_eq!(replay["rows"][mobs]["state"], "LiveRetry");
+        assert!(live_retry_due(&queue.edits[mobs], "first-run"));
+        assert!(!live_retry_due(&queue.edits[mobs], "second-run"));
+        assert!(!live_retry_due(&queue.edits[pvp], "first-run"));
+        let mut read_only = load(&path).unwrap();
+        read_only.edits.get_mut(pvp).unwrap().live_retry = false;
+        let pvp_before = read_only.edits[pvp].clone();
+        read_only.edits.insert("gamerules.advance_time".into(), Edit { live_retry: false, ..pvp_before });
+        let queue_path = path.with_extension("probe.json");
+        fs::copy(&path, &queue_path).unwrap();
+        apply_live_rule(&queue_path, &mut read_only, "gamerules.advance_time", "first-run", "false",
+            || Err("WorldConsoleInputBusy".into()), || panic!("a failed read never sends"))
+            .unwrap();
+        assert!(read_only.edits["gamerules.advance_time"].live_retry, "a busy console read retries live");
+        fs::remove_file(&queue_path).unwrap();
         let duplicate = r#"{"serverProperties.pvp":"false"}"#;
         assert_eq!(
             save_rules(root, "paper", "duplicate", duplicate).unwrap_err(),
