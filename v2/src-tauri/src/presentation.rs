@@ -347,13 +347,91 @@ pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
     json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core})
 }
 
-/// `nativeConsole` follows the workspace switch file that makes new runs start in the native console.
-/// Without it no run can offer a console, so the GUI hides every console entry.
-pub(super) fn capabilities(root: &Path) -> Value {
-    let native_console = root.join("native-console.enabled").is_file();
+/// `nativeConsole` reports whether this installation can show a server console
+/// in InstanceHarbor's own viewer: through the bundled runtime (tier 1) or the
+/// pseudoconsole that ships with Windows (tier 2). Each run still records the
+/// tier it chose, which can be lower for an unsupported core or path.
+pub(super) fn capabilities(_root: &Path) -> Value {
+    let bundled = native_console::bundled_runtime().err();
+    let system = native_console::system_runtime().err();
     json!({"instanceSettings":true,"javaDiscovery":true,"javaSelection":true,"logs":true,
         "removeManagement":true,"adopt":true,"openLogFolder":true,
-        "coreMaintenance":true,"nativeConsole":native_console,"worldSettings":true,"initialization":true,"scanPaths":true})
+        "coreMaintenance":true,"nativeConsole":bundled.is_none() || system.is_none(),
+        "consoleRuntime":{"bundled":bundled.is_none(),"bundledReason":bundled,"system":system.is_none(),"systemReason":system},
+        "worldSettings":true,"initialization":true,"scanPaths":true})
+}
+
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetUserDefaultUILanguage() -> u16;
+}
+
+fn chinese_interface(language: DisplayLanguage) -> bool {
+    match language {
+        DisplayLanguage::TraditionalChinese => true,
+        DisplayLanguage::English => false,
+        // LANG_CHINESE, matching how the GUI resolves the system language.
+        DisplayLanguage::System => (unsafe { GetUserDefaultUILanguage() } & 0x3ff) == 0x04,
+    }
+}
+
+/// Title of a console window run (tier 3). It states the consequence of closing it.
+pub(super) fn console_window_title(root: &Path, name: &str) -> String {
+    let language = load_preferences(root).map(|preferences| preferences.language).unwrap_or_default();
+    if chinese_interface(language) {
+        format!("{name} - InstanceHarbor 伺服器後台（關閉此視窗會停止伺服器）")
+    } else {
+        format!("{name} - InstanceHarbor server console (closing this window stops the server)")
+    }
+}
+
+/// Turns the VT output a pseudoconsole writes into `stdout.log` into plain
+/// lines for the Logs dialog. The file on disk keeps the original bytes.
+fn readable_terminal(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => match chars.next() {
+                Some('[') => {
+                    let mut parameters = String::new();
+                    let mut last = None;
+                    for next in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&next) {
+                            last = Some(next);
+                            break;
+                        }
+                        parameters.push(next);
+                    }
+                    let count = || parameters.parse::<usize>().unwrap_or(1).clamp(1, 500);
+                    match last {
+                        Some('C') => output.extend(std::iter::repeat_n(' ', count())),
+                        Some('H' | 'f') if !output.is_empty() && !output.ends_with('\n') => output.push('\n'),
+                        _ => {}
+                    }
+                }
+                Some(']' | 'P' | '_' | '^') => {
+                    while let Some(next) = chars.next() {
+                        if next == '\u{7}' || (next == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            '\r' if chars.peek() == Some(&'\n') => {}
+            '\r' => output.truncate(output.rfind('\n').map_or(0, |line| line + 1)),
+            '\u{8}' => {
+                if !output.ends_with('\n') {
+                    output.pop();
+                }
+            }
+            '\n' | '\t' => output.push(ch),
+            ch if ch.is_control() => {}
+            ch => output.push(ch),
+        }
+    }
+    output
 }
 
 fn presentation(root: &Path, include_preferences: bool) -> Result<Value> {
@@ -833,7 +911,8 @@ fn logs(root: &Path, name: &str) -> Result<Value> {
         ("control", "control-error.txt"),
     ].into_iter().map(|(source, name)| {
         let path = folder.join(name);
-        let (text, state) = match log_tail(&path) {
+        let tail = log_tail(&path).map(|text| if source == "terminal" { readable_terminal(&text) } else { text });
+        let (text, state) = match tail {
             Ok(text) if !text.is_empty() => (Some(text), "Available"),
             Ok(_) => (None, "Empty"),
             Err(_) if !path.exists() => (None, "Missing"),
@@ -1413,13 +1492,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn native_console_capability_follows_the_workspace_switch_file() {
+    fn native_console_capability_describes_the_installation_not_a_switch_file() {
         let root = std::env::temp_dir().join(format!("ih-console-cap-{}-{}", std::process::id(), clock()));
         fs::create_dir(&root).unwrap();
-        assert_eq!(capabilities(&root)["nativeConsole"], false);
+        // The test executable has no bundled runtime beside it; Windows still has its own.
+        let value = capabilities(&root);
+        assert_eq!(value["nativeConsole"], true);
+        assert_eq!(value["consoleRuntime"]["bundled"], false);
+        assert_eq!(value["consoleRuntime"]["bundledReason"], "ConsoleRuntimeMissing");
+        assert_eq!(value["consoleRuntime"]["system"], true);
+        // The retired marker file has no effect.
         fs::write(root.join("native-console.enabled"), b"").unwrap();
-        assert_eq!(capabilities(&root)["nativeConsole"], true);
+        assert_eq!(capabilities(&root), value);
         fs::remove_file(root.join("native-console.enabled")).unwrap();
+        fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
+    fn logs_dialog_reads_pseudoconsole_output_as_plain_lines() {
+        let raw = "\u{1b}[?25l\u{1b}[2J\u{1b}[m\u{1b}[H[12:00:00 INFO]: Starting\u{1b}[K\r\n\u{1b}]0;java\u{7}[12:00:01 INFO]:\u{1b}[3CDone (1.2s)! For help\r\n> lisx\u{8}t\u{1b}[?25h";
+        assert_eq!(
+            readable_terminal(raw),
+            "[12:00:00 INFO]: Starting\n[12:00:01 INFO]:   Done (1.2s)! For help\n> list"
+        );
+        assert_eq!(readable_terminal("progress 10%\rprogress 99%\r\ndone\n"), "progress 99%\ndone\n");
+        assert_eq!(readable_terminal("\u{1b}]8;;x\u{1b}\\link\u{1b}[0;32mok\u{1b}[0m"), "linkok");
+        let plain = "[12:00:00 INFO]: Done\n";
+        assert_eq!(readable_terminal(plain), plain);
+    }
+
+    #[test]
+    fn console_window_title_states_that_closing_stops_the_server() {
+        assert!(chinese_interface(DisplayLanguage::TraditionalChinese));
+        assert!(!chinese_interface(DisplayLanguage::English));
+        let root = std::env::temp_dir().join(format!("ih-console-title-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&root).unwrap();
+        assert!(console_window_title(&root, "lobby").contains("關閉此視窗會停止伺服器"));
         fs::remove_dir(&root).unwrap();
     }
 

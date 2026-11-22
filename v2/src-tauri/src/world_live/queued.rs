@@ -422,6 +422,7 @@ fn explicitly_not_sent(error: &str) -> bool {
             | "WorldCommandUnavailable"
             | "WorldConsoleUnavailable"
             | "WorldConsoleInputNotVerified"
+            | "WorldConsoleInputBusy"
     )
 }
 

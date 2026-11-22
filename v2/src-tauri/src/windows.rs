@@ -332,6 +332,9 @@ struct StartGuard {
     previous_identity: Option<Run>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auto_attempt: Option<u8>,
+    /// The user confirmed, for this start only, that a console window may be used.
+    #[serde(default, skip_serializing_if = "is_false")]
+    console_window: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1311,8 +1314,13 @@ fn status(root: &Path, config: &Instance) -> Result<Value> {
     let stop_token = cancellation_token(&folder)?;
     let auto_restart = config.auto_restart.as_ref()
         .map(|policy| auto_restart::state_for_status(root, &folder, policy, run.as_ref(), state == "Stopped"));
+    // The tier this run chose and every tier it skipped, for the GUI to explain.
+    let console = run.as_ref().and_then(|_| {
+        let path = folder.join(CONSOLE_TIER);
+        no_redirect(&path).ok().and_then(|()| read::<native_console::Choice>(&path).ok())
+    });
     Ok(
-        json!({"name":config.name,"port":config.port,"listenAddress":registered_velocity(config).map(|_| instance_listen_address(config)),"java":config.java,"state":state,"ownerPid":owner,"ownerName":owner.and_then(process_name),"consoleReady":folder.join("console-ready").is_file(),"nativeConsole":folder.join("native-console").is_file(),"recoveryPinned":folder.join(host_recovery::PIN_FILE).is_file(),"stopPhase":stop_phase,"stopToken":stop_token,"run":run,"autoRestartStatus":auto_restart}),
+        json!({"console":console,"name":config.name,"port":config.port,"listenAddress":registered_velocity(config).map(|_| instance_listen_address(config)),"java":config.java,"state":state,"ownerPid":owner,"ownerName":owner.and_then(process_name),"consoleReady":folder.join("console-ready").is_file(),"nativeConsole":folder.join("native-console").is_file(),"recoveryPinned":folder.join(host_recovery::PIN_FILE).is_file(),"stopPhase":stop_phase,"stopToken":stop_token,"run":run,"autoRestartStatus":auto_restart}),
     )
 }
 
@@ -1360,7 +1368,49 @@ fn launch_host(exe: &Path, root: &Path, name: &str, run: &str) -> Result<Identit
         .map_err(fail)?
         .ok_or("HostStartupFailed".into())
 }
-fn start(root: &Path, config: &Instance, attempt: u8) -> Result<Value> {
+/// Run-folder record of the console tier the Host chose.
+const CONSOLE_TIER: &str = "console-tier.json";
+/// Written by a user-confirmed start. Only then may the Host open a console window.
+const CONSOLE_WINDOW_ALLOWED: &str = "console-window-allowed";
+
+fn console_family(config: &Instance, jar: &Path) -> String {
+    match &config.core_profile {
+        Some(profile) => profile.family.clone(),
+        None => core_identity::read_identity(jar)
+            .ok()
+            .flatten()
+            .map(|identity| identity.family.to_owned())
+            .unwrap_or_default(),
+    }
+}
+
+/// Predicts the console tier of the next start, so the GUI can ask before a
+/// start would need a console window. The Host repeats every check at start.
+fn console_plan(root: &Path, config: &Instance) -> Result<Value> {
+    let path = instance_path(root, &config.name)?;
+    let jar = path.join("server.jar");
+    let paths = native_console::launch_paths(&jar, &path, &jar).and_then(|()| {
+        if config.java.as_os_str().is_empty() {
+            Ok(())
+        } else {
+            native_console::launch_paths(&config.java, &path, &jar)
+        }
+    });
+    let choice = native_console::choose(&native_console::Facts {
+        supported_core: native_console::supported_core(&console_family(config, &jar)),
+        paths,
+        bundled: native_console::bundled_runtime().map(|_| ()),
+        system: native_console::system_runtime(),
+        window: Ok(()),
+        window_confirmed: true,
+        limit: native_console::tier_limit(),
+    });
+    let mut value = serde_json::to_value(&choice).map_err(fail)?;
+    value["needsConfirmation"] = json!(choice.tier == native_console::Tier::Window);
+    Ok(value)
+}
+
+fn start(root: &Path, config: &Instance, attempt: u8, console_window: bool) -> Result<Value> {
     creation::assert_idle(root, &config.name)?;
     agent_rebuild::assert_idle(root, &config.name)?;
     if !admitted(root, &config.name)? {
@@ -1433,6 +1483,8 @@ fn start(root: &Path, config: &Instance, attempt: u8) -> Result<Value> {
     drop(recovery_lock);
     if attempt > 0 {
         save(&folder.join("auto-restart-attempt.json"), &attempt)?;
+    } else if console_window {
+        mark_host_phase(&folder.join(CONSOLE_WINDOW_ALLOWED));
     }
     if let Some(publish) = budget {
         publish(&folder)?;
@@ -1793,13 +1845,49 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     let stdout = File::create_new(folder.join("stdout.log")).map_err(fail)?;
     let stderr = File::create_new(folder.join("stderr.log")).map_err(fail)?;
     let mut startup_log = File::open(folder.join("stdout.log")).map_err(fail)?;
-    let console_marker = root.join("native-console.enabled");
-    let (mut child, mut console) = if console_marker.exists() {
-        no_redirect(&console_marker)?;
-        (
-            None,
-            Some(native_console::Console::spawn(&java, &path, &jar, &args, velocity.is_none(), stdout)?),
-        )
+    let mut facts = native_console::Facts {
+        supported_core: native_console::supported_core(&console_family(config, &jar)),
+        paths: native_console::launch_paths(&java, &path, &jar),
+        bundled: native_console::bundled_runtime().map(|_| ()),
+        system: native_console::system_runtime(),
+        window: Ok(()),
+        window_confirmed: folder.join(CONSOLE_WINDOW_ALLOWED).is_file(),
+        limit: native_console::tier_limit(),
+    };
+    let title = presentation::console_window_title(root, &config.name);
+    let launch = native_console::Launch {
+        java: &java,
+        directory: &path,
+        jar: &jar,
+        jvm: &args,
+        nogui: velocity.is_none(),
+        folder: &folder,
+        title: &title,
+    };
+    let mut choice = native_console::choose(&facts);
+    let mut console = None;
+    while choice.tier != native_console::Tier::Plain {
+        // A tier that fails here has not started Java, so the next tier may.
+        let log = stdout.try_clone().map_err(fail)?;
+        match native_console::Console::spawn(choice.tier, &launch, log) {
+            Ok(started) => {
+                console = Some(started);
+                break;
+            }
+            Err(error) => {
+                eprintln!("Console tier {:?} unavailable: {error}", choice.tier);
+                match choice.tier {
+                    native_console::Tier::Bundled => facts.bundled = Err(error),
+                    native_console::Tier::System => facts.system = Err(error),
+                    _ => facts.window = Err(error),
+                }
+                choice = native_console::choose(&facts);
+            }
+        }
+    }
+    save(&folder.join(CONSOLE_TIER), &choice)?;
+    let mut child = if console.is_some() {
+        None
     } else {
         // Legacy Java resolves the local server JAR through a file URI. Passing
         // a verbatim Windows absolute path can make that URI invalid for ZipFS.
@@ -1821,7 +1909,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
             .creation_flags(HIDDEN)
             .spawn()
             .map_err(fail)?;
-        (Some(child), None)
+        Some(child)
     };
     let pid = child
         .as_ref()
@@ -1847,7 +1935,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     } else {
         None
     };
-    if let Some(console) = &console {
+    if let Some(console) = console.as_ref().filter(|console| console.tier() != native_console::Tier::Window) {
         match console.serve(&run, File::open(folder.join("stdout.log")).map_err(fail)?, recovery) {
             Ok(()) => mark_host_phase(&folder.join("native-console")),
             Err(error) => eprintln!("Native console is unavailable: {error}"),
@@ -1902,7 +1990,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
                 .filter(|policy| drained.is_ok() && policy.enabled() && policy.valid())
             {
                 if let Err(error) = auto_restart::record_exit(
-                    &folder, policy, &run, code, observed_at, ready_at, console.is_some(),
+                    &folder, policy, &run, code, observed_at, ready_at, console.as_ref().map(native_console::Console::tier),
                 ) {
                     record_host_error(&folder, "auto-restart-exit", &error);
                 }
@@ -2173,11 +2261,13 @@ fn lifecycle(
     )?;
     let mut output = match (verb, run) {
         ("start-if-current", None) if start_guard.is_some() => {
-            start(root, config, start_guard.and_then(|guard| guard.auto_attempt).unwrap_or(0))?
+            let attempt = start_guard.and_then(|guard| guard.auto_attempt).unwrap_or(0);
+            let console_window = start_guard.is_some_and(|guard| guard.console_window);
+            start(root, config, attempt, console_window)?
         }
         ("start" | "restart", None) => {
             let _transition = transition_guard(root, &config.name)?;
-            start(root, config, 0)?
+            start(root, config, 0, false)?
         }
         ("stop", Some(run)) => stop(root, config, run, false)?,
         ("force-stop", Some(run)) => stop(root, config, run, true)?,
@@ -2196,7 +2286,7 @@ fn lifecycle(
                 &child_directory(&child_directory(root, "runs")?, &config.name)?,
                 run,
             )?;
-            start(root, config, 0)?
+            start(root, config, 0, false)?
         }
         _ => return Err("InvalidOperationOrState".into()),
     };
@@ -2591,6 +2681,7 @@ pub fn dispatch_with_creation_progress(
             | "logs"
             | "world-settings"
             | "get-initialization"
+            | "console-plan"
     );
     let instance_writer = matches!(
         verb.as_str(),
@@ -2670,6 +2761,7 @@ pub fn dispatch_with_creation_progress(
     }
     match (verb.as_str(), rest) {
         ("status", []) => status(&root, &config),
+        ("console-plan", []) => console_plan(&root, &config),
         ("start" | "restart", [request]) => lifecycle(&root, &config, verb, request, None, None),
         ("start-if-current", [request, input]) => {
             let guard: StartGuard = serde_json::from_str(input).map_err(fail)?;
@@ -2740,6 +2832,7 @@ mod transition_tests {
             registration: None,
             previous_identity: None,
             auto_attempt: None,
+            console_window: false,
         };
         verify_start_guard(&observed, &guard).unwrap();
         let newer_force = json!({"state":"Stopped","run":{"id":"run-1"},"stopToken":"after"});
@@ -2753,6 +2846,7 @@ mod transition_tests {
             registration: None,
             previous_identity: None,
             auto_attempt: None,
+            console_window: false,
         };
         verify_start_guard(&newer_force, &fresh_user_intent).unwrap();
     }

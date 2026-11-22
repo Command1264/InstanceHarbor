@@ -1,0 +1,10 @@
+{
+  "package": "Microsoft.Windows.Console.ConPTY",
+  "version": "1.25.260930003",
+  "architecture": "x64",
+  "signer": "Microsoft Corporation",
+  "files": {
+    "conpty.dll": { "sha256": "feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a" },
+    "OpenConsole.exe": { "sha256": "3d66b23d0a71bb8eed2b77edc8b9df9bf54ce6c8fb74c863a30e760997f80586" }
+  }
+}

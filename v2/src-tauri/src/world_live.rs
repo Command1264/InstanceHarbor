@@ -122,6 +122,8 @@ impl ConsoleWindow {
         *expires = until;
         match input.write_command(line.trim_end_matches('\n'), deadline) {
             Ok(()) => "WorldCommandWritten",
+            // The user is typing a line in the console; nothing was written.
+            Err(error) if error == "ConsoleManagedInputBusy" => "WorldConsoleInputBusy",
             Err(_) => "WorldCommandUnconfirmed",
         }
     }
