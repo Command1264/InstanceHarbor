@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { errorText, manage, rawError } from '../manager'
+import { useAppLanguage } from '../i18n'
 import OperationButton from './OperationButton.vue'
 
 type TimePlan = {
@@ -20,6 +21,7 @@ type TimeReceipt = {
   observed?: string | null
   error?: string | null
 }
+const { t } = useAppLanguage()
 const props = defineProps<{ name: string; run?: string; ready: boolean; supported: boolean; connected: boolean; saving: boolean }>()
 const emit = defineEmits<{ (event: 'mutating'): void }>()
 const target = ref('')
@@ -91,7 +93,7 @@ async function prepare() {
     await nextTick()
     if (epoch === generation) dialog.value?.showModal()
   } catch (failure) {
-    if (epoch === generation) error.value = '無法核對目前的世界時間：' + errorText(failure)
+    if (epoch === generation) error.value = t('components.worldTime.readFailed', { reason: errorText(failure) })
   } finally {
     if (epoch === generation) phase.value = null
   }
@@ -120,23 +122,22 @@ async function applyTime() {
     if (epoch !== generation) return
     if (receipt.name !== name || receipt.request !== request) throw new Error('WorldReceiptMismatch')
     feedback.value = ''
-    if (receipt.state === 'NoChange') feedback.value = `目前世界時間已是 ${receipt.observed ?? confirmed.target} 刻。`
+    if (receipt.state === 'NoChange') feedback.value = t('components.worldTime.unchanged', { value: receipt.observed ?? confirmed.target })
     else if (receipt.state === 'Applied' || receipt.state === 'AwaitingNormalStop') {
-      feedback.value = `世界時間已調整，讀回 ${receipt.observed ?? confirmed.target} 刻。`
-      if (receipt.state === 'AwaitingNormalStop') feedback.value += '世界會在正常停止時存檔。'
+      feedback.value = t(receipt.state === 'AwaitingNormalStop' ? 'components.worldTime.adjustedSavedOnStop' : 'components.worldTime.adjusted', { value: receipt.observed ?? confirmed.target })
     } else {
       blocked.value = true
-      error.value = '世界時間調整的結果未確認。請到操作紀錄查看結果。'
+      error.value = t('components.worldTime.unconfirmed')
     }
   } catch (failure) {
     if (epoch === generation) {
       feedback.value = ''
       const reason = errorText(failure)
       if (/WorldPreviewExpired|WorldPreviewChanged|WorldRunUnavailable|WorldRunChanged|WorldRunNotReady/.test(rawError(failure))) {
-        error.value = '此確認已失效，請重新核對目前的世界時間。'
+        error.value = t('components.worldTime.expired')
       } else {
         blocked.value = true
-        error.value = `無法確認世界時間是否已調整：${reason}。請到操作紀錄查看結果。`
+        error.value = t('components.worldTime.applyFailed', { reason })
       }
     }
   } finally {
@@ -151,33 +152,33 @@ async function applyTime() {
 
 <template>
   <section class="world-time" aria-labelledby="world-time-title">
-    <h3 id="world-time-title">目前世界時間</h3>
+    <h3 id="world-time-title">{{ t('components.worldTime.title') }}</h3>
     <p id="world-time-help" class="hint">
-      <template v-if="!supported">尚未核對目前核心與版本是否支援調整世界時間。</template>
-      <template v-else-if="!ready">伺服器就緒後可即時調整世界時間。</template>
-      <template v-else>確認後即時調整目前運行中的世界。請輸入 0 到 23999 刻。</template>
+      <template v-if="!supported">{{ t('components.worldTime.unsupportedHelp') }}</template>
+      <template v-else-if="!ready">{{ t('components.worldTime.notReadyHelp') }}</template>
+      <template v-else>{{ t('components.worldTime.readyHelp') }}</template>
     </p>
     <div class="world-time-actions">
-      <label for="current-world-time">目標刻數</label>
+      <label for="current-world-time">{{ t('components.worldTime.target') }}</label>
       <input id="current-world-time" v-model="target" name="current-world-time" inputmode="numeric"
         autocomplete="off" aria-describedby="world-time-help" :aria-invalid="!!target && !valid || undefined"
         :disabled="!available || working" @input="edited = true">
-      <OperationButton ref="trigger" label="調整世界時間" :busy-label="phase === 'applying' ? '送出中' : '核對中'"
+      <OperationButton ref="trigger" :label="t('components.worldTime.adjust')" :busy-label="phase === 'applying' ? t('action.submitting') : t('action.checking')"
         :busy="working" :disabled="!available || !valid || readingClock" @click="prepare" />
     </div>
     <p class="world-time-status" :class="{ 'world-time-success': !phase && feedback }" role="status">
       {{ feedback }}
     </p>
-    <p v-if="target && !valid" class="form-error" role="alert">請輸入 0 到 23999 的整數。</p>
+    <p v-if="target && !valid" class="form-error" role="alert">{{ t('components.worldTime.invalid') }}</p>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
   </section>
   <dialog ref="dialog" class="compact" aria-labelledby="world-time-confirm" @close="dismiss">
-    <h2 id="world-time-confirm">確認調整世界時間</h2>
-    <p v-if="plan">核對時為 {{ plan.before }} 刻，目標為 {{ plan.target }} 刻。</p>
+    <h2 id="world-time-confirm">{{ t('components.worldTime.confirmTitle') }}</h2>
+    <p v-if="plan">{{ t('components.worldTime.plan', { before: plan.before, target: plan.target }) }}</p>
     
     <div class="dialog-actions">
-      <button type="button" autofocus @click="dialog?.close()">{{ phase === 'applying' ? '關閉' : '取消' }}</button>
-      <OperationButton class="primary" label="立即調整" busy-label="送出中" :busy="phase === 'applying'"
+      <button type="button" autofocus @click="dialog?.close()">{{ phase === 'applying' ? t('action.close') : t('action.cancel') }}</button>
+      <OperationButton class="primary" :label="t('components.worldTime.applyNow')" :busy-label="t('action.submitting')" :busy="phase === 'applying'"
         :disabled="!available" @click="applyTime" />
     </div>
   </dialog>

@@ -5,7 +5,7 @@ import OperationButton from './components/OperationButton.vue'
 import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import { formatDisplayTime, isMessageId, useAppLanguage, type TimeFormat } from './i18n'
 import type { Job } from './manager'
-const props=defineProps<{jobs:Job[]; initialLoading?:boolean; loaded?:boolean; error:string; batchError:string; cancellingBatch?:string; cancellingCoreBatch?:string; coreCancelFailure?:string; feedback:string; timeFormat?:TimeFormat}>()
+const props=defineProps<{jobs:Job[]; initialLoading?:boolean; loaded?:boolean; error:string; batchError:string; cancellingBatch?:string; cancellingCoreBatch?:string; coreCancelFailure?:string; feedback:''|'reading'|'read'; timeFormat?:TimeFormat}>()
 const emit = defineEmits<{(e:'refresh'):void;(e:'cancel-batch',id:string):void;(e:'cancel-core-batch',id:string):void}>()
 const { t, locale } = useAppLanguage()
 const coreOnly = ref(false)
@@ -61,7 +61,7 @@ function timeName(value?: number | null) {
 }
 </script>
 <template>
-  <header class="page-head"><div><h1>{{ t('activity.heading') }}</h1></div><div class="actions"><button :aria-pressed="!coreOnly" @click="coreOnly=false">{{ t('activity.all') }}</button><button :aria-pressed="coreOnly" @click="coreOnly=true">{{ t('activity.core') }}</button><OperationButton class="refresh-control" :label="t(feedback==='操作紀錄已讀取'?'activity.loaded':'activity.reload')" :busy-label="t('activity.loading')" :busy="feedback==='正在讀取操作紀錄'" @click="emit('refresh')" /></div></header>
+  <header class="page-head"><div><h1>{{ t('activity.heading') }}</h1></div><div class="actions"><button :aria-pressed="!coreOnly" @click="coreOnly=false">{{ t('activity.all') }}</button><button :aria-pressed="coreOnly" @click="coreOnly=true">{{ t('activity.core') }}</button><OperationButton class="refresh-control" :label="t(feedback==='read'?'activity.loaded':'activity.reload')" :busy-label="t('activity.loading')" :busy="feedback==='reading'" @click="emit('refresh')" /></div></header>
   <div class="actions activity-filter">
     <label>{{ t('activity.result') }} <select v-model="stateFilter" name="job-status">
       <option value="">{{ t('activity.allResults') }}</option>

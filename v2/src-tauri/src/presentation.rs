@@ -347,10 +347,13 @@ pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
     json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core})
 }
 
-pub(super) fn capabilities() -> Value {
+/// `nativeConsole` follows the workspace switch file that makes new runs start in the native console.
+/// Without it no run can offer a console, so the GUI hides every console entry.
+pub(super) fn capabilities(root: &Path) -> Value {
+    let native_console = root.join("native-console.enabled").is_file();
     json!({"instanceSettings":true,"javaDiscovery":true,"javaSelection":true,"logs":true,
         "removeManagement":true,"adopt":true,"openLogFolder":true,
-        "coreMaintenance":true,"nativeConsole":false,"worldSettings":true,"initialization":true,"scanPaths":true})
+        "coreMaintenance":true,"nativeConsole":native_console,"worldSettings":true,"initialization":true,"scanPaths":true})
 }
 
 fn presentation(root: &Path, include_preferences: bool) -> Result<Value> {
@@ -1408,6 +1411,17 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn native_console_capability_follows_the_workspace_switch_file() {
+        let root = std::env::temp_dir().join(format!("ih-console-cap-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&root).unwrap();
+        assert_eq!(capabilities(&root)["nativeConsole"], false);
+        fs::write(root.join("native-console.enabled"), b"").unwrap();
+        assert_eq!(capabilities(&root)["nativeConsole"], true);
+        fs::remove_file(root.join("native-console.enabled")).unwrap();
+        fs::remove_dir(&root).unwrap();
+    }
 
     #[test]
     fn close_to_tray_defaults_on_and_is_only_written_when_off() {

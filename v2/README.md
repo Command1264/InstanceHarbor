@@ -36,6 +36,13 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   視窗關不掉時，先找這些事件。
 - 回退相容：此設定維持預設時不寫入 `preferences.json`。若已關閉此設定，回退到 `1.0.0-rc2` 前請先重新開啟並儲存，否則舊版無法讀取外觀設定。
 
+## 介面語言
+
+- 介面文字放在 `src/i18n.ts`（共用字串）與 `src/messages/*.ts`（依區域分檔）。每筆為 `[繁體中文, English]`，兩種語言的 `{參數}` 必須相同。
+- 元件用 `useAppLanguage()` 的 `t()`；元件外的程式（例如 `manager.ts`）用 `tr()`，同樣跟隨目前語言。
+- `src/hardcoded-text.test.mjs` 會在 `.vue`、`.ts` 出現寫死的中文時失敗。資料用途的中文（語言名稱、後端送來的分類 ID）列在測試的允許清單。開發者用的 `console` 訊息使用英文。
+- 「初始化預設」與世界設定的欄位資料由後端 `policy_catalog.rs` 提供。後端回傳的中文 `label`、`reason`、`source` 保持不變，另附 `reasonCode`、`sourceKind`、`sourceKey`；前端依欄位 key 與這些代碼翻譯（`src/messages/policy.ts`）。新增欄位或原因時，`policy-catalog.test.mjs` 會要求補上翻譯，且中文必須與後端一致。
+
 ## Windows 檔案存取與部分清單
 
 - `ihctl WORKSPACE list` 保留 JSON 陣列，個別登記無法讀取時會把原因寫到標準錯誤。

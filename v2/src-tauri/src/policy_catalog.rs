@@ -136,6 +136,32 @@ fields! {
     }
 }
 
+/// Stable codes for why a field cannot be edited. The frontend translates the
+/// code; `reason_text` keeps the original Chinese text in the JSON `reason`.
+pub(super) const REASONS: &[(&str, &str)] = &[
+    ("newWorldOnly", "此項只供新建世界設定。"),
+    ("noFieldForVersion", "此核心版本沒有對應的欄位或規則。"),
+    ("jvmFlagUnverified", "需要另外確認核心的 JVM 旗標。"),
+    ("resourcePackGroup", "資源包網址與驗證資訊需要成組核對。"),
+    ("overrideUnverified", "未能從此版本的設定檔核對可寫的覆寫值。"),
+    ("effectiveDistance", "需核對核心的有效距離後才能修改此覆寫值。"),
+    ("yamlNotWired", "尚未接入 YAML 安全寫入與讀回。"),
+    ("ruleReadback", "尚未接入已核對工作階段的遊戲規則讀回。"),
+    ("timeReadback", "時間需要獨立確認及工作階段讀回。"),
+    ("profileUnknown", "無法核對核心與 Minecraft 版本。"),
+    ("spigotOverride", "Spigot 可能覆寫此值，需先核對有效設定。"),
+    ("noUniqueValue", "找不到唯一的目前值，需先核對設定檔。"),
+    ("manualFormat", "此值的格式需要人工處理。"),
+    ("valueOutOfFormat", "目前值超出此欄位可核對的格式。"),
+];
+
+pub(super) fn reason_text(code: &str) -> &'static str {
+    REASONS
+        .iter()
+        .find(|(candidate, _)| *candidate == code)
+        .map_or("", |(_, text)| text)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Binding {
     Properties,
@@ -194,7 +220,7 @@ impl Field {
         let pre116 = pre114 || matches!(profile.version, "1.14" | "1.14.4");
         let pre120 = pre116 || profile.version == "1.16.5";
         if existing && matches!(self.key, "worldType" | "level-seed" | "generate-structures") {
-            return ("unsupported", "此項只供新建世界設定。");
+            return ("unsupported", "newWorldOnly");
         }
         let unsupported = match self.key {
             "simulation-distance"
@@ -212,15 +238,15 @@ impl Field {
             _ => false,
         };
         if unsupported {
-            return ("unsupported", "此核心版本沒有對應的欄位或規則。");
+            return ("unsupported", "noFieldForVersion");
         }
         if self.key == "sync-chunk-writes" && profile.family != "SPIGOT" {
-            return ("unverified", "需要另外確認核心的 JVM 旗標。");
+            return ("unverified", "jvmFlagUnverified");
         }
         if (self.key.starts_with("resource-pack") || self.key == "require-resource-pack")
             && !profile.current_storage()
         {
-            return ("unverified", "資源包網址與驗證資訊需要成組核對。");
+            return ("unverified", "resourcePackGroup");
         }
         match self.binding(profile) {
             Binding::Yaml(_, _) if self.key == "allow-nether" => ("available", ""),
@@ -228,20 +254,20 @@ impl Field {
                 if matches!(profile.version, "1.14" | "1.14.4")
                     && matches!(self.key, "view-distance" | "trident-despawn-rate") =>
             {
-                ("unverified", "未能從此版本的設定檔核對可寫的覆寫值。")
+                ("unverified", "overrideUnverified")
             }
             Binding::Yaml("spigot.yml", _)
                 if profile.family != "SPIGOT"
                     && matches!(self.key, "view-distance" | "simulation-distance") =>
             {
-                ("unverified", "需核對核心的有效距離後才能修改此覆寫值。")
+                ("unverified", "effectiveDistance")
             }
             Binding::Yaml("spigot.yml", _) => ("available", ""),
-            Binding::Yaml(_, _) => ("unverified", "尚未接入 YAML 安全寫入與讀回。"),
+            Binding::Yaml(_, _) => ("unverified", "yamlNotWired"),
             Binding::Rule(_) if !existing && world_live::first_ready::supports(profile.version, self.section, self.key) => ("available", ""),
-            Binding::Rule(_) => ("unverified", "尚未接入已核對工作階段的遊戲規則讀回。"),
+            Binding::Rule(_) => ("unverified", "ruleReadback"),
             Binding::Time if !existing => ("available", ""),
-            Binding::Time => ("unverified", "時間需要獨立確認及工作階段讀回。"),
+            Binding::Time => ("unverified", "timeReadback"),
             _ => ("available", ""),
         }
     }
@@ -249,9 +275,15 @@ impl Field {
     pub(super) fn describe(&self, profile: Option<Profile>, existing: bool) -> Value {
         let binding = profile.map(|profile| self.binding(profile));
         let (status, reason) = profile.map_or(
-            ("unverified", "無法核對核心與 Minecraft 版本。"),
+            ("unverified", "profileUnknown"),
             |profile| self.gate(profile, existing),
         );
+        let (source_kind, source_key) = match binding {
+            Some(Binding::Rule(key)) => ("rule", key),
+            Some(Binding::Time) => ("time", ""),
+            Some(_) => ("file", ""),
+            None => ("", ""),
+        };
         let source = match binding {
             Some(Binding::Properties) => format!("server.properties · {}", self.key),
             Some(Binding::Yaml("spigot.yml", key)) => {
@@ -293,8 +325,9 @@ impl Field {
             "unverified"
         };
         json!({"key": self.id(), "label": self.label, "category": category, "source": source,
+            "sourceKind": source_kind, "sourceKey": source_key, "reasonCode": reason,
             "kind": kind, "min": min, "max": max, "choices": choices, "common": self.common,
-            "status": status, "evidence": evidence, "reason": reason})
+            "status": status, "evidence": evidence, "reason": reason_text(reason)})
     }
 
     pub(super) fn normalize(&self, value: &str, profile: Profile) -> Result<String> {
@@ -343,6 +376,24 @@ impl Field {
 #[cfg(test)]
 mod yaml_version_tests {
     use super::*;
+
+    #[test]
+    fn every_blocked_field_reports_a_known_reason_code() {
+        for (family, versions) in PROFILES {
+            for version in *versions {
+                let profile = Profile::resolve(family, version).unwrap();
+                for field in FIELDS {
+                    for existing in [false, true] {
+                        let (status, code) = field.gate(profile, existing);
+                        let text = reason_text(code);
+                        assert_eq!(status == "available", code.is_empty(), "{family} {version} {}", field.id());
+                        assert!(code.is_empty() || !text.is_empty(), "unknown reason code {code}");
+                    }
+                }
+            }
+        }
+        assert!(!reason_text("profileUnknown").is_empty());
+    }
 
     #[test]
     fn real_core_yaml_matrix_keeps_unsupported_and_inherited_values_closed() {
