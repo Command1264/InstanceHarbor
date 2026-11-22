@@ -125,6 +125,8 @@ function menuAction(id:string){
 watch(()=>visible.value.map(row=>row.name).join('\u0000'),()=>{if(menu.value&&!visible.value.some(row=>row.name===menu.value!.name))closeMenu(false)})
 const chosen = computed(() => props.rows.filter(row => selected.value.includes(row.name)))
 const consoleTargets = computed(() => chosen.value.filter(canOpenConsole))
+// The row stays in place; a stopped instance or a run without a record shows a dash.
+function consoleText(row: Instance) { return row.console && canStop(row) ? consoleSummary(row.console) : '--' }
 const consoleHint = computed(() => t('instances.consoleHint'))
 const single = computed(() => chosen.value.length === 1 ? chosen.value[0] : undefined)
 const currentMeta = computed(() => single.value && metaByName.value.get(single.value.name))
@@ -263,8 +265,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
         <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
-        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><template v-if="single.console && canStop(single)"><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleSummary(single.console) }}</dd></template></dl>
-        <p v-if="single.console?.tier==='window' && canStop(single)" class="notice" role="note">{{ t('console.windowWarning') }}</p>
+        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
         <div class="detail-actions">
           <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>
           <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?t('instance.state.starting'):isQueued(single)?t('activity.state.Queued'):t('activity.action.start') }}</button>
