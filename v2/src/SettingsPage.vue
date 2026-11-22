@@ -14,7 +14,7 @@ import OverlayScroll from './components/OverlayScroll.vue'
 import PolicyFields from './components/PolicyFields.vue'
 import RecoveryKeyPanel from './components/RecoveryKeyPanel.vue'
 import WorldLiveControls from './components/WorldLiveControls.vue'
-import { isWorldRule, validWorldRuleValue, verifiedWorldRuleReceipt, type InitializationSnapshot, type PolicyProfile, type WorldLiveValue, type WorldPreview, type WorldRuleSaveReceipt, type WorldSnapshot } from './policy-settings'
+import { isWorldRule, policyLabel, validWorldRuleValue, verifiedWorldRuleReceipt, type InitializationSnapshot, type PolicyProfile, type WorldLiveValue, type WorldPreview, type WorldRuleSaveReceipt, type WorldSnapshot } from './policy-settings'
 import { applySelectionOpacity, refreshSelectionColor, refreshSelectionTheme, resolveSelectionColor, resolveSelectionOpacity, resolveTheme } from './theme'
 import { displayPath } from './path-display'
 import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm, type AutoRestart, type AutoRestartStatus, type LifecycleTiming, type InstanceSettings, type JavaCandidate, type Preferences, type PreferencesSnapshot } from './manager'
@@ -528,6 +528,7 @@ const globalJavaCanSave=computed(()=>!!savedGlobalJava.value && dirty.value &&
 const javaCanSave = computed(() => javaFieldsReady.value && typeof settings.port === 'number' &&
   integerIn(settings.port, 1, 65535) && (dirty.value || instancePending.value?.state === 'Conflict'))
 watch(dirty,value=>{emit('dirty',value);if(value){saveSucceeded.value=false;if(message.value && message.value===savedText.value)message.value=''}},{immediate:true})
+function worldFieldLabel(key:string){const row=world.value?.rows.find(candidate=>candidate.key===key);return row?policyLabel(row):key}
 const saveFailedMessage=computed(()=>!!message.value && message.value===failureText.value)
 function markSaved(){baseline.value=draftSignature.value}
 function switchTab(next:Tab){if(saving.value||next===tab.value)return;if(dirty.value){pendingTab.value=next;discardDialog.value?.showModal()}else tab.value=next}
@@ -771,7 +772,7 @@ function validateWorldRules(rules: Record<string, string>) {
     const row = world.value?.rows.find(item => item.key === key)
     if (!row || !isWorldRule(row) || !worldLiveValues.value[key] || row.status === 'unsupported')
       throw new Error(t('settingsPage.worldRuleScopeUnverified'))
-    if (!validWorldRuleValue(row, value)) throw new Error(t('settingsPage.worldRuleValueCheck', { label: row.label }))
+    if (!validWorldRuleValue(row, value)) throw new Error(t('settingsPage.worldRuleValueCheck', { label: policyLabel(row) }))
   }
 }
 async function previewWorldFile(name: string, revision: string, values: Record<string,string>) {
@@ -1187,7 +1188,7 @@ void load()
             </template>
             <ul v-if="world.yamlPreflight?.changes.length">
               <li v-for="change in world.yamlPreflight.changes" :key="change.file + ':' + change.key">
-                <strong>{{ world.rows.find(row => row.key === change.key)?.label ?? change.key }}</strong>
+                <strong>{{ worldFieldLabel(change.key) }}</strong>
                 <code class="hint" translate="no">{{ change.file }}</code>
                 <p class="world-preflight-values">{{ t('settingsPage.yamlOriginal') }} <bdi translate="no">{{ change.before ?? t('settingsPage.yamlNotRead') }}</bdi>{{ t('settingsPage.yamlReadBack') }} <bdi translate="no">{{ change.after ?? t('settingsPage.yamlNotRead') }}</bdi></p>
               </li>
@@ -1362,7 +1363,7 @@ void load()
   <dialog ref="worldConfirmDialog" class="compact" aria-labelledby="world-confirm-title" @close="worldSavePlan=undefined">
     <h2 id="world-confirm-title">{{ t('settingsPage.worldConfirmTitle') }}</h2>
     <ul v-if="worldReviewedChanges.length"><li v-for="change in worldReviewedChanges" :key="change.key">
-      {{ world?.rows.find(row=>row.key===change.key)?.label ?? change.key }} · {{ change.before || t('settingsPage.empty') }} → {{ change.after || t('settingsPage.empty') }}
+      {{ worldFieldLabel(change.key) }} · {{ change.before || t('settingsPage.empty') }} → {{ change.after || t('settingsPage.empty') }}
       <small v-if="change.path" class="hint">{{ change.path }}</small>
     </li></ul>
     <p v-else>{{ t('settingsPage.worldDraftSame') }}</p>

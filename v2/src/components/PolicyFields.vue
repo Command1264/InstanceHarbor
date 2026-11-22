@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useAppLanguage, type MessageId } from '../i18n'
-import { isWorldRule, validWorldRuleValue, type PolicyRow, type WorldLiveValue } from '../policy-settings'
+import { isWorldRule, policyLabel, policyReason, policySource, validWorldRuleValue, type PolicyRow, type WorldLiveValue } from '../policy-settings'
 
 const props = defineProps<{
   mode: 'initialization' | 'world'
@@ -29,7 +29,7 @@ watch(availableCategories, choices => {
 const visibleRows = computed(() => {
   const search = query.value.trim().toLowerCase()
   return rows.value.filter(row => search
-    ? [fieldLabel(row), row.key, row.source, row.category].some(text => text.toLowerCase().includes(search))
+    ? [fieldLabel(row), row.label, row.key, policySource(row), row.source, row.category, t(categoryLabels[row.category] ?? 'components.policy.category.server')].some(text => text.toLowerCase().includes(search))
     : row.category === category.value)
 })
 const choices: Record<string, MessageId> = {
@@ -41,7 +41,7 @@ function valueLabel(value: string | null | undefined) {
   return value == null ? t('components.policy.value.unchecked') : choices[value] ? t(choices[value]) : (value || t('components.policy.value.empty'))
 }
 function fieldLabel(row: PolicyRow) {
-  return props.mode === 'initialization' && row.key === 'initialTime' ? t('components.policy.initialTime') : row.label
+  return props.mode === 'initialization' && row.key === 'initialTime' ? t('components.policy.initialTime') : policyLabel(row)
 }
 function editable(row: PolicyRow) {
   if (liveRow(row)) return props.liveValues?.[row.key] !== undefined && row.status !== 'unsupported'
@@ -52,7 +52,7 @@ function liveRow(row: PolicyRow) {
 }
 function liveLabel(row: PolicyRow) {
   const observation = props.liveValues?.[row.key]
-  if (!observation) return row.status === 'unsupported' ? row.reason || t('components.policy.unsupportedVersion') : t('components.policy.notChecked')
+  if (!observation) return row.status === 'unsupported' ? policyReason(row) || t('components.policy.unsupportedVersion') : t('components.policy.notChecked')
   const value = valueLabel(observation.target ?? observation.value)
   switch (observation.state) {
     case 'Queued': return t('components.policy.live.queued', { value })
@@ -135,12 +135,12 @@ function scrollNumber(event: WheelEvent) {
           :maxlength="row.kind === 'text' ? row.max ?? undefined : undefined"
           @input="update(row, $event)" @wheel="row.kind === 'integer' && scrollNumber($event)">
       </template>
-      <small v-if="row.source" :id="`${mode}-${row.key}-source`" class="hint">{{ row.source }}</small>
+      <small v-if="row.source" :id="`${mode}-${row.key}-source`" class="hint">{{ policySource(row) }}</small>
       <small v-if="liveRow(row)" :id="`${mode}-${row.key}-result`" class="hint">{{ liveLabel(row) }}</small>
       <small v-if="invalidRuleDraft(row)" :id="`${mode}-${row.key}-error`" class="form-error" role="alert">
         {{ t('components.policy.integerRange', { min: row.min ?? 0, max: row.max ?? 32767 }) }}
       </small>
-      <small v-if="!liveRow(row) && row.status !== 'available'" class="hint">{{ row.status === 'unsupported' ? t('components.policy.unsupportedReason', { reason: row.reason ?? '' }) : t('components.policy.notCheckedReason', { reason: row.reason ?? '' }) }}</small>
+      <small v-if="!liveRow(row) && row.status !== 'available'" class="hint">{{ row.status === 'unsupported' ? t('components.policy.unsupportedReason', { reason: policyReason(row) }) : t('components.policy.notCheckedReason', { reason: policyReason(row) }) }}</small>
       <small v-else-if="!liveRow(row) && mode === 'world' && values[row.key] !== row.value" class="hint">
         {{ valueLabel(row.value) }} → {{ valueLabel(values[row.key]) }}
       </small>
