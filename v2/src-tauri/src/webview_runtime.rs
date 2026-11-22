@@ -3,6 +3,7 @@
 //! alive with no window, which holds the GUI lock and silently blocks every later
 //! launch. This check runs on every launch, so a later removal is reported too.
 use instanceharbor_v2::desktop_channel;
+use std::{env, fs, os::windows::fs::MetadataExt, path::PathBuf};
 
 /// Microsoft's permanent link to the Evergreen Standalone Installer for x64.
 const STANDALONE_X64: &str = "https://go.microsoft.com/fwlink/?linkid=2124701";
@@ -34,10 +35,43 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain([0]).collect()
 }
 
-/// The GUI's language setting lives in the workspace, which is not bound yet.
-/// Like the GUI's resolveLanguage, only an English system gets English.
-fn chinese() -> bool {
-    (unsafe { GetUserDefaultUILanguage() } & 0x3ff) != 0x09
+/// The workspace the GUI would bind, found without creating or initializing anything.
+fn configured_workspace() -> Option<PathBuf> {
+    let stable_default = !desktop_channel::DEVELOPMENT
+        && env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--stable-default"));
+    if !stable_default {
+        if let Some(workspace) = env::var_os("IH_V2_WORKSPACE").filter(|path| !path.is_empty()) {
+            return Some(workspace.into());
+        }
+    }
+    // The development channel always names its workspace.
+    if desktop_channel::DEVELOPMENT {
+        return None;
+    }
+    let appdata = PathBuf::from(env::var_os("LOCALAPPDATA")?);
+    Some(appdata.join("InstanceHarbor").join("workspaces").join("default"))
+}
+
+/// The `language` saved in the workspace's preferences.json, read only. The GUI
+/// cannot start at this point, so any problem simply means "no saved setting".
+fn saved_language() -> Option<String> {
+    let path = configured_workspace()?.join("preferences.json");
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    if !metadata.is_file() || metadata.file_attributes() & 0x400 != 0 || metadata.len() > 1 << 20 {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    value.get("language")?.as_str().map(str::to_owned)
+}
+
+/// InstanceHarbor's setting when it names a language; otherwise the Windows
+/// display language: Traditional Chinese (Taiwan, Hong Kong, Macao) or English.
+pub(super) fn chinese(saved: Option<&str>, ui_language: u16) -> bool {
+    match saved {
+        Some("zh-TW") => true,
+        Some("en") => false,
+        _ => matches!(ui_language, 0x0404 | 0x0C04 | 0x1404),
+    }
 }
 
 pub(super) fn message(chinese: bool) -> String {
@@ -64,7 +98,8 @@ pub(super) fn ensure_available() -> bool {
     if tauri::webview_version().is_ok() {
         return true;
     }
-    let text = wide(&message(chinese()));
+    let ui_language = unsafe { GetUserDefaultUILanguage() };
+    let text = wide(&message(chinese(saved_language().as_deref(), ui_language)));
     let title = wide(desktop_channel::TITLE);
     // MB_YESNO | MB_ICONERROR | MB_DEFBUTTON1; IDYES = 6.
     if unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x4 | 0x10) } == 6 {
@@ -89,6 +124,23 @@ mod tests {
         assert!(message(false).contains("Evergreen Standalone Installer for x64"));
         for chinese in [true, false] {
             assert!(message(chinese).contains(DOWNLOAD_PAGE));
+        }
+    }
+
+    #[test]
+    fn a_saved_language_wins_and_otherwise_english_is_the_default() {
+        // zh-TW, en-US, zh-CN and ja-JP Windows display languages.
+        for ui in [0x0404, 0x0409, 0x0804, 0x0411] {
+            assert!(chinese(Some("zh-TW"), ui));
+            assert!(!chinese(Some("en"), ui));
+        }
+        for saved in [None, Some("system"), Some("unknown")] {
+            assert!(chinese(saved, 0x0404));
+            assert!(chinese(saved, 0x0C04));
+            assert!(chinese(saved, 0x1404));
+            assert!(!chinese(saved, 0x0409));
+            assert!(!chinese(saved, 0x0804));
+            assert!(!chinese(saved, 0x0411));
         }
     }
 }

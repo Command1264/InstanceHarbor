@@ -273,6 +273,9 @@ Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。ZIP 使用者請�
 Setup 每次執行都先檢查 WebView2 Runtime；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」的 x64 版，
 可直接開啟 Microsoft 下載，並在寫入前停止（靜默安裝回傳退出碼 3）。InstanceHarbor 每次啟動也做同樣檢查，
 缺少時提示後結束，不會留下沒有視窗的背景程序。
+這個提示不需 GUI 啟動即可決定語言：先唯讀讀取將使用的工作區 `preferences.json` 的語言設定；
+設為「跟隨系統」或讀不到時，看 Windows 顯示語言，繁體中文（台灣、香港、澳門）顯示繁中，其他一律英文。
+Setup 的對話框用同一條系統語言規則。
 已安裝時，Setup 比較版本：較舊時詢問是否更新，相同時詢問是否修復（重新安裝程式檔案），
 較新時預設拒絕並詢問是否確定退回舊版。工作區資料一律保留；InstanceHarbor 仍在執行時，Setup 不替換檔案。
 使用者取消時退出碼為 4。版本順序由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。

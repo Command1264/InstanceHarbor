@@ -31,8 +31,9 @@ VIAddVersionKey "LegalCopyright" "InstanceHarbor contributors"
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "TradChinese"
+; The first language is the default for a Windows display language Setup does not include.
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "TradChinese"
 
 ; The version recorded by the installation that this Setup replaces, or empty.
 Var Installed
@@ -75,6 +76,15 @@ abort:
 FunctionEnd
 
 Function .onInit
+  ; Same rule as InstanceHarbor's WebView2 prompt: Traditional Chinese for a
+  ; zh-TW, zh-HK or zh-MO display language, English for every other one.
+  StrCpy $LANGUAGE ${LANG_ENGLISH}
+  System::Call 'kernel32::GetUserDefaultUILanguage() i.r0'
+  ${If} $0 = 0x0404
+  ${OrIf} $0 = 0x0C04
+  ${OrIf} $0 = 0x1404
+    StrCpy $LANGUAGE ${LANG_TRADCHINESE}
+  ${EndIf}
   ${IfNot} ${RunningX64}
     MessageBox MB_ICONSTOP "$(NeedX64)" /SD IDOK
     SetErrorLevel 2

@@ -73,3 +73,13 @@ test('the GUI checks WebView2 before it takes the single-instance lock', () => {
   const check = main.indexOf('webview_runtime::ensure_available()')
   assert.ok(check > 0 && check < main.indexOf('gui_singleton::acquire()'))
 })
+
+test('the WebView2 prompt and Setup default to English unless Traditional Chinese is chosen', () => {
+  const setup = read('../windows-setup.nsi')
+  assert.ok(setup.indexOf('MUI_LANGUAGE "English"') < setup.indexOf('MUI_LANGUAGE "TradChinese"'))
+  assert.ok(setup.indexOf('StrCpy $LANGUAGE ${LANG_ENGLISH}') < setup.indexOf('${IfNot} ${RunningX64}'))
+  for (const id of ['0x0404', '0x0C04', '0x1404']) assert.ok(setup.includes(`$0 = ${id}`), id)
+  const prompt = read('../src-tauri/src/webview_runtime.rs')
+  assert.match(prompt, /matches!\(ui_language, 0x0404 \| 0x0C04 \| 0x1404\)/)
+  assert.match(prompt, /join\("preferences\.json"\)/)
+})
