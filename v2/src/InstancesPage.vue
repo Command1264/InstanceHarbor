@@ -180,6 +180,8 @@ function escapeClears(event: KeyboardEvent) {
   const target = event.target
   if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"], [role="menu"]')) return
   clearSelection()
+  // Leave no focus frame on a row that is no longer selected; a click on empty space behaves the same way.
+  if (document.activeElement instanceof HTMLElement && document.activeElement.matches('.instances tbody tr')) document.activeElement.blur()
 }
 // A click on empty list space clears the selection; rows, controls and scrollbars keep it.
 function blankClickClears(event: MouseEvent) {
