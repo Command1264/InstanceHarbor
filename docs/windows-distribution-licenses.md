@@ -59,7 +59,7 @@ A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must conta
    $packed = v2/pack-windows.ps1 -BinaryDirectory $binaries -ConsoleRuntimeDirectory $binaries -NoticeDirectory $notices -OutputZip $zip -Version 1.0.0
    ```
 
-5. Build Setup from the ZIP and the SHA-256 that step 4 returned, with the NSIS 3.08 compiler.
+5. Build Setup from the ZIP and the SHA-256 that step 4 returned, with the NSIS 3.08 compiler. SourceForge refuses scripted downloads; `winget download --id NSIS.NSIS --version 3.08` fetches the official installer and checks its SHA-256 (`bbc76be36ecb2fc00d493c91befdaf71654226ad8a4fc4dc338458916bf224d0`). Install it to a folder of your choice with `/S /D=<folder>`; it needs administrator rights and does not change `PATH`.
 
    ```powershell
    v2/pack-windows-setup.ps1 -Package $zip -ExpectedPackageSha256 $packed.sha256 -Compiler $makensis -Output $setup

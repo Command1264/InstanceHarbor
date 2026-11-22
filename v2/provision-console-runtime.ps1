@@ -51,10 +51,11 @@ if ($sourceItem.PSIsContainer) {
     }
 } elseif ($sourceItem.Extension -ceq '.nupkg') {
     # The whole package must be the pinned NuGet release before any entry is read.
-    $source = $manifest.source
-    if ($sourceItem.Length -ne $source.bytes) { throw "The ConPTY package size does not match $($manifest.version)." }
+    # Not $source: PowerShell names are case-insensitive and $Source is a [string] parameter.
+    $pinned = $manifest.source
+    if ($sourceItem.Length -ne $pinned.bytes) { throw "The ConPTY package size does not match $($manifest.version)." }
     $packageBytes = [IO.File]::ReadAllBytes($sourceItem.FullName)
-    if ((Get-Sha256 $packageBytes) -cne $source.sha256) { throw "The ConPTY package SHA-256 does not match $($manifest.version)." }
+    if ((Get-Sha256 $packageBytes) -cne $pinned.sha256) { throw "The ConPTY package SHA-256 does not match $($manifest.version)." }
     Add-Type -AssemblyName System.IO.Compression
     $archive = [IO.Compression.ZipArchive]::new([IO.MemoryStream]::new($packageBytes), [IO.Compression.ZipArchiveMode]::Read)
     try {
