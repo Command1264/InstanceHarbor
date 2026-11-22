@@ -69,6 +69,7 @@ export const componentsMessages = {
   'components.policy.unsupportedVersion': ['此版本不支援', 'Not supported in this version'],
   'components.policy.notChecked': ['尚未核對', 'Not checked yet'],
   'components.policy.live.queued': ['已儲存，下次啟動時生效 · {value}', 'Saved. Takes effect at next start · {value}'],
+  'components.policy.live.liveRetry': ['已儲存，後台那一行輸入完成後即時套用 · {value}', 'Saved. Applies live once the console line is entered · {value}'],
   'components.policy.live.applying': ['正在套用 · {value}', 'Applying · {value}'],
   'components.policy.live.awaitingNormalStop': ['已核對生效 · {value}', 'Verified in effect · {value}'],
   'components.policy.live.unconfirmed': ['結果未確認，請查看操作紀錄', 'Outcome unconfirmed. Check Activity.'],

@@ -387,7 +387,7 @@ pub(super) fn console_window_title(root: &Path, name: &str) -> String {
 
 /// Turns the VT output a pseudoconsole writes into `stdout.log` into plain
 /// lines for the Logs dialog. The file on disk keeps the original bytes.
-fn readable_terminal(text: &str) -> String {
+pub(super) fn readable_terminal(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {

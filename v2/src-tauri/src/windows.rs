@@ -1967,6 +1967,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     let mut tail = Vec::new();
     let mut chunk = [0u8; 8192];
     let mut read_error_reported = false;
+    let mut live_retry_clock = Instant::now();
     loop {
         let exited = match &mut child {
             Some(child) => child
@@ -1991,6 +1992,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
             {
                 if let Err(error) = auto_restart::record_exit(
                     &folder, policy, &run, code, observed_at, ready_at, console.as_ref().map(native_console::Console::tier),
+                    velocity.is_some(),
                 ) {
                     record_host_error(&folder, "auto-restart-exit", &error);
                 }
@@ -2127,7 +2129,29 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
             && !folder.join("stop-queued").exists()
             && !folder.join("stop-sent").exists();
         use std::sync::atomic::Ordering;
-        if commands_ready && (first_plan.is_some() || queued_world) {
+        // Retry live-first rules this run could not send yet, for example while the
+        // user was typing in the console. The managed writer waits for an empty line.
+        let mut live_retry = false;
+        if commands_ready
+            && first_plan.is_none()
+            && !queued_world
+            && !first_active.load(Ordering::Acquire)
+            && live_retry_clock.elapsed() >= Duration::from_secs(2)
+        {
+            live_retry_clock = Instant::now();
+            live_retry = world_live::queued::has_live_retry(root, &config.name, run_id).unwrap_or_else(|error| {
+                record_host_error(&folder, "live-retry", &error);
+                false
+            });
+            if live_retry {
+                // Another managed writer, such as a world command window, keeps its turn.
+                match console.as_ref().map(native_console::Console::begin_managed_input).transpose() {
+                    Ok(managed) => first_console = managed,
+                    Err(_) => live_retry = false,
+                }
+            }
+        }
+        if commands_ready && (first_plan.is_some() || queued_world || live_retry) {
                 let plan = first_plan.take();
                 let apply_queued = std::mem::take(&mut queued_world);
                 first_active.store(true, Ordering::Release);
@@ -2153,6 +2177,14 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
                     if apply_queued {
                         if let Err(error) = world_live::queued::apply_queued(&root, &config, &run, &write) {
                             record_host_error(&folder, "queued-world", &error);
+                        }
+                    }
+                    if live_retry {
+                        if let Err(error) = world_live::queued::apply_live_retry(&root, &config, &run, &write) {
+                            // Busy console lines stay due and are retried on a later pass.
+                            if error != "WorldConsoleInputBusy" && error != "ConsoleManagedInputBusy" {
+                                record_host_error(&folder, "live-retry", &error);
+                            }
                         }
                     }
                     drop(managed);

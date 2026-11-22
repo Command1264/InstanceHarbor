@@ -1,5 +1,6 @@
 //! Bound automatic restart decisions to a drained same-run exit and durable budget.
 use super::*;
+use std::io::{Seek, SeekFrom};
 
 const EXIT: &str = "auto-restart-exit.json";
 const STATE: &str = "auto-restart-state.json";
@@ -31,6 +32,25 @@ fn window_stop_code(code: i32) -> bool {
     matches!(code, 0 | 130 | 143) || code == 0xC000_013A_u32 as i32
 }
 
+/// Reads the end of the run's console output for the feedback of a stop
+/// command issued from the console itself.
+fn console_stop_logged(stdout: &Path) -> bool {
+    const TAIL: u64 = 256 * 1024;
+    let Ok(mut file) = File::open(stdout) else { return false };
+    let size = file.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(size.saturating_sub(TAIL))).is_err() || file.read_to_end(&mut bytes).is_err() {
+        return false;
+    }
+    console_stop_line(&presentation::readable_terminal(&String::from_utf8_lossy(&bytes)))
+}
+
+fn console_stop_line(text: &str) -> bool {
+    text.lines().any(|line| {
+        line.split_once("]: ").is_some_and(|(_, message)| message.trim() == "Stopping the server")
+    })
+}
+
 fn unverified_stop(folder: &Path, observed_at: u64) -> Result<bool> {
     let entered: Option<u64> = optional(&folder.join(native_console::LINE_UNVERIFIED))?;
     Ok(entered.is_some_and(|at| at <= observed_at && observed_at - at <= UNVERIFIED_STOP_WINDOW_MS))
@@ -48,8 +68,14 @@ pub(super) fn record_exit(
     observed_at: u64,
     ready_at: Option<u64>,
     console: Option<native_console::Tier>,
+    velocity: bool,
 ) -> Result<()> {
     let pseudoconsole = matches!(console, Some(native_console::Tier::Bundled | native_console::Tier::System));
+    // Paper and Folia answer a stop typed in their own console with a bare
+    // "Stopping the server" line; RCON and players show as "[Rcon: ...]".
+    let console_stop = console.is_some_and(|tier| tier != native_console::Tier::Plain)
+        && !velocity
+        && console_stop_logged(&folder.join("stdout.log"));
     let exit = Exit {
         run: run.clone(),
         code,
@@ -57,8 +83,9 @@ pub(super) fn record_exit(
         ready_at,
         native_console: pseudoconsole,
         console_window: console == Some(native_console::Tier::Window),
-        console_stop_unverified: pseudoconsole && unverified_stop(folder, observed_at)?,
-        manual_stop: manual_stop(folder)?,
+        // Velocity has no such line, so a recent unreadable Enter stays ambiguous there.
+        console_stop_unverified: pseudoconsole && velocity && unverified_stop(folder, observed_at)?,
+        manual_stop: console_stop || manual_stop(folder)?,
         policy: policy_revision(policy)?,
     };
     core_maintenance::write_durable(&folder.join(EXIT), &exit, false)
@@ -489,6 +516,17 @@ mod tests {
         fs::write(folder.join(native_console::STOP_TYPED), b"").unwrap();
         assert!(manual_stop(&folder).unwrap());
         fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_stop_typed_in_the_console_is_told_apart_from_rcon_and_players() {
+        // Lines as Paper writes them through a pseudoconsole and to latest.log.
+        assert!(console_stop_line("[20:03:33 INFO]: Stopping the server\n[20:03:33 INFO]: Stopping server"));
+        assert!(console_stop_line("> [20:03:07] [Server thread/INFO]: Stopping the server"));
+        assert!(!console_stop_line("[20:51:53 INFO]: [Rcon: Stopping the server]\n[20:51:53 INFO]: Stopping server"));
+        assert!(!console_stop_line("[20:51:53 INFO]: [Steve: Stopping the server]"));
+        assert!(!console_stop_line("[20:51:53 INFO]: <Steve> Stopping the server"));
+        assert!(!console_stop_line("[20:51:53 INFO]: Stopping server"));
     }
 
     #[test]

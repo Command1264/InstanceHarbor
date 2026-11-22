@@ -159,7 +159,7 @@ Spigot 使用 [官方 BuildTools](https://www.spigotmc.org/wiki/buildtools/) 在
 
 ### Windows 未整合項目
 
-目前開發檢查點的初始化政策與既有世界設定，請見
+目前開發檢查點的初始化預設與既有世界設定，請見
 Windows 初始化與世界設定。
 下載請求預設使用 [InstanceHarbor](https://github.com/Command1264/InstanceHarbor) 作為 PaperMC 聯絡網址。
 已驗證的下載檔案可在同一工作區重新使用。官方下載建立仍會向官方核對當次確認的建置。
