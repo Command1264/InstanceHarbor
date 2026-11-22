@@ -1205,7 +1205,7 @@ void load()
       </template>
       <template v-else-if="tab==='autorestart'">
         <h2>自動重啟</h2>
-        <p class="hint">正常停止與強制停止不會觸發自動重啟。</p>
+        
         <div v-if="restartStatus" class="hint" role="status">
           <p>{{ t(`settings.restartState.${restartStatus.phase}`) }}</p>
           <p v-if="restartAttemptCount!==undefined">{{ t('settings.restartAttemptCount',{ count:restartAttemptCount }) }}</p>
@@ -1263,7 +1263,7 @@ void load()
       </template>
       <template v-else-if="tab==='scan'">
         <h2>{{ t('management.paths') }}</h2>
-        <p id="scan-help" class="hint">排除資料夾須位於納入資料夾之下。可用完整路徑或 ./instances 等相對路徑。</p>
+        <p id="scan-help" class="hint">可用完整路徑或 ./instances 等相對路徑。</p>
         <template v-if="scan">
           <p v-if="scan.policy.allow.length || scan.policy.exclude.length" class="hint">既有名稱規則仍有效。允許 {{ scan.policy.allow.join('、') || '無' }}，排除 {{ scan.policy.exclude.join('、') || '無' }}。</p>
           <ManagementPathRows v-for="kind in scanKinds" :key="kind" :kind="kind" :rows="scanDraft[kind]"
@@ -1276,7 +1276,7 @@ void load()
       </template>
       <template v-else-if="tab==='global-java'">
         <h2>{{ t('management.globalJava') }}</h2>
-        <p class="hint">{{ t('management.globalJavaHelp') }}</p>
+        
         <template v-if="savedGlobalJava">
           <div class="field">
             <label for="global-java-mode">{{ t('management.javaSelection') }}</label>
@@ -1310,8 +1310,8 @@ void load()
       <template v-else-if="tab==='updates'">
         <h2>{{ t('settings.coreUpdates') }}</h2>
         <p v-if="!preferencesReady" class="form-error" role="alert">{{ t('settings.corePrefetchUnavailable') }}</p>
-        <label class="check"><input v-model="corePrefetch" type="checkbox" aria-describedby="core-prefetch-help"> {{ t('settings.corePrefetch') }}</label>
-        <p id="core-prefetch-help" class="hint">{{ t('settings.corePrefetchHelp') }}</p>
+        <label class="check"><input v-model="corePrefetch" type="checkbox"> {{ t('settings.corePrefetch') }}</label>
+        
       </template>
       <RecoveryKeyPanel v-else-if="tab==='recovery'" :connected="connected" />
       <template v-else><h2>{{ t('settings.core') }}</h2><button v-if="instance" type="button" :disabled="!connected" @click="emit('core',instance)">開啟核心維護</button></template>
