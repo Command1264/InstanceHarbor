@@ -1,4 +1,4 @@
-import { computed, inject, onMounted, onUnmounted, provide, ref, watch, type InjectionKey } from 'vue'
+import { computed, inject, onMounted, onUnmounted, provide, ref, shallowRef, watch, type InjectionKey } from 'vue'
 
 export type Locale = 'zh-TW' | 'en'
 export type LanguagePreference = Locale | 'system'
@@ -687,11 +687,13 @@ function translator(locale: Readonly<{ value: Locale }>) {
   }
 }
 
-const activeLocaleSource = ref<Readonly<{ value: Locale }>>(computed((): Locale => 'zh-TW'))
+// Hold a getter, not the computed itself: ref() returns a ref argument unchanged, so a computed stored
+// here would become the read-only source and later assignments would be ignored.
+const activeLocale = shallowRef<() => Locale>(() => 'zh-TW')
 
 /** Translates outside components (for example manager.ts) with the app's current language. Reactive inside computed and templates. */
 export function tr(id: MessageId, values?: MessageValues): string {
-  return translate(activeLocaleSource.value.value, id, values)
+  return translate(activeLocale.value(), id, values)
 }
 
 const appLanguage: InjectionKey<ReturnType<typeof translator>> = Symbol('app-language')
@@ -703,7 +705,7 @@ export function provideAppLanguage(
 ) {
   const languages = ref(systemLanguages())
   const locale = computed(() => resolveLanguage(preview() ?? saved(), languages.value))
-  activeLocaleSource.value = locale
+  activeLocale.value = () => locale.value
   provide(appLanguage, translator(locale))
 
   function refreshSystemLanguage() {
