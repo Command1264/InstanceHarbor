@@ -31,6 +31,9 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 左鍵點圖示，或右鍵選「顯示應用程式」，可叫回主視窗。再次執行 `InstanceHarbor.exe` 也會叫回隱藏的視窗。
 - 「語言與外觀」的「關閉視窗時縮到系統匣」預設開啟：按 X 只隱藏視窗。關閉此設定後，按 X 會結束介面。
 - 右鍵選「結束」才會結束 GUI 程序。伺服器、Host 與 Manager 在任何情況下都不隨 GUI 結束。
+- 診斷：按 X、從圖示叫回視窗或選「結束」時，GUI 診斷紀錄（`%LOCALAPPDATA%\<應用程式資料夾>\v2\logs\gui-*.jsonl`）會記下
+  `window-close`、`tray-show` 或 `tray-quit` 事件。`window-close` 包含是否縮到系統匣、隱藏前後視窗是否可見，以及錯誤種類。
+  視窗關不掉時，先找這些事件。
 - 回退相容：此設定維持預設時不寫入 `preferences.json`。若已關閉此設定，回退到 `1.0.0-rc2` 前請先重新開啟並儲存，否則舊版無法讀取外觀設定。
 
 ## Windows 檔案存取與部分清單
