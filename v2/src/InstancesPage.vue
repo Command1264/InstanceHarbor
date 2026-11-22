@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUpdate, onUpdated, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUpdate, onMounted, onUnmounted, onUpdated, ref, watch } from 'vue'
 import OverlayScroll from './components/OverlayScroll.vue'
 import OperationButton from './components/OperationButton.vue'
 import InitialQueryProgress from './components/InitialQueryProgress.vue'
@@ -15,7 +15,7 @@ import { actionName, batchItemState, canOpenConsole, canRestart, canStop, stateN
 
 const props = defineProps<{coreCheckRows?:Record<string,CoreSource>;
   rows: Instance[]; initialLoading?: boolean; loaded?: boolean; meta: InstanceMeta[]; preferences: Preferences; busyNames: Set<string>; feedback:string; refreshPending?: boolean; refreshDone?: boolean;
-  queuedNames?: Set<string>; startingNames?: Set<string>; pinBusy?: boolean; stopping: Record<string, string>; forceBusy: boolean; consoleBusy: boolean; connected: boolean; jobs: Job[]
+  queuedNames?: Set<string>; startingNames?: Set<string>; pinBusy?: boolean; stopping: Record<string, string>; forceBusy: boolean; consoleBusy: boolean; consoleAvailable?: boolean; connected: boolean; jobs: Job[]
 }>()
 const emit = defineEmits<{
   (e:'action', action:'start'|'stop'|'restart', rows:Instance[]):void
@@ -172,10 +172,26 @@ function choose(event: MouseEvent | KeyboardEvent, name: string) {
     anchor.value = name
   } else { selected.value = [name]; anchor.value = name }
 }
+function clearSelection() { selected.value = []; anchor.value = null }
+// Esc clears the selection anywhere on the page, unless a dialog, menu or text field handles it.
+function escapeClears(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || event.defaultPrevented || !selected.value.length) return
+  if (document.querySelector('dialog[open]')) return
+  const target = event.target
+  if (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable="true"], [role="menu"]')) return
+  clearSelection()
+}
+// A click on empty list space clears the selection; rows, controls and scrollbars keep it.
+function blankClickClears(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element) || target.closest('tr, button, a, input, select, summary, [role="scrollbar"], [role="menu"]')) return
+  clearSelection()
+}
+onMounted(() => window.addEventListener('keydown', escapeClears))
+onUnmounted(() => window.removeEventListener('keydown', escapeClears))
 function keySelect(event: KeyboardEvent, name: string) {
   if(showKeyboardMenu(event,name))return
   if(event.target !== event.currentTarget)return
-  if (event.key === 'Escape') { selected.value=[];anchor.value=null;return }
   if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); choose(event, name) }
 }
 function setSort(next: Exclude<typeof sort.value,null>) {
@@ -211,7 +227,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
   </div>
   <p class="operation-status selectable" role="status">{{ feedback }}</p>
   <div class="workspace">
-    <section class="list-panel" :aria-label="t('instances.listLabel')"><div v-if="!loaded || selected.length" class="selection-line"><span>{{ !loaded ? t('instances.listNotLoaded') : selected.length ? t('instances.selectedCount', { count: selected.length }) : '' }}</span><span><button v-if="selected.length" class="quiet clear-selection" @click="selected=[];anchor=null">{{ t('instances.clearSelection') }}</button></span></div>
+    <section class="list-panel" :aria-label="t('instances.listLabel')" @click="blankClickClears"><div v-if="!loaded" class="selection-line"><span>{{ t('instances.listNotLoaded') }}</span></div>
       <OverlayScroll v-if="initialLoading || visible.length" class="table-wrap" :label="t('instances.listLabel')"><table ref="instanceTable" class="instances"><thead><tr><th :aria-sort="sort==='name' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('name')">{{ t('nav.instances') }} {{ sort==='name' ? (direction===1?'↑':'↓') : '' }}</button></th><th class="core-column" :aria-sort="sort==='core' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('core')">{{ t('instances.colCore') }} {{ sort==='core' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='port' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('port')">Port {{ sort==='port' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='state' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('state')">{{ t('instances.observedState') }} {{ sort==='state' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='recent' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('recent')">{{ t('instances.recentAction') }} {{ sort==='recent' ? (direction===1?'↑':'↓') : '' }}</button></th></tr></thead>
         <tbody><tr v-for="row in displayed" :key="row.name" :class="{selected:selected.includes(row.name),'pin-drag-source':pinDrag.dragging.value===row.name,'pinned-draggable':preferences.pins.includes(row.name)&&canDragPins}" :data-instance="row.name" tabindex="0" :aria-selected="selected.includes(row.name)" @pointerdown.capture="pinDrag.nextPointerDown" @pointerdown="pinDrag.begin($event,row.name)" :title="preferences.pins.includes(row.name)?(canDragPins?t('instances.pinDragHint'):t('instances.pinDragBlocked')):undefined" @click="choose($event,row.name)" @keydown="keySelect($event,row.name)" @contextmenu="showMenu($event,row.name)">
           <td class="instance-name-cell"><button class="pin-toggle" type="button" :class="{pinned:preferences.pins.includes(row.name)}" :aria-pressed="preferences.pins.includes(row.name)" :aria-label="preferences.pins.includes(row.name)?t('instances.unpinNamed',{name:row.name}):t('instances.pinNamed',{name:row.name})" :title="preferences.pins.includes(row.name)?t('instances.unpinInstance'):t('instances.pinInstance')" :aria-disabled="pinBusy || !connected" @click.stop="!pinBusy && connected && emit('pin',row.name)" @dblclick.stop @keydown.stop="showKeyboardMenu($event,row.name)"><PinIcon :filled="preferences.pins.includes(row.name)" /></button><span class="instance-name">{{ row.name }}</span></td>
@@ -233,7 +249,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       <template v-if="chosen.length > 1"><h2>{{ t('instances.selectedHeading', { count: chosen.length }) }}</h2>
         <div class="detail-actions">
           <button :class="{primary:canSubmitBatch('start',chosen)}" :disabled="!canSubmitBatch('start',chosen)" @click="emit('batch-action','start',batchRows('start',chosen))">{{ t('instances.startSelected') }}</button>
-          <span class="action-tooltip" :title="consoleHint">
+          <span v-if="consoleAvailable" class="action-tooltip" :title="consoleHint">
             <button :class="{primary:connected && consoleTargets.length && !canSubmitBatch('start',chosen)}" :disabled="!connected || consoleBusy || !consoleTargets.length" aria-describedby="selected-console-hint" @click="emit('console',consoleTargets)">{{ t('instances.consoleSelected') }}</button>
             <span id="selected-console-hint" class="sr-only">{{ consoleHint }}</span>
           </span>
@@ -250,7 +266,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>
           <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?t('instance.state.starting'):isQueued(single)?t('activity.state.Queued'):t('activity.action.start') }}</button>
           <button v-else :disabled="!connected || busyNames.has(single.name) || !canStop(single)" @click="emit('action','stop',[single])">{{ t('instances.stop') }}</button>
-          <button :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">{{ t('instances.openConsole') }}</button>
+          <button v-if="consoleAvailable" :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">{{ t('instances.openConsole') }}</button>
           <button :disabled="!connected || busyNames.has(single.name) || isQueued(single) || startingNames?.has(single.name) || !canRestart(single)" @click="emit('action','restart',[single])">{{ t('instances.restart') }}</button>
           <button @click="emit('settings',single.name)">{{ t('instances.settings') }}</button>
         </div>

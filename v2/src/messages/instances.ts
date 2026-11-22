@@ -18,8 +18,6 @@ export const instancesMessages = {
   'instances.restartAll': ['全部重新啟動', 'Restart all'],
   'instances.listLabel': ['實例清單', 'Instance list'],
   'instances.listNotLoaded': ['尚未取得清單', 'List not loaded'],
-  'instances.selectedCount': ['已選取 {count} 台', '{count} selected'],
-  'instances.clearSelection': ['清除選取', 'Clear selection'],
   'instances.colCore': ['核心版本', 'Core version'],
   'instances.observedState': ['觀察狀態', 'Observed state'],
   'instances.recentAction': ['最近操作', 'Recent action'],
