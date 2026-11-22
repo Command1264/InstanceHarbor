@@ -2682,6 +2682,7 @@ pub fn dispatch_with_creation_progress(
             | "world-settings"
             | "get-initialization"
             | "console-plan"
+            | "console-io"
     );
     let instance_writer = matches!(
         verb.as_str(),
@@ -2762,6 +2763,18 @@ pub fn dispatch_with_creation_progress(
     match (verb.as_str(), rest) {
         ("status", []) => status(&root, &config),
         ("console-plan", []) => console_plan(&root, &config),
+        // Development builds only: drive a run's console pipe like the viewer does,
+        // so typing can be verified without the GUI. `text` is a JSON string.
+        ("console-io", [run, op, text]) if crate::desktop_channel::DEVELOPMENT => {
+            let request = match op.as_str() {
+                "input" => native_console::Request::Input {
+                    bytes: serde_json::from_str::<String>(text).map_err(fail)?.into_bytes(),
+                },
+                "read" => native_console::Request::Read { offset: text.parse().map_err(fail)? },
+                _ => return Err("InvalidConsoleRequest".into()),
+            };
+            native_console::call(&root, name, run, request)
+        }
         ("start" | "restart", [request]) => lifecycle(&root, &config, verb, request, None, None),
         ("start-if-current", [request, input]) => {
             let guard: StartGuard = serde_json::from_str(input).map_err(fail)?;

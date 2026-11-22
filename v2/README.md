@@ -175,7 +175,10 @@ Manager 重開可接續待寫入的設定，新啟動在啟動 Java 前完成相
 Java 與 JVM 頁面顯示有效預設值。欄位可還原上次儲存值，有可核對的預設則也可恢復預設。兩個動作只更新草稿。進階旗標預設摺疊，已有旗標或驗證出錯時會展開。可用有時限的 Java 探測核對草稿，例如 `-XX:ActiveProcessorCount=2`，再手動儲存。
 外觀可預覽 Windows 強調色或自選色票。清單選取底色預設不透明度為 25%，可用滑桿或直接輸入 0 到 100 的整數。輸入無效時保留上次有效預覽並停止滑桿同步。觀察狀態盡可能使用原色，必要時使用獨立底色維持對比。較濃的底色優先使用可讀的白字。取消會回復上次設定。
 進階自動重啟可設定每次重試間隔、計算視窗和穩定期，Manager 重開後保留排程及暫停狀態。
-手動停止或 ConPTY 無法辨識原因的正常退出會抑制重啟。
+手動停止會抑制重啟，包含在 InstanceHarbor 後台輸入的 `stop`、`end`、`shutdown`、`restart`（可加 `/` 或 `minecraft:` 等前綴）及 Ctrl+C。
+其他就緒後的正常退出（退出碼 0）與一般模式相同，依「非預期退出時重啟」設定處理。
+在後台按方向鍵叫出歷史指令等 Host 無法讀回的編輯後按 Enter，若 120 秒內正常退出，視為可能的手動停止，不重啟（原因 `ConsoleStopNotVerified`）。
+獨立主控台視窗（tier 3）的退出碼 0、130、143 與 `0xC000013A` 無法區分是否為使用者關窗，不重啟；其他退出碼依當機設定處理。
 
 核心維護支援同核心與同版本線的單台替換、備份還原及中斷核對。
 來源檢查依核心及版本分組。開發或部署時可用程序環境
@@ -261,6 +264,8 @@ RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。GUI 另使用 W
 
 從本目錄以 PowerShell 7 執行 `./build-product.ps1 -Release`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
 用 `pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
+1.0.0 起（版本號不是 `1.0.0-rc*`）封裝必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
+`build-product.ps1 -Release` 也要求以 `-ConsoleRuntimeSource`（或環境變數 `IH_V2_CONSOLE_RUNTIME_SOURCE`）指定來源，詳見「伺服器後台」。
 接著用 `pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
 Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。Setup 要求系統有 Visual C++ x64 Runtime 14.44.35211.0 或更新版本。
 沒有符合版本時，Setup 會在寫入前提示使用 [Microsoft 官方 x64 Runtime 安裝程式](https://aka.ms/vc14/vc_redist.x64.exe)，
@@ -369,12 +374,43 @@ node docs/design/v2-wireframe/verify-browser.cjs http://127.0.0.1:4176/preview/
 
 測試使用獨立 Chrome 設定檔，報告與畫面輸出至 `artifacts/v2-vue-preview-validation`。Windows 原生標題列、DPI、輔助技術與真實服務行為屬後續驗證。
 
+### 伺服器後台（預設開啟）
+
+Paper、Folia 與 Velocity 每次啟動都使用後台，不再需要工作區開關檔（舊的 `native-console.enabled` 已無作用）。
+Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>/console-tier.json`；實例詳情的「後台」欄顯示本次使用哪一層及原因。
+
+1. **InstanceHarbor 後台（tier 1）**：執行檔旁、雜湊固定的 `conpty.dll` 與 `OpenConsole.exe`，在 InstanceHarbor 自己的後台視窗顯示。
+   優先使用，可避開 Windows Terminal 的顯示問題。
+2. **Windows 內建主控台元件（tier 2）**：tier 1 檔案缺少、雜湊不符或建立失敗時，改用 Windows 內建的 pseudoconsole（kernel32 `CreatePseudoConsole`），仍在 InstanceHarbor 後台視窗顯示。
+3. **獨立主控台視窗（tier 3）**：只有 tier 1、2 都不可用，且使用者在 GUI 的警告對話框選「以主控台視窗啟動」時才使用。
+   Windows 依預設終端機設定開啟 conhost 或 Windows Terminal。**關閉該視窗會立即停止伺服器。**
+   Host 以主控台輸入事件送出 stop 與世界設定指令；輸出由 `logs/latest.log` 複製到 `stdout.log`。
+   批次啟動、自動重啟與 `restart` 永不進入 tier 3。
+4. **一般模式（plain）**：沒有後台。Spigot 等其他核心、Java／伺服器目錄／核心路徑 260 個 UTF-16 字元以上，或使用者未確認 tier 3 時使用。
+
+舊版 Java 由相對路徑 `server.jar` 啟動，避開絕對路徑造成的 ZipFS 問題。
+
+**手動輸入與世界設定指令並存**：Host 追蹤使用者在後台正在編輯的那一行。受管指令（世界規則、遊戲規則）只在該行為空時送出；
+使用者有未送出的輸入時，指令等到使用者按 Enter 或到期限為止。到期仍未送出時回報 `WorldConsoleInputBusy`（未寫入，可重試）。
+方向鍵、Tab 補全等無法讀回的編輯會讓該行維持「非空」直到按 Enter。
+
+**tier 1 runtime 來源**：`console-runtime.json` 固定 Microsoft ConPTY NuGet `1.25.260930003` 的 x64 檔案雜湊與簽署者，
+`native_console.rs`、`pack-windows.ps1`、`install-windows.ps1` 的雜湊由測試核對一致。
+`provision-console-runtime.ps1 -Source <資料夾或本機 .nupkg> -Destination <執行檔資料夾>` 核對 SHA-256、x64 與 Microsoft Authenticode 簽章後複製，不下載任何檔案；
+目的地已有不同內容的同名檔時拒絕覆寫。`build-product.ps1` 以 `-ConsoleRuntimeSource` 呼叫它；開發版缺少來源時只警告（改用 tier 2），`-Release` 會失敗。
+
+**測試各層**：開發版 Host 讀取環境變數 `IH_V2_CONSOLE_TIER_LIMIT=system|window|plain`，跳過較高的層（原因 `ConsoleTierLimited`）。正式版忽略此變數。
+`ihctl WORKSPACE console-plan <實例>` 回傳下次啟動預計的層、跳過原因與是否需要確認。
+開發版另有 `ihctl WORKSPACE console-io <實例> <run> input <JSON 字串>`（或 `read <offset>`），經與後台視窗相同的 Named Pipe 送出輸入，用於不開 GUI 的自動驗證；正式版沒有此指令。
+
+**日誌**：「啟動日誌」對話框把 pseudoconsole 寫入的 VT 控制碼轉成純文字行；`stdout.log` 原檔不變。
+
 ### Windows 原生後台視窗
 
 主程式首次建立視窗時置中。重複執行只聚焦已開啟的主視窗，保留其位置。
 
 後台使用 Windows 原生標題列與邊框。可拖邊框調整視窗、最大化，或從最大化狀態拖曳標題列還原。
-終端在可用空間變動時核對目前輸出，讀到尾端後向同一次執行的 ConPTY 送出尺寸。連續拖曳時合併中間尺寸，沒有輸出需要解析的過時尺寸不觸發重排。已有輸出的資料仍按 Host 回報的格線解析。
+視窗標題與分頁、貼上對話框文字跟隨介面語言。終端在可用空間變動時核對目前輸出，讀到尾端後向同一次執行的 ConPTY 送出尺寸。連續拖曳時合併中間尺寸，沒有輸出需要解析的過時尺寸不觸發重排。已有輸出的資料仍按 Host 回報的格線解析。
 捲動使用貼近終端視窗右緣的細版懸浮捲軸，保留滾輪、鍵盤及拖曳操作。終端內層的原生捲軸隱藏，懸浮捲軸顯示時不改變文字寬度。手動捲過即時輸出底部時，最多將最後有內容的一行移到視窗頂端。留白只存在畫面上，開始輸入時回到即時提示列。隱藏後台時該次終端仍持續接收輸出。
 尺寸同步需要當次 Host 支援。舊 Host 維持本來的終端尺寸，視窗操作仍由 Windows 處理。
 

@@ -28,7 +28,7 @@ const UNVERIFIED_STOP_WINDOW_MS: u64 = 120_000;
 /// Exit codes a console window run reports when the user closes the window or
 /// stops the server there. The Host cannot see what was typed in that window.
 fn window_stop_code(code: i32) -> bool {
-    matches!(code, 0 | 1 | 130 | 143) || code == 0xC000_013A_u32 as i32
+    matches!(code, 0 | 130 | 143) || code == 0xC000_013A_u32 as i32
 }
 
 fn unverified_stop(folder: &Path, observed_at: u64) -> Result<bool> {
