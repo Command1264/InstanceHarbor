@@ -261,12 +261,13 @@ Paper 26.3 的共用插件 JAR 隔離實驗也可使用同一份唯讀 JAR，各
 安裝腳本接受有預先核對 SHA-256 的便攜包，可驗證版本切換、
 還原與解除安裝，安裝或解除安裝時須先退出該安裝位置的程序。
 RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。GUI 另使用 Windows WebView2。
-### Windows x64 1.0.0-rc2 封裝
+### Windows x64 發行版封裝（1.0.0-rc2 與正式版）
 
-從本目錄以 PowerShell 7 執行 `./build-product.ps1 -Release`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
+完整步驟（取得 ConPTY 套件、建置、授權通知、ZIP 與 Setup）見 [docs/windows-distribution-licenses.md](../docs/windows-distribution-licenses.md) 的「Build a distribution」。
+從本目錄以 PowerShell 7 執行 `./build-product.ps1 -Release -ConsoleRuntimeSource <ConPTY .nupkg>`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
 用 `pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
-1.0.0 起（版本號不是 `1.0.0-rc*`）封裝必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
-`build-product.ps1 -Release` 也要求以 `-ConsoleRuntimeSource`（或環境變數 `IH_V2_CONSOLE_RUNTIME_SOURCE`）指定來源，詳見「伺服器後台」。
+`1.0.0-rc2` 與正式版號（例如 `1.0.0`）是發行版：必須附授權通知與啟動說明；正式版另必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
+`build-product.ps1 -Release` 沒有 `-ConsoleRuntimeSource`（或環境變數 `IH_V2_CONSOLE_RUNTIME_SOURCE`）時會失敗，詳見「伺服器後台」。
 接著用 `pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
 Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。Setup 要求系統有 Visual C++ x64 Runtime 14.44.35211.0 或更新版本。
 沒有符合版本時，Setup 會在寫入前提示使用 [Microsoft 官方 x64 Runtime 安裝程式](https://aka.ms/vc14/vc_redist.x64.exe)，

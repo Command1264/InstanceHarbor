@@ -15,6 +15,25 @@ test('packaging and installation pin the console runtime in console-runtime.json
   }
 })
 
+test('the runtime record names the official package and its x64 entries', () => {
+  const { source, files } = manifest
+  assert.match(source.url, /^https:\/\/api\.nuget\.org\/v3-flatcontainer\/microsoft\.windows\.console\.conpty\/1\.25\.260930003\//)
+  assert.match(source.sha256, /^[0-9a-f]{64}$/)
+  assert.ok(Number.isInteger(source.bytes) && source.bytes > 0)
+  assert.equal(files['conpty.dll'].entry, 'runtimes/win-x64/native/conpty.dll')
+  assert.equal(files['OpenConsole.exe'].entry, 'build/native/runtimes/x64/OpenConsole.exe')
+  const docs = read('../../docs/windows-distribution-licenses.md')
+  for (const value of [source.url, source.sha256]) assert.ok(docs.includes(value), `the distribution guide lacks ${value}`)
+})
+
+test('stable versions are distributions for the ZIP and Setup', () => {
+  const pack = read('../pack-windows.ps1')
+  assert.ok(pack.includes(String.raw`$distribution = $Version -ceq '1.0.0-rc2' -or $Version -cmatch '^\d+\.\d+\.\d+$'`))
+  const setup = read('../pack-windows-setup.ps1')
+  assert.doesNotMatch(setup, /\/DVERSION=1\.0\.0-rc2/)
+  assert.match(setup, /!\$prepared\.nativeConsoleRuntime/)
+})
+
 test('a 1.0 package and a release build refuse to ship without the tier-1 console', () => {
   assert.match(read('../pack-windows.ps1'), /\$consoleNames\.Count -ne 2 -and \$Version -notlike '1\.0\.0-rc\*'/)
   assert.match(read('../build-product.ps1'), /elseif\(\$Release\)\{\s*throw/)

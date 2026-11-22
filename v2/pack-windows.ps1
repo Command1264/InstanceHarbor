@@ -12,6 +12,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (!$IsWindows) { throw 'Windows PowerShell 7 is required.' }
+# 1.0.0-rc2 and stable versions are distributions: they ship the license notices and the
+# startup guide, and use the system Visual C++ runtime. Earlier candidates may omit them.
+$distribution = $Version -ceq '1.0.0-rc2' -or $Version -cmatch '^\d+\.\d+\.\d+$'
 
 function Get-PlainItem([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
@@ -60,8 +63,8 @@ $crtHashes = [ordered]@{
     'vcruntime140_1.dll' = '1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f'
 }
 $crtNames = @()
-if ($Version -ceq '1.0.0-rc2' -and $VCRuntimeDirectory) {
-    throw 'RC2 uses the system Visual C++ runtime. Omit VCRuntimeDirectory.'
+if ($distribution -and $VCRuntimeDirectory) {
+    throw 'Distributions use the system Visual C++ runtime. Omit VCRuntimeDirectory.'
 }
 if ($VCRuntimeDirectory) {
     $crtRoot = Get-PlainItem $VCRuntimeDirectory
@@ -76,11 +79,11 @@ if ($NoticeDirectory) {
     $noticeRoot = Get-PlainItem $NoticeDirectory
     if (!$noticeRoot.PSIsContainer) { throw 'NoticeDirectory must be a directory.' }
     $noticeNames = @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')
-} elseif ($Version -ceq '1.0.0-rc2') {
-    throw 'The RC2 distribution requires NoticeDirectory.'
+} elseif ($distribution) {
+    throw 'A distribution requires NoticeDirectory.'
 }
 $guideNames = @()
-if ($Version -ceq '1.0.0-rc2') { $guideNames = @('WINDOWS-GETTING-STARTED.txt') }
+if ($distribution) { $guideNames = @('WINDOWS-GETTING-STARTED.txt') }
 $manifest = [ordered]@{ schema = 'instanceharbor-windows-package/v1'; version = $Version; files = @() }
 $stage = Join-Path $parent.FullName ('.instanceharbor-package-' + [guid]::NewGuid().ToString('N') + '.tmp')
 $encoding = [Text.UTF8Encoding]::new($false)
