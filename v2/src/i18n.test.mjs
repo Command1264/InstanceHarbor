@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { formatDisplayTime, messageParameterMismatches, renderConsoleTitle, resolveLanguage, translate, validateConsoleTitle } from './i18n.ts'
+import { duplicateMessageIds, formatDisplayTime, messageParameterMismatches, renderConsoleTitle, resolveLanguage, translate, validateConsoleTitle } from './i18n.ts'
 
 test('a missing or explicit saved language is independent of the OS language', () => {
   assert.equal(resolveLanguage(undefined, ['en-US']), 'zh-TW')
@@ -18,6 +18,7 @@ test('system respects order and skips unsupported, malformed and explicitly simp
 
 test('reviewed messages have paired translations and preserve supplied values', () => {
   assert.deepEqual(messageParameterMismatches(), [])
+  assert.deepEqual(duplicateMessageIds(), [])
   assert.equal(translate('en', 'settings.instanceTitle', {name: '測試-{label}'}), '測試-{label} · Settings')
   assert.equal(translate('zh-TW', 'settings.instanceTitle', {name: 'Example'}), 'Example · 設定')
 })

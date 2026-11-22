@@ -5,6 +5,11 @@ export type LanguagePreference = Locale | 'system'
 export type TimeFormat = 'local24' | 'local12' | 'utc'
 
 import consoleTitleTokens from './console-title-tokens.json' with { type: 'json' }
+import { appMessages } from './messages/app.ts'
+import { instancesMessages } from './messages/instances.ts'
+import { settingsMessages } from './messages/settings.ts'
+import { managerMessages } from './messages/manager.ts'
+import { componentsMessages } from './messages/components.ts'
 
 export { consoleTitleTokens }
 export const defaultConsoleTitleTemplate = '{instance}'
@@ -46,7 +51,7 @@ export function formatDisplayTime(value: number, locale: Locale, format: TimeFor
   return formatter.format(value) + (format === 'utc' ? ' UTC' : '')
 }
 
-const messages = {
+const baseMessages = {
   'skip.main': ['跳至主要內容', 'Skip to main content'],
   'nav.main': ['主要導覽', 'Main navigation'],
   'nav.instances': ['實例', 'Instances'],
@@ -610,6 +615,26 @@ const messages = {
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
 } as const satisfies Record<string, readonly [string, string]>
 
+const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages] as const
+const messages = {
+  ...baseMessages,
+  ...appMessages,
+  ...instancesMessages,
+  ...settingsMessages,
+  ...managerMessages,
+  ...componentsMessages,
+}
+
+export function duplicateMessageIds(): string[] {
+  const seen = new Set<string>()
+  const duplicates: string[] = []
+  for (const group of messageGroups) for (const id of Object.keys(group)) {
+    if (seen.has(id)) duplicates.push(id)
+    seen.add(id)
+  }
+  return duplicates
+}
+
 export type MessageId = keyof typeof messages
 type MessageValues = Record<string, string | number>
 
@@ -662,6 +687,13 @@ function translator(locale: Readonly<{ value: Locale }>) {
   }
 }
 
+const activeLocaleSource = ref<Readonly<{ value: Locale }>>(computed((): Locale => 'zh-TW'))
+
+/** Translates outside components (for example manager.ts) with the app's current language. Reactive inside computed and templates. */
+export function tr(id: MessageId, values?: MessageValues): string {
+  return translate(activeLocaleSource.value.value, id, values)
+}
+
 const appLanguage: InjectionKey<ReturnType<typeof translator>> = Symbol('app-language')
 const fallback = translator(computed((): Locale => 'zh-TW'))
 
@@ -671,6 +703,7 @@ export function provideAppLanguage(
 ) {
   const languages = ref(systemLanguages())
   const locale = computed(() => resolveLanguage(preview() ?? saved(), languages.value))
+  activeLocaleSource.value = locale
   provide(appLanguage, translator(locale))
 
   function refreshSystemLanguage() {
