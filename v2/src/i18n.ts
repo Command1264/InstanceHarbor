@@ -147,6 +147,8 @@ const messages = {
   'appearance.selectionColor': ['清單選取色', 'List selection color'],
   'appearance.selectionOpacity': ['清單選取底色不透明度', 'List selection opacity'],
   'appearance.selectionOpacityValue': ['不透明度百分比', 'Opacity percentage'],
+  'appearance.closeToTray': ['關閉視窗時縮到系統匣', 'Keep running in the notification area when the window is closed'],
+  'appearance.closeToTrayHelp': ['開啟時，按 X 只會隱藏視窗，可從右下角圖示叫回。關閉時，按 X 會結束介面。伺服器在兩種情況下都會繼續執行。', 'When on, closing the window hides it; reopen it from the notification-area icon. When off, closing the window quits the app. Servers keep running in both cases.'],
   'settings.coreUpdates': ['核心更新', 'Core updates'],
   'settings.corePrefetch': ['預先下載核心更新', 'Download core updates in advance'],
   'settings.corePrefetchHelp': ['在背景下載已核對的 Paper 候選。更新仍須由妳確認。相同候選只保留一份。', 'Download verified Paper candidates in the background. Installation still requires confirmation. Identical candidates share one copy.'],

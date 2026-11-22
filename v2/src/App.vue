@@ -40,7 +40,12 @@ const listLoaded=ref(false)
 const listReading=ref(false)
 const presentation=ref<Presentation>({preferences:{theme:'system',pins:[]},instances:[]})
 const languagePreview=ref<LanguagePreference>()
-const { t }=provideAppLanguage(()=>presentation.value.preferences.language,()=>languagePreview.value)
+const { t, locale }=provideAppLanguage(()=>presentation.value.preferences.language,()=>languagePreview.value)
+// The tray tooltip follows the list; it still updates while the window is hidden in the tray.
+const runningCount=computed(()=>rows.value.filter(row=>canStop(row)).length)
+watch([runningCount,locale],([running,language])=>{
+  if(nativeBridge)void invoke('tray_status',{running,language}).catch(e=>console.error('無法更新系統匣提示',e))
+},{immediate:true})
 const coreCheckRows=ref<Record<string,CoreSource>>({})
 let coreEpoch=0
 let lastCoreTargets=''

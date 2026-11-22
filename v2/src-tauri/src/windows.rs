@@ -2361,6 +2361,12 @@ pub fn dispatch(arguments: &[String]) -> Result<Value> {
     dispatch_with_creation_progress(arguments, &|_| {})
 }
 
+/// Whether closing the main window should keep the GUI in the notification area.
+pub fn close_to_tray(workspace: &Path) -> Result<bool> {
+    crate::desktop_channel::validate_workspace(workspace, false)?;
+    presentation::close_to_tray_enabled(workspace)
+}
+
 pub fn dispatch_with_creation_progress(
     arguments: &[String],
     progress: &dyn Fn(CreationPhase),
