@@ -37,6 +37,8 @@ type GlobalJavaMode = 'automatic' | 'manual'
 type GlobalJava = { java: string; revision: string; mode?: GlobalJavaMode; manualPath?: string }
 const tab=ref<Tab>(props.instance?'java':'appearance')
 const saving=ref(false), message=ref(''), error=ref('')
+// Remember which text was shown as saved or failed, so a language change cannot break the comparison.
+const savedText=ref(''), failureText=ref('')
 const preferencesDraftRevision=ref(props.preferencesRevision)
 const preferencesConflict=ref(false)
 const saveSucceeded=ref(false)
@@ -116,7 +118,7 @@ const systemThemeListener=()=>{
   if(theme.value==='system'){
     document.documentElement.dataset.theme=resolveTheme('system',media.matches)
     refreshSelectionTheme()
-    if(nativeBridge)void invoke('present_window',{theme:document.documentElement.dataset.theme}).catch(e=>{error.value='無法預覽視窗主題：'+errorText(e)})
+    if(nativeBridge)void invoke('present_window',{theme:document.documentElement.dataset.theme}).catch(e=>{error.value=t('settingsPage.themePreviewFailed',{reason:errorText(e)})})
   }
 }
 const settings=reactive<{name:string;java:string;port:number|null;revision:string;canSelectJavaAutomatically?:boolean}>({name:props.instance??'',java:props.instanceMeta?.java??'',port:props.instanceMeta?.port??null,revision:''})
@@ -266,7 +268,7 @@ function onInitializationChoice(event: Event) {
   const picker = event.target as HTMLSelectElement
   if (dirty.value) {
     picker.value = initChoice.value
-    error.value = '請先儲存或還原這個版本的變更。'
+    error.value = t('settingsPage.saveOrRestoreFirst')
     return
   }
   const choice = picker.value
@@ -329,6 +331,10 @@ function pathIssueMessage(reason: string) {
   return t('management.pathInvalid')
 }
 
+function scanNameList(names: string[]) {
+  return names.join(t('settingsPage.listSeparator')) || t('diagnostics.noSource')
+}
+
 function scopeCandidateReason(reason?: string | null) {
   if (!reason) return ''
   const key='batchImport.reason.'+reason
@@ -370,7 +376,7 @@ function queueScopeValidation() {
       if(epoch===scanValidationEpoch && tab.value==='scan' && scanPayload()===input) applyScopeIssues(validated.issues)
     }catch(e){
       // Save always runs a fresh validation and can show a useful manual failure.
-      if(epoch===scanValidationEpoch && tab.value==='scan')console.warn('無法在背景核對管理資料夾',errorText(e))
+      if(epoch===scanValidationEpoch && tab.value==='scan')console.warn('Background management folder check failed',errorText(e))
     }
   }, 250)
 }
@@ -421,7 +427,7 @@ async function readWorldLive() {
     }
   } catch (failure) {
     if (current() && !Object.keys(worldLiveValues.value).length)
-      worldLiveError.value = `無法核對遊戲規則的可編輯範圍：${errorText(failure)}`
+      worldLiveError.value = t('settingsPage.worldRuleRangeFailed', { reason: errorText(failure) })
   }
 }
 const worldValues = ref<Record<string,string>>({})
@@ -460,12 +466,12 @@ const yamlPreflightSummary = computed(() => {
   const files = preflight?.filesChanged?.length ?? 0
   if (fields || files) {
     const summary = []
-    if (fields) summary.push(`發現 ${fields} 項外部變更`)
-    if (files) summary.push(`${files} 份檔案內容有變更`)
+    if (fields) summary.push(t('settingsPage.yamlExternalChanges', { count: fields }))
+    if (files) summary.push(t('settingsPage.yamlFilesChanged', { count: files }))
     return summary.join(' · ')
   }
-  if (preflight?.state === 'Compared') return '未發現外部變更'
-  return preflight?.state === 'Unverified' ? '無法核對' : '尚無核對結果'
+  if (preflight?.state === 'Compared') return t('settingsPage.yamlNoChanges')
+  return preflight?.state === 'Unverified' ? t('settingsPage.yamlUnverified') : t('settingsPage.yamlNoResult')
 })
 function showWorld(snapshot: WorldSnapshot) {
   world.value = snapshot
@@ -521,7 +527,8 @@ const globalJavaCanSave=computed(()=>!!savedGlobalJava.value && dirty.value &&
   !javaPathPickerBusy.value && (!javaSearchDirty.value || javaSearchScope.value?.canSave))
 const javaCanSave = computed(() => javaFieldsReady.value && typeof settings.port === 'number' &&
   integerIn(settings.port, 1, 65535) && (dirty.value || instancePending.value?.state === 'Conflict'))
-watch(dirty,value=>{emit('dirty',value);if(value){saveSucceeded.value=false;if(message.value==='設定已儲存')message.value=''}},{immediate:true})
+watch(dirty,value=>{emit('dirty',value);if(value){saveSucceeded.value=false;if(message.value && message.value===savedText.value)message.value=''}},{immediate:true})
+const saveFailedMessage=computed(()=>!!message.value && message.value===failureText.value)
 function markSaved(){baseline.value=draftSignature.value}
 function switchTab(next:Tab){if(saving.value||next===tab.value)return;if(dirty.value){pendingTab.value=next;discardDialog.value?.showModal()}else tab.value=next}
 function discardAndContinue(){reset();emit('dirty',false);discardDialog.value?.close();if(pendingTab.value)tab.value=pendingTab.value;else if(pendingClose.value)emit('close');pendingTab.value=null;pendingClose.value=false}
@@ -541,7 +548,7 @@ onUnmounted(()=>{
   const saved=props.preferences.theme
   document.documentElement.dataset.theme=resolveTheme(saved,media.matches)
   void refreshSelectionColor(props.preferences.selectionColor,nativeBridge,props.preferences.selectionOpacity)
-  if(nativeBridge)void invoke('present_window',{theme:saved}).catch(e=>console.error('無法還原視窗主題',e))
+  if(nativeBridge)void invoke('present_window',{theme:saved}).catch(e=>console.error('Could not restore the window theme',e))
 })
 watch(()=>props.instance,()=>{world.value=undefined;worldValues.value={};worldRuleDraft.value={};worldLiveValues.value={};worldLiveError.value='';worldSavePlan.value=undefined;instancePending.value=null;Object.assign(settings,{name:props.instance??'',java:props.instanceMeta?.java??'',port:props.instanceMeta?.port??null,revision:'',canSelectJavaAutomatically:undefined});baseline.value='';tab.value=props.instance?'java':'appearance';message.value='';error.value='';void load()})
 watch([() => props.instanceState, () => props.instanceRun], ([state]) => {
@@ -571,7 +578,7 @@ watch(()=>props.preferences.pathSeparator,value=>{if(!saving.value&&(tab.value!=
 watch(theme,value=>{
   document.documentElement.dataset.theme=resolveTheme(value,media.matches)
   refreshSelectionTheme()
-  if(nativeBridge)void invoke('present_window',{theme:value}).catch(e=>{error.value='無法預覽視窗主題：'+errorText(e)})
+  if(nativeBridge)void invoke('present_window',{theme:value}).catch(e=>{error.value=t('settingsPage.themePreviewFailed',{reason:errorText(e)})})
 })
 watch(()=>props.connected,ready=>{if(ready&&!dirty.value&&!saving.value)void load()})
 watch(()=>props.preferencesRevision,revision=>{
@@ -599,7 +606,7 @@ async function retrySettings(){
     }else if(!await readSettings('manual'))return
     if(current() && error.value===previousError)error.value=''
   }catch(failure){
-    if(current())error.value='無法讀取設定：'+errorText(failure)
+    if(current())error.value=t('settingsPage.readFailed',{reason:errorText(failure)})
   }finally{
     if(settingsRetry.value===request)settingsRetry.value=undefined
   }
@@ -658,8 +665,8 @@ async function readSettings(origin:'manual'|'background'='background', profileCh
     return true
   }catch(e){
     // A background reread keeps the last valid settings on screen; only report when the user asked or nothing is shown yet.
-    if(current() && (origin==='manual' || (!baseline.value && (targetTab!=='world'||!world.value))))error.value='無法讀取設定：'+errorText(e)
-    else console.error('背景重讀設定失敗',e)
+    if(current() && (origin==='manual' || (!baseline.value && (targetTab!=='world'||!world.value))))error.value=t('settingsPage.readFailed',{reason:errorText(e)})
+    else console.error('Background settings reload failed',e)
   }
   finally{if(javaReadEpoch===epoch)javaReadEpoch=0}
 }
@@ -685,7 +692,7 @@ async function scanJavaPickerDraft(input:string, origin:'manual'|'background'){
       if(input===javaPickerDraft.value)javaDraftSnapshot.value={input,candidates:found}
     })
     .catch(failure=>{
-      if(input===javaPickerDraft.value)javaDraftError.value={input,message:'無法探索 Java：'+errorText(failure)}
+      if(input===javaPickerDraft.value)javaDraftError.value={input,message:t('settingsPage.javaDiscoverFailed',{reason:errorText(failure)})}
     })
     .finally(()=>{javaDraftRequest=undefined})
   javaDraftRequest={input,pending}
@@ -710,7 +717,7 @@ async function openJavaDialog(mode:'choose'|'results'){
   pickerDialog.value?.showModal()
   if(javaPickerDraft.value===undefined && !props.javaChecked){
     void props.refreshJava('manual').catch(failure=>{
-      if(epoch===javaPickerEpoch)javaSavedError.value='無法探索 Java：'+errorText(failure)
+      if(epoch===javaPickerEpoch)javaSavedError.value=t('settingsPage.javaDiscoverFailed',{reason:errorText(failure)})
     })
   }
 }
@@ -723,14 +730,14 @@ async function refreshJavaPicker(){
     if(javaPickerDraft.value!==undefined)await scanJavaPickerDraft(javaPickerDraft.value,'manual')
     else await props.refreshJava('manual')
   }
-  catch(e){if(epoch===javaPickerEpoch)javaSavedError.value='無法探索 Java：'+errorText(e)}
+  catch(e){if(epoch===javaPickerEpoch)javaSavedError.value=t('settingsPage.javaDiscoverFailed',{reason:errorText(e)})}
   finally{if(epoch===javaPickerEpoch)javaBusy.value=false}
 }
 function useJava(){
   if(!selectedJavaValid.value)return
   setJavaFromPicker(pendingJava.value)
   pickerDialog.value?.close()
-  message.value='Java 已加入設定草稿；請儲存後生效。'
+  message.value=t('settingsPage.javaAddedToDraft')
 }
 function reset(){
   message.value='';error.value='';saveSucceeded.value=false;saveNeedsVerification.value=false
@@ -763,8 +770,8 @@ function validateWorldRules(rules: Record<string, string>) {
   for (const [key, value] of Object.entries(rules)) {
     const row = world.value?.rows.find(item => item.key === key)
     if (!row || !isWorldRule(row) || !worldLiveValues.value[key] || row.status === 'unsupported')
-      throw new Error('遊戲規則的適用範圍尚未核對，請重新開啟世界設定。')
-    if (!validWorldRuleValue(row, value)) throw new Error(`請核對「${row.label}」的值。`)
+      throw new Error(t('settingsPage.worldRuleScopeUnverified'))
+    if (!validWorldRuleValue(row, value)) throw new Error(t('settingsPage.worldRuleValueCheck', { label: row.label }))
   }
 }
 async function previewWorldFile(name: string, revision: string, values: Record<string,string>) {
@@ -776,9 +783,9 @@ function worldRuleSummary(rows: WorldRuleSaveReceipt['rows']) {
   const unconfirmed = outcomes.filter(({state}) => state === 'Unconfirmed').length
   const verified = outcomes.length - queued - unconfirmed
   const messages = []
-  if (verified) messages.push(`${verified} 項遊戲規則已即時核對。`)
-  if (queued) messages.push(`${queued} 項遊戲規則等下次啟動時套用。`)
-  if (unconfirmed) messages.push(`${unconfirmed} 項遊戲規則結果未確認，請查看操作紀錄。`)
+  if (verified) messages.push(t('settingsPage.worldRulesVerified', { count: verified }))
+  if (queued) messages.push(t('settingsPage.worldRulesQueued', { count: queued }))
+  if (unconfirmed) messages.push(t('settingsPage.worldRulesUnconfirmed', { count: unconfirmed }))
   return { unconfirmed, messages }
 }
 async function saveWorld(confirmWorld: boolean) {
@@ -787,7 +794,7 @@ async function saveWorld(confirmWorld: boolean) {
   if (!name || !snapshot || !worldCanSave.value) return
   saving.value = true
   emit('saving', true)
-  message.value = '處理中'
+  message.value = t('action.working')
   error.value = ''
   saveSucceeded.value = false
   saveNeedsVerification.value = false
@@ -806,7 +813,7 @@ async function saveWorld(confirmWorld: boolean) {
       }
       plan = { name, files, rules }
       if (files.length) {
-        if (!worldConfirmDialog.value) throw new Error('無法開啟確認視窗，請重新開啟世界設定。')
+        if (!worldConfirmDialog.value) throw new Error(t('settingsPage.worldConfirmUnavailable'))
         worldSavePlan.value = plan
         message.value = ''
         worldConfirmDialog.value.showModal()
@@ -862,18 +869,18 @@ async function saveWorld(confirmWorld: boolean) {
       void readWorldLive()
     }
     markSaved()
-    const fileMessage = filesQueued ? '設定檔已儲存，正常停服後套用並核對。' : savedFiles ? '設定檔已儲存。' : ''
-    message.value = [fileMessage, ...(ruleOutcome?.messages ?? [])].filter(Boolean).join(' ') || '設定已儲存'
+    const fileMessage = filesQueued ? t('settingsPage.filesSavedQueued') : savedFiles ? t('settingsPage.filesSaved') : ''
+    message.value = [fileMessage, ...(ruleOutcome?.messages ?? [])].filter(Boolean).join(' ') || (savedText.value = t('settings.saved'))
     saveNeedsVerification.value = Boolean(ruleOutcome?.unconfirmed)
     saveSucceeded.value = !saveNeedsVerification.value
   } catch (failure) {
     error.value = errorText(failure)
     if (ruleRequestPending) {
       saveNeedsVerification.value = true
-      message.value = savedFiles ? '設定檔已儲存。遊戲規則結果未確認，請查看操作紀錄。' : '遊戲規則結果未確認，請查看操作紀錄。'
+      message.value = savedFiles ? t('settingsPage.filesSavedRulesUnconfirmed') : t('settingsPage.rulesUnconfirmed')
       void readWorldLive()
     } else {
-      message.value = savedFiles ? '部分設定已儲存，其餘變更仍在草稿中' : '儲存失敗'
+      message.value = failureText.value = savedFiles ? t('settingsPage.partialSaved') : t('settings.saveFailed')
     }
   } finally {
     saving.value = false
@@ -888,7 +895,7 @@ async function save(confirmWorld = false, confirmScope = false){
   if(tab.value==='global-java' && !globalJavaCanSave.value)return
   if(tab.value==='global-java' && draftDirty.value && globalJavaMode.value==='manual' && !globalJavaPath.value.trim()){
     error.value=t('management.javaManualPathRequired')
-    message.value='儲存失敗'
+    message.value=failureText.value=t('settings.saveFailed')
     saveSucceeded.value=false
     await nextTick()
     globalJavaPathInput.value?.focus()
@@ -901,7 +908,7 @@ async function save(confirmWorld = false, confirmScope = false){
   if(tab.value==='autorestart' && !autoRestartPayload.value)return
   emit('mutating')
   emit('saving',true)
-  saving.value=true;message.value='處理中';error.value='';saveSucceeded.value=false;saveNeedsVerification.value=false
+  saving.value=true;message.value=t('action.working');error.value='';saveSucceeded.value=false;saveNeedsVerification.value=false
   let queued = false
   let searchScopeSaved = false
   try{
@@ -974,7 +981,7 @@ async function save(confirmWorld = false, confirmScope = false){
       scopeConfirmDialog.value?.close()
       emit('management-changed')
     }
-    markSaved();message.value=queued?'變更已儲存，等待伺服器停止後套用':'設定已儲存';saveSucceeded.value=true
+    markSaved();message.value=queued?t('settingsPage.savedQueued'):(savedText.value=t('settings.saved'));saveSucceeded.value=true
   }catch(e){
     if (preferencesTab.value && rawError(e).includes('PreferencesSettingsConflict')) preferencesConflict.value=true
     if (tab.value === 'java' && /InvalidJvmOption|JvmProbeFailed/.test(rawError(e))) advancedJvmOpen.value = true
@@ -982,8 +989,8 @@ async function save(confirmWorld = false, confirmScope = false){
       scopeConfirmDialog.value?.close()
       await showScanError(e)
     }
-    else error.value='無法儲存設定：'+errorText(e)
-    message.value=searchScopeSaved?'部分設定已儲存，Java 執行檔設定仍在草稿中':'儲存失敗'
+    else error.value=t('settingsPage.saveFailedReason',{reason:errorText(e)})
+    message.value=failureText.value=searchScopeSaved?t('settingsPage.partialSavedJava'):t('settings.saveFailed')
   }finally{
     if(searchScopeSaved)await props.refreshJava('background',true).catch(failure=>console.warn('Java list refresh failed',errorText(failure)))
     saving.value=false;emit('saving',false)
@@ -997,15 +1004,15 @@ async function save(confirmWorld = false, confirmScope = false){
 void load()
 </script>
 <template>
-  <OverlayScroll class="settings-scroll" label="設定內容"><header class="page-head"><div><h1>{{ instance ? `${instance} · 設定` : '應用程式設定' }}</h1></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
-    <div class="settings-layout"><nav class="settings-nav" aria-label="設定分類">
-      <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">世界政策</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
+  <OverlayScroll class="settings-scroll" :label="t('settings.content')"><header class="page-head"><div><h1>{{ instance ? t('settings.instanceTitle', { name: instance }) : t('nav.settings') }}</h1></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
+    <div class="settings-layout"><nav class="settings-nav" :aria-label="t('settings.category')">
+      <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">{{ t('settingsPage.worldPolicy') }}</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
       <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button></template>
       </nav><section class="sheet" :aria-busy="saving">
       <OperationButton v-if="preferencesTab && tab!=='terminal' && connected && (preferencesConflict || !preferencesReady || error)"
         :label="t('action.retryRead')" :busy-label="t('activity.loading')" :busy="retryingRead" @click="retrySettings()" />
       <fieldset class="settings-fields" :disabled="saving || !connected || (preferencesTab && !preferencesLoaded)">
-      <template v-if="tab==='appearance'"><h2>{{ t('appearance.title') }}</h2><p v-if="!connected || !preferencesReady" class="form-error" role="alert">目前無法核對已儲存的外觀設定。請重新讀取。</p><div v-if="preferencesLoaded" class="field"><label for="app-theme">{{ t('appearance.theme') }}</label><div class="editor"><select id="app-theme" v-model="theme" name="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select></div></div>
+      <template v-if="tab==='appearance'"><h2>{{ t('appearance.title') }}</h2><p v-if="!connected || !preferencesReady" class="form-error" role="alert">{{ t('settingsPage.appearanceUnverified') }}</p><div v-if="preferencesLoaded" class="field"><label for="app-theme">{{ t('appearance.theme') }}</label><div class="editor"><select id="app-theme" v-model="theme" name="theme"><option value="system">{{ t('appearance.systemTheme') }}</option><option value="light">{{ t('appearance.light') }}</option><option value="dark">{{ t('appearance.dark') }}</option></select></div></div>
         <div v-if="preferencesLoaded" class="field">
           <label for="selection-color">{{ t('appearance.selectionColor') }}</label>
           <div class="editor">
@@ -1045,15 +1052,15 @@ void load()
             </div>
           </div>
         </div>
-        <div v-if="preferencesLoaded" class="field"><label for="path-separator">Windows 路徑分隔符</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">正斜線 /</option><option value="native">反斜線 \</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" />
+        <div v-if="preferencesLoaded" class="field"><label for="path-separator">{{ t('appearance.pathSeparator') }}</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">{{ t('appearance.forwardSlash') }}</option><option value="native">{{ t('appearance.backslash') }}</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" />
         <template v-if="preferencesLoaded"><label class="check"><input v-model="closeToTray" type="checkbox" name="close-to-tray" aria-describedby="close-to-tray-help"> {{ t('appearance.closeToTray') }}</label><p id="close-to-tray-help" class="hint">{{ t('appearance.closeToTrayHelp') }}</p></template></template>
       <template v-else-if="tab==='java'">
         <h2>{{ t('settings.java') }}</h2>
-        <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>
-        <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
-        <p v-if="!settings.revision" class="notice">尚未取得可儲存的實例設定，請核對管理服務後再修改。</p>
+        <p v-if="instanceState!=='Stopped'" class="notice">{{ t('settingsPage.pendingApplyNotice') }}</p>
+        <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? t('settingsPage.pendingConflict') : t('settingsPage.pendingKept') }}</p>
+        <p v-if="!settings.revision" class="notice">{{ t('settingsPage.instanceSettingsUnavailable') }}</p>
         <div class="field">
-          <label for="instance-java">Java 執行檔</label>
+          <label for="instance-java">{{ t('settingsPage.javaExecutable') }}</label>
           <div class="jvm-editor">
             <div class="editor">
               <div class="settings-path-editor">
@@ -1065,7 +1072,7 @@ void load()
               </div>
               <button type="button" :disabled="!javaFieldsReady || javaPathPickerBusy" @click="showJavaPicker">{{ t('management.chooseInstalledJava') }}</button>
             </div>
-            <FieldDraftActions field="instance-java" label="Java 執行檔"
+            <FieldDraftActions field="instance-java" :label="t('settingsPage.javaExecutable')"
               :can-undo="!!savedJavaDraft && settings.java !== savedJavaDraft.java"
               @undo="savedJavaDraft && (settings.java = savedJavaDraft.java)" />
           </div>
@@ -1081,12 +1088,12 @@ void load()
           </div>
         </div>
         <div class="field">
-          <label for="jvm-min">最小記憶體（MiB）</label>
+          <label for="jvm-min">{{ t('settingsPage.minMemoryMib') }}</label>
           <div class="jvm-editor">
             <input id="jvm-min" v-model.number="minMemory" type="number" min="64" max="1048576"
               name="jvm-min" autocomplete="off" :disabled="!javaFieldsReady" @wheel="wheelToScroll"
               @blur="jvm.minMib === '' && (jvm.minMib = null)">
-            <FieldDraftActions field="jvm-min" label="最小記憶體"
+            <FieldDraftActions field="jvm-min" :label="t('settingsPage.minMemory')"
               :can-restore-default="javaFieldsReady && jvm.minMib !== null"
               :can-undo="!!savedJavaDraft && jvm.minMib !== savedJavaDraft.jvm.minMib"
               @restore-default="jvm.minMib = null"
@@ -1094,12 +1101,12 @@ void load()
           </div>
         </div>
         <div class="field">
-          <label for="jvm-max">最大記憶體（MiB）</label>
+          <label for="jvm-max">{{ t('settingsPage.maxMemoryMib') }}</label>
           <div class="jvm-editor">
             <input id="jvm-max" v-model.number="maxMemory" type="number" min="64" max="1048576"
               name="jvm-max" autocomplete="off" :disabled="!javaFieldsReady" @wheel="wheelToScroll"
               @blur="jvm.maxMib === '' && (jvm.maxMib = null)">
-            <FieldDraftActions field="jvm-max" label="最大記憶體"
+            <FieldDraftActions field="jvm-max" :label="t('settingsPage.maxMemory')"
               :can-restore-default="javaFieldsReady && jvm.maxMib !== null"
               :can-undo="!!savedJavaDraft && jvm.maxMib !== savedJavaDraft.jvm.maxMib"
               @restore-default="jvm.maxMib = null"
@@ -1107,13 +1114,13 @@ void load()
           </div>
         </div>
         <div class="field">
-          <label for="jvm-gc">垃圾回收器</label>
+          <label for="jvm-gc">{{ t('settingsPage.gc') }}</label>
           <div class="jvm-editor">
             <select id="jvm-gc" v-model="jvm.gc" name="jvm-gc" :disabled="!javaFieldsReady">
-              <option :value="null">由 Java 選擇</option><option value="parallel">Parallel GC</option>
+              <option :value="null">{{ t('settingsPage.gcAuto') }}</option><option value="parallel">Parallel GC</option>
               <option value="g1">G1 GC</option><option value="serial">Serial GC</option>
             </select>
-            <FieldDraftActions field="jvm-gc" label="垃圾回收器"
+            <FieldDraftActions field="jvm-gc" :label="t('settingsPage.gc')"
               :can-restore-default="javaFieldsReady && jvm.gc !== null"
               :can-undo="!!savedJavaDraft && jvm.gc !== savedJavaDraft.jvm.gc"
               @restore-default="jvm.gc = null"
@@ -1122,16 +1129,16 @@ void load()
         </div>
       <details id="jvm-advanced" class="jvm-advanced" :open="advancedJvmOpen"
         @toggle="advancedJvmOpen = ($event.currentTarget as HTMLDetailsElement).open">
-        <summary>進階 JVM 旗標</summary>
+        <summary>{{ t('settingsPage.jvmAdvanced') }}</summary>
         <div class="field">
-          <label for="jvm-options">JVM 旗標</label>
+          <label for="jvm-options">{{ t('settingsPage.jvmFlags') }}</label>
           <div class="jvm-editor">
             <div class="editor">
               <textarea id="jvm-options" name="jvm-options" v-model="advancedJvm" rows="4"
                 autocomplete="off" spellcheck="false" aria-describedby="jvm-options-hint" :disabled="!javaFieldsReady"></textarea>
-              <small id="jvm-options-hint" class="hint">每行一個旗標，可用 ActiveProcessorCount、ParallelGCThreads、ConcGCThreads、MaxGCPauseMillis、InitiatingHeapOccupancyPercent、G1ReservePercent。例如 -XX:MaxGCPauseMillis=100。</small>
+              <small id="jvm-options-hint" class="hint">{{ t('settingsPage.jvmFlagsHelp') }}</small>
             </div>
-            <FieldDraftActions field="jvm-options" label="JVM 旗標"
+            <FieldDraftActions field="jvm-options" :label="t('settingsPage.jvmFlags')"
               :can-restore-default="javaFieldsReady && advancedJvm !== ''"
               :can-undo="!!savedJavaDraft && advancedJvm !== savedJavaDraft.advancedJvm"
               @restore-default="advancedJvm = ''"
@@ -1148,10 +1155,10 @@ void load()
       </div>
       </template>
       <template v-else-if="tab==='initialization'">
-        <h2>初始化預設</h2>
+        <h2>{{ t('settings.initialization') }}</h2>
         <template v-if="init">
           <div class="field">
-            <label for="initialization-profile">核心與 Minecraft 版本</label>
+            <label for="initialization-profile">{{ t('settingsPage.initProfile') }}</label>
             <select id="initialization-profile" :value="initChoice" @change="onInitializationChoice">
               <option v-for="profile in init.profiles" :key="profileKey(profile)" :value="profileKey(profile)">
                 {{ profile.family }} {{ profile.version }}
@@ -1164,16 +1171,16 @@ void load()
           :busy="retryingRead" @click="retrySettings" />
       </template>
       <template v-else-if="tab==='world'">
-        <h2>世界設定</h2>
+        <h2>{{ t('settings.world') }}</h2>
         <template v-if="world">
-          <p class="hint">{{ world.profile ? world.profile.family + ' ' + world.profile.version : '核心與 Minecraft 版本待核對' }}</p>
-          <p class="notice">設定檔變更在正常停止後套用；遊戲規則即時套用。</p>
-          <p v-if="world.pending" class="hint" role="status">{{ world.pending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
+          <p class="hint">{{ world.profile ? world.profile.family + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}</p>
+          <p class="notice">{{ t('settingsPage.worldApplyNotice') }}</p>
+          <p v-if="world.pending" class="hint" role="status">{{ world.pending.state === 'Conflict' ? t('settingsPage.pendingConflict') : t('settingsPage.pendingKept') }}</p>
           <details class="world-preflight">
-            <summary>啟動前 YAML 核對 <span class="hint">{{ yamlPreflightSummary }}</span></summary>
-            <p v-if="world.yamlPreflight?.source === 'Launch' && (world.yamlPreflight.changes.length || world.yamlPreflight.filesChanged?.length)" class="hint">最近一次啟動前讀回的差異</p>
+            <summary>{{ t('settingsPage.yamlPreflightTitle') }} <span class="hint">{{ yamlPreflightSummary }}</span></summary>
+            <p v-if="world.yamlPreflight?.source === 'Launch' && (world.yamlPreflight.changes.length || world.yamlPreflight.filesChanged?.length)" class="hint">{{ t('settingsPage.yamlLaunchDiff') }}</p>
             <template v-if="world.yamlPreflight?.filesChanged?.length">
-              <p class="hint">內容有變更的檔案</p>
+              <p class="hint">{{ t('settingsPage.yamlChangedFiles') }}</p>
               <ul>
                 <li v-for="file in world.yamlPreflight.filesChanged" :key="file"><code translate="no">{{ file }}</code></li>
               </ul>
@@ -1182,12 +1189,12 @@ void load()
               <li v-for="change in world.yamlPreflight.changes" :key="change.file + ':' + change.key">
                 <strong>{{ world.rows.find(row => row.key === change.key)?.label ?? change.key }}</strong>
                 <code class="hint" translate="no">{{ change.file }}</code>
-                <p class="world-preflight-values">原值 <bdi translate="no">{{ change.before ?? '未讀得' }}</bdi>，讀回值 <bdi translate="no">{{ change.after ?? '未讀得' }}</bdi></p>
+                <p class="world-preflight-values">{{ t('settingsPage.yamlOriginal') }} <bdi translate="no">{{ change.before ?? t('settingsPage.yamlNotRead') }}</bdi>{{ t('settingsPage.yamlReadBack') }} <bdi translate="no">{{ change.after ?? t('settingsPage.yamlNotRead') }}</bdi></p>
               </li>
             </ul>
-            <p v-if="world.yamlPreflight?.state === 'Unverified'" class="hint">目前缺少完整的 YAML 比對資料。</p>
-            <p v-else-if="!world.yamlPreflight" class="hint">管理服務會在啟動前重新讀取 YAML。</p>
-            <p v-else-if="!world.yamlPreflight.changes.length && !world.yamlPreflight.filesChanged?.length" class="hint">已核對的 YAML 檔案與上次讀回的結果相符。</p>
+            <p v-if="world.yamlPreflight?.state === 'Unverified'" class="hint">{{ t('settingsPage.yamlNoData') }}</p>
+            <p v-else-if="!world.yamlPreflight" class="hint">{{ t('settingsPage.yamlRecheck') }}</p>
+            <p v-else-if="!world.yamlPreflight.changes.length && !world.yamlPreflight.filesChanged?.length" class="hint">{{ t('settingsPage.yamlMatches') }}</p>
           </details>
           <p v-if="worldLiveError" class="form-error" role="alert">{{ worldLiveError }}</p>
           <WorldLiveControls v-if="instance" :name="instance" :run="instanceRun" :ready="!!worldCommandReady"
@@ -1199,25 +1206,25 @@ void load()
           :busy="retryingRead" @click="retrySettings" />
       </template>
       <template v-else-if="tab==='restart'">
-        <h2>停止與重啟</h2>
-        <p v-if="instanceState!=='Stopped'" class="notice">可儲存變更，伺服器停止後自動套用。</p>
-        <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? '待套用設定發生衝突，請核對後重新儲存。' : '待套用設定已保留。' }}</p>
-        <div class="field"><label for="stop-seconds">正常停止期限（秒）</label><input id="stop-seconds" name="stop-seconds" v-model.number="timing.stopSeconds" type="number" min="5" max="300" placeholder="45" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
-        <div class="field"><label for="ready-seconds">批次啟動就緒期限（秒）</label><input id="ready-seconds" name="ready-seconds" v-model.number="timing.readySeconds" type="number" min="10" max="600" placeholder="150" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
-        <div class="field"><label for="restart-delay">重啟緩衝（毫秒）</label><input id="restart-delay" name="restart-delay" v-model.number="timing.restartDelayMs" type="number" min="0" max="5000" placeholder="0" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <h2>{{ t('settings.restart') }}</h2>
+        <p v-if="instanceState!=='Stopped'" class="notice">{{ t('settingsPage.pendingApplyNotice') }}</p>
+        <p v-if="instancePending" class="hint" role="status">{{ instancePending.state === 'Conflict' ? t('settingsPage.pendingConflict') : t('settingsPage.pendingKept') }}</p>
+        <div class="field"><label for="stop-seconds">{{ t('settingsPage.stopTimeout') }}</label><input id="stop-seconds" name="stop-seconds" v-model.number="timing.stopSeconds" type="number" min="5" max="300" placeholder="45" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <div class="field"><label for="ready-seconds">{{ t('settingsPage.readyTimeout') }}</label><input id="ready-seconds" name="ready-seconds" v-model.number="timing.readySeconds" type="number" min="10" max="600" placeholder="150" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
+        <div class="field"><label for="restart-delay">{{ t('settingsPage.restartBuffer') }}</label><input id="restart-delay" name="restart-delay" v-model.number="timing.restartDelayMs" type="number" min="0" max="5000" placeholder="0" autocomplete="off" :disabled="!baseline" @wheel="wheelToScroll"></div>
       </template>
       <template v-else-if="tab==='autorestart'">
-        <h2>自動重啟</h2>
+        <h2>{{ t('settings.autoRestart') }}</h2>
         
         <div v-if="restartStatus" class="hint" role="status">
           <p>{{ t(`settings.restartState.${restartStatus.phase}`) }}</p>
           <p v-if="restartAttemptCount!==undefined">{{ t('settings.restartAttemptCount',{ count:restartAttemptCount }) }}</p>
           <p v-if="restartTime">{{ t('settings.restartDue',{ time:restartTime }) }}</p>
         </div>
-        <p v-if="instanceState!=='Stopped'" class="notice">儲存後會在伺服器停止並核對成功時套用。</p>
+        <p v-if="instanceState!=='Stopped'" class="notice">{{ t('settingsPage.autoRestartNotice') }}</p>
         <fieldset :disabled="!baseline" class="settings-fields">
-          <label class="choice"><input v-model="autoRestart.onCrash" name="restart-crash" type="checkbox">崩潰後重啟</label>
-          <label class="choice"><input v-model="autoRestart.onUnexpectedExit" name="restart-exit" type="checkbox">沒有停止要求而正常退出時重啟</label>
+          <label class="choice"><input v-model="autoRestart.onCrash" name="restart-crash" type="checkbox">{{ t('settingsPage.restartOnCrash') }}</label>
+          <label class="choice"><input v-model="autoRestart.onUnexpectedExit" name="restart-exit" type="checkbox">{{ t('settingsPage.restartOnExit') }}</label>
           <label class="choice"><input v-model="autoRestart.advanced" name="restart-advanced" type="checkbox">{{ t('settings.restartAdvanced') }}</label>
           <div class="field">
             <label for="auto-limit">{{ t('settings.restartLimit') }}</label>
@@ -1254,7 +1261,7 @@ void load()
       </template>
       <template v-else-if="tab==='terminal'">
         <h2>{{ t('settings.terminal') }}</h2>
-        <p v-if="!preferencesReady && connected && !error" class="form-error" role="alert">目前無法核對已儲存的後台設定。</p>
+        <p v-if="!preferencesReady && connected && !error" class="form-error" role="alert">{{ t('settingsPage.consoleUnverified') }}</p>
         <OperationButton v-if="connected && (!preferencesReady || preferencesConflict || error)" :label="t('action.retryRead')" :busy-label="t('activity.loading')"
           :busy="retryingRead" @click="retrySettings" />
         <fieldset class="settings-fields" :disabled="!preferencesReady">
@@ -1266,9 +1273,9 @@ void load()
       </template>
       <template v-else-if="tab==='scan'">
         <h2>{{ t('management.paths') }}</h2>
-        <p id="scan-help" class="hint">可用完整路徑或 ./instances 等相對路徑。</p>
+        <p id="scan-help" class="hint">{{ t('settingsPage.scanHelp') }}</p>
         <template v-if="scan">
-          <p v-if="scan.policy.allow.length || scan.policy.exclude.length" class="hint">既有名稱規則仍有效。允許 {{ scan.policy.allow.join('、') || '無' }}，排除 {{ scan.policy.exclude.join('、') || '無' }}。</p>
+          <p v-if="scan.policy.allow.length || scan.policy.exclude.length" class="hint">{{ t('settingsPage.scanNameRules', { allow: scanNameList(scan.policy.allow), exclude: scanNameList(scan.policy.exclude) }) }}</p>
           <ManagementPathRows v-for="kind in scanKinds" :key="kind" :kind="kind" :rows="scanDraft[kind]"
             :busy="scanPickerBusy || scopeSavingStart" :issues="scanIssues"
             @add="addScanPath(kind)" @edit="(id, path) => editScanPath(kind, id, path)"
@@ -1289,7 +1296,7 @@ void load()
             </select>
           </div>
           <div class="field">
-            <label for="global-java-path">Java 執行檔</label>
+            <label for="global-java-path">{{ t('settingsPage.javaExecutable') }}</label>
             <div class="editor">
               <div class="settings-path-editor">
                 <input id="global-java-path" ref="globalJavaPathInput" v-model.trim="globalJavaPath" name="global-java-path"
@@ -1317,10 +1324,10 @@ void load()
         
       </template>
       <RecoveryKeyPanel v-else-if="tab==='recovery'" :connected="connected" />
-      <template v-else><h2>{{ t('settings.core') }}</h2><button v-if="instance" type="button" :disabled="!connected" @click="emit('core',instance)">開啟核心維護</button></template>
+      <template v-else><h2>{{ t('settings.core') }}</h2><button v-if="instance" type="button" :disabled="!connected" @click="emit('core',instance)">{{ t('settingsPage.openCoreMaintenance') }}</button></template>
       <p v-if="error && !pickerDialog?.open" role="alert" class="form-error">{{ error }}</p>
     </fieldset></section></div></OverlayScroll>
-  <div class="settings-footer"><span role="status" :class="{'save-success':saveSucceeded,'save-warning':saveNeedsVerification,'save-failure':message==='儲存失敗' || message.startsWith('部分設定已儲存')}">{{ message }}</span><div class="actions"><button :disabled="saving || !editableTab || (!baseline && !javaSearchDirty)" @click="reset" :title="instance?undefined:'回到此頁上次儲存的設定'">{{ instance?t('action.cancelChanges'):t('action.restore') }}</button><button class="primary" :disabled="saving || !connected || !editableTab || (preferencesTab && (!preferencesReady || preferencesConflict)) || (tab==='appearance' && selectionOpacityInvalid) || (tab==='java' && !javaCanSave) || ((tab==='restart'||tab==='autorestart')&&(!settings.revision||!baseline)) || (tab==='autorestart' && !autoRestartPayload) || (tab==='world' && !worldCanSave) || (tab==='initialization'&&(!init || !dirty)) || (tab==='scan' && (!scan || scopeSavingStart || scanPickerBusy || !dirty)) || (tab==='global-java' && !globalJavaCanSave)" @click="save()">{{ tab==='world' ? t('action.saveShort') : t('action.save') }}</button></div></div>
+  <div class="settings-footer"><span role="status" :class="{'save-success':saveSucceeded,'save-warning':saveNeedsVerification,'save-failure':saveFailedMessage}">{{ message }}</span><div class="actions"><button :disabled="saving || !editableTab || (!baseline && !javaSearchDirty)" @click="reset" :title="instance?undefined:t('settings.restoreTitle')">{{ instance?t('action.cancelChanges'):t('action.restore') }}</button><button class="primary" :disabled="saving || !connected || !editableTab || (preferencesTab && (!preferencesReady || preferencesConflict)) || (tab==='appearance' && selectionOpacityInvalid) || (tab==='java' && !javaCanSave) || ((tab==='restart'||tab==='autorestart')&&(!settings.revision||!baseline)) || (tab==='autorestart' && !autoRestartPayload) || (tab==='world' && !worldCanSave) || (tab==='initialization'&&(!init || !dirty)) || (tab==='scan' && (!scan || scopeSavingStart || scanPickerBusy || !dirty)) || (tab==='global-java' && !globalJavaCanSave)" @click="save()">{{ tab==='world' ? t('action.saveShort') : t('action.save') }}</button></div></div>
   <dialog ref="scopeConfirmDialog" class="scope-confirm" aria-labelledby="scope-confirm-title"
     @cancel.prevent="!saving && scopeConfirmDialog?.close()" @close="scopePlan=undefined">
     <h2 id="scope-confirm-title">{{ t('management.scopeConfirm') }}</h2>
@@ -1353,16 +1360,16 @@ void load()
     </div>
   </dialog>
   <dialog ref="worldConfirmDialog" class="compact" aria-labelledby="world-confirm-title" @close="worldSavePlan=undefined">
-    <h2 id="world-confirm-title">確認世界設定變更</h2>
+    <h2 id="world-confirm-title">{{ t('settingsPage.worldConfirmTitle') }}</h2>
     <ul v-if="worldReviewedChanges.length"><li v-for="change in worldReviewedChanges" :key="change.key">
-      {{ world?.rows.find(row=>row.key===change.key)?.label ?? change.key }} · {{ change.before || '空白' }} → {{ change.after || '空白' }}
+      {{ world?.rows.find(row=>row.key===change.key)?.label ?? change.key }} · {{ change.before || t('settingsPage.empty') }} → {{ change.after || t('settingsPage.empty') }}
       <small v-if="change.path" class="hint">{{ change.path }}</small>
     </li></ul>
-    <p v-else>本次設定檔草稿與檔案目前的值相同。</p>
-    <p v-if="instanceState!=='Stopped'">設定檔變更會在伺服器正常停止後套用並核對。</p>
-    <p v-if="worldSavePlan && Object.keys(worldSavePlan.rules).length">同時儲存 {{ Object.keys(worldSavePlan.rules).length }} 項遊戲規則，並優先即時套用。</p>
+    <p v-else>{{ t('settingsPage.worldDraftSame') }}</p>
+    <p v-if="instanceState!=='Stopped'">{{ t('settingsPage.worldConfirmQueued') }}</p>
+    <p v-if="worldSavePlan && Object.keys(worldSavePlan.rules).length">{{ t('settingsPage.worldConfirmRules', { count: Object.keys(worldSavePlan.rules).length }) }}</p>
     <div class="dialog-actions">
-      <button autofocus @click="worldConfirmDialog?.close()">取消</button>
+      <button autofocus @click="worldConfirmDialog?.close()">{{ t('action.cancel') }}</button>
       <button class="primary" :disabled="saving || !connected" @click="save(true)">{{ t('action.saveShort') }}</button>
     </div>
   </dialog>
@@ -1377,14 +1384,14 @@ void load()
       <div class="java-search-progress" role="progressbar" :aria-label="t('management.discoveringJava')"></div>
     </div>
     <p v-if="pickerChecked && !candidates.length && !javaPickerError" class="notice">{{ t(javaDialogMode==='choose' ? 'management.javaPickerEmpty' : 'management.javaResultsEmpty') }}</p>
-    <OverlayScroll v-if="candidates.length" class="java-list-scroll" label="可用 Java 安裝">
+    <OverlayScroll v-if="candidates.length" class="java-list-scroll" :label="t('settingsPage.javaInstalls')">
       <component :is="javaDialogMode==='choose' ? 'div' : 'ul'" class="button-list" :class="{ 'java-results-list': javaDialogMode==='results' }">
         <component :is="javaDialogMode==='choose' ? 'button' : 'li'" v-for="candidate in candidates" :key="candidate.path"
           v-bind="javaDialogMode==='choose' ? {type:'button', disabled:!candidate.valid,
             'aria-pressed':pendingJava===candidate.path, onClick:()=>{pendingJava=candidate.path}} : {}">
-          {{ candidate.version ?? '無法確認版本' }} · {{ candidate.source === 'custom' ? t('management.javaCustomSource') : candidate.source }}
+          {{ candidate.version ?? t('settingsPage.javaVersionUnknown') }} · {{ candidate.source === 'custom' ? t('management.javaCustomSource') : candidate.source }}
           <small v-if="candidate.vendor || candidate.architecture">{{ [candidate.vendor,candidate.architecture].filter(Boolean).join(' · ') }}</small>
-          <small>{{ pathLabel(candidate.path) }}{{ candidate.valid?'':' · 無法使用' }}</small>
+          <small>{{ pathLabel(candidate.path) }}{{ candidate.valid?'':' · '+t('settingsPage.javaUnusable') }}</small>
         </component>
       </component>
     </OverlayScroll>
@@ -1394,7 +1401,7 @@ void load()
       <button v-if="javaDialogMode==='choose'" type="button" class="primary" :disabled="!selectedJavaValid" @click="useJava">{{ t('management.javaPickerUse') }}</button>
     </div>
   </dialog>
-  <dialog ref="discardDialog" class="compact" aria-labelledby="discard-settings-title" @cancel.prevent="discardDialog?.close()"><h2 id="discard-settings-title">放棄變更</h2><p>目前設定有尚未儲存的變更。</p><div class="dialog-actions"><button autofocus @click="discardDialog?.close()">取消</button><button class="danger" @click="discardAndContinue">放棄變更</button></div></dialog>
+  <dialog ref="discardDialog" class="compact" aria-labelledby="discard-settings-title" @cancel.prevent="discardDialog?.close()"><h2 id="discard-settings-title">{{ t('action.discard') }}</h2><p>{{ t('settings.unsaved') }}</p><div class="dialog-actions"><button autofocus @click="discardDialog?.close()">{{ t('action.cancel') }}</button><button class="danger" @click="discardAndContinue">{{ t('action.discard') }}</button></div></dialog>
 </template>
 
 <style scoped>

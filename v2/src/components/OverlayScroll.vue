@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
+import { useAppLanguage } from '../i18n'
 
 const props = defineProps<{ label: string }>()
+const { t } = useAppLanguage()
 const viewportId = useId()
 const viewport = ref<HTMLDivElement>()
 const inner = ref<HTMLDivElement>()
@@ -110,14 +112,14 @@ onUnmounted(() => {
       <div ref="inner" class="overlay-inner"><slot /></div>
     </div>
     <div v-if="maximumX > 1" ref="horizontalTrack" class="overlay-track horizontal-track" role="scrollbar" tabindex="0"
-         :aria-label="`${props.label}水平捲軸`" aria-orientation="horizontal" :aria-valuemin="0" :aria-controls="viewportId"
+         :aria-label="t('components.overlayScroll.horizontal', { label: props.label })" aria-orientation="horizontal" :aria-valuemin="0" :aria-controls="viewportId"
          :aria-valuemax="Math.round(maximumX)" :aria-valuenow="Math.round(currentX)"
          @pointerdown="pointerDown($event, true)" @pointermove="pointerMove" @pointerup="pointerUp"
          @lostpointercapture="drag = null" @keydown="keydown($event, true)" @wheel="wheel">
       <div class="overlay-thumb horizontal-thumb" :style="{width: `${thumbWidth}px`, transform: `translateX(${thumbLeft}px)`}" />
     </div>
     <div v-if="needed" ref="track" class="overlay-track" role="scrollbar" tabindex="0"
-         :aria-label="`${props.label}捲軸`" aria-orientation="vertical" :aria-valuemin="0"
+         :aria-label="t('components.overlayScroll.vertical', { label: props.label })" aria-orientation="vertical" :aria-valuemin="0"
          :aria-controls="viewportId"
          :aria-valuemax="Math.round(maximum)" :aria-valuenow="Math.round(current)"
          @pointerdown="pointerDown" @pointermove="pointerMove" @pointerup="pointerUp"
