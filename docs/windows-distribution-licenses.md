@@ -65,7 +65,7 @@ A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must conta
    v2/pack-windows-setup.ps1 -Package $zip -ExpectedPackageSha256 $packed.sha256 -Compiler $makensis -Output $setup
    ```
 
-6. Check the Setup's version order with the same compiler. The test installer writes to a temporary folder and installs nothing.
+6. Check the Setup's version order and WebView2 detection with the same compiler. The test installers write to a temporary folder and install nothing.
 
    ```powershell
    v2/tests/verify-windows-setup-version.ps1 -Compiler $makensis

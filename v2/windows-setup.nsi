@@ -2,13 +2,13 @@
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "windows-setup-version.nsh"
+!include "windows-setup-webview2.nsh"
 
 !define APP "InstanceHarbor"
 !define ROOT "$LOCALAPPDATA\Programs\InstanceHarbor"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\InstanceHarbor-Desktop"
 !define SHORTCUT "$SMPROGRAMS\InstanceHarbor.lnk"
 !define LEASE "instanceharbor.install"
-!define WEBVIEW2_CLIENT "Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 ; Microsoft's permanent link to the WebView2 Evergreen Standalone Installer for x64.
 !define WEBVIEW2_URL "https://go.microsoft.com/fwlink/?linkid=2124701"
 
@@ -57,22 +57,14 @@ LangString InUse ${LANG_TRADCHINESE} "InstanceHarbor 仍在執行。請關閉 In
 LangString ReplaceFailed ${LANG_TRADCHINESE} "部分程式檔案無法替換。請關閉 InstanceHarbor 後重新執行 Setup 進行修復。工作區資料會保留。"
 
 Function RequireWebView2
-  ; Microsoft's documented detection: a non-empty pv other than 0.0.0.0, per machine or per user.
-  ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\${WEBVIEW2_CLIENT}" "pv"
-  StrCmp $0 "" user
-  StrCmp $0 "0.0.0.0" user
-  Return
-user:
-  ReadRegStr $0 HKCU "Software\${WEBVIEW2_CLIENT}" "pv"
-  StrCmp $0 "" missing
-  StrCmp $0 "0.0.0.0" missing
-  Return
-missing:
+  Call FindWebView2
+  StrCmp $0 "" 0 found
   MessageBox MB_YESNO|MB_ICONEXCLAMATION "$(WebView2Missing)" /SD IDNO IDNO abort
   ExecShell "open" "${WEBVIEW2_URL}"
 abort:
   SetErrorLevel 3
   Abort
+found:
 FunctionEnd
 
 Function .onInit

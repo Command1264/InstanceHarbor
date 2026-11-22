@@ -270,7 +270,7 @@ RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。1.0.0 起執行
 `build-product.ps1 -Release` 沒有 `-ConsoleRuntimeSource`（或環境變數 `IH_V2_CONSOLE_RUNTIME_SOURCE`）時會失敗，詳見「伺服器後台」。
 接著用 `pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
 Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
-Setup 每次執行都先檢查 WebView2 Runtime；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」的 x64 版，
+Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本的 `msedgewebview2.exe` 都要存在，與程式啟動時找到的相同）；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」的 x64 版，
 可直接開啟 Microsoft 下載，並在寫入前停止（靜默安裝回傳退出碼 3）。InstanceHarbor 每次啟動也做同樣檢查，
 缺少時提示後結束，不會留下沒有視窗的背景程序。
 這個提示不需 GUI 啟動即可決定語言：先唯讀讀取將使用的工作區 `preferences.json` 的語言設定；
@@ -278,7 +278,7 @@ Setup 每次執行都先檢查 WebView2 Runtime；缺少時說明要安裝 Micro
 Setup 的對話框用同一條系統語言規則。
 已安裝時，Setup 比較版本：較舊時詢問是否更新，相同時詢問是否修復（重新安裝程式檔案），
 較新時預設拒絕並詢問是否確定退回舊版。工作區資料一律保留；InstanceHarbor 仍在執行時，Setup 不替換檔案。
-使用者取消時退出碼為 4。版本順序由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
+使用者取消時退出碼為 4。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
 Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
 Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
