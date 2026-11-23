@@ -10,6 +10,7 @@ import InstanceDiagnosticsPanel from './components/InstanceDiagnosticsPanel.vue'
 import {usePinnedDrag} from './usePinnedDrag'
 import {keepEditingContext} from './context-menu'
 import { displayPath } from './path-display'
+import { presentedState } from './instance-state'
 import { useAppLanguage, type MessageId } from './i18n'
 import { actionName, batchItemState, canOpenConsole, canRestart, canStop, consoleSummary, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
 
@@ -68,9 +69,10 @@ const recentByName = computed(() => {
 const visible = computed(() => props.rows.filter(row => {
   const text = (row.name + ' ' + (metaByName.value.get(row.name)?.path ?? '')).toLocaleLowerCase()
   return text.includes(query.value.toLocaleLowerCase()) && (filter.value === 'all' ||
-    (filter.value === 'running' && row.state === 'Listening') ||
+    // A server that is stopping is no longer listed as listening.
+    (filter.value === 'running' && stateClass(row) === 'Listening') ||
     (filter.value === 'stopped' && row.state === 'Stopped') ||
-    (filter.value === 'attention' && !['Listening','Stopped'].includes(row.state)))
+    (filter.value === 'attention' && row.state !== 'Stopped' && stateClass(row) !== 'Listening'))
 }).sort((a,b) => {
   const ap = props.preferences.pins.indexOf(a.name), bp = props.preferences.pins.indexOf(b.name)
   if (ap !== -1 || bp !== -1) return ap === -1 ? 1 : bp === -1 ? -1 : ap-bp
@@ -133,7 +135,7 @@ const currentMeta = computed(() => single.value && metaByName.value.get(single.v
 const diagnosticProxies = computed(() => props.meta.filter(item => item.core?.family?.toLowerCase() === 'velocity').map(item => item.name))
 function isQueued(row:Instance){return row.state==='Stopped' && !!props.queuedNames?.has(row.name)}
 function starting(row:Instance){return row.state==='Stopped' && !!props.startingNames?.has(row.name)}
-function stateClass(row:Instance){return isQueued(row)?'Queued':starting(row)?'Starting':row.state}
+function stateClass(row:Instance){return presentedState(row,{queued:!!props.queuedNames?.has(row.name),starting:!!props.startingNames?.has(row.name),stopping:!!row.run && props.stopping[row.name]===row.run.id})}
 function displayState(row:Instance){const state=stateClass(row);return state==='Queued'?t('activity.state.Queued'):stateName(state)}
 const emergency = computed(() => !!single.value && canStop(single.value) &&
   !!(single.value.stopPhase || props.stopping[single.value.name] === single.value.run?.id))

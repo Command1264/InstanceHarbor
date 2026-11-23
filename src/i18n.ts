@@ -613,6 +613,7 @@ const baseMessages = {
   'instance.state.stopped': ['已停止', 'Stopped'],
   'instance.state.listening': ['正在監聽', 'Listening'],
   'instance.state.starting': ['啟動中', 'Starting'],
+  'instance.state.stopping': ['停止中', 'Stopping'],
   'instance.state.portOccupied': ['Port 已被占用', 'Port in use'],
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
 } as const satisfies Record<string, readonly [string, string]>

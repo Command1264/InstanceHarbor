@@ -355,6 +355,8 @@ PowerShell 可將 IPv4 附在 `import-preview NAME JAVA DIRECTORY IPV4`。
 將預覽回傳的 Port 及 revision 原樣帶入 `import NAME REQUEST JAVA DIRECTORY PORT REVISION IPV4`。
 匯入只寫管理登記，Velocity 的路由、轉送與玩家登入設定由伺服器資料夾提供。
 正常停止時 Host 對 Velocity 送出 `shutdown`，對遊戲後端送出 `stop`。
+
+伺服器停止時會先關閉 port，再結束 Java，最後 Host 才退出，所以只依程序與監聽者推算的狀態會短暫經過「啟動中」與「工作階段未定」。只要有停止要求，GUI 一律顯示「停止中」，直到確認已停止。停止要求包括：GUI 送出的單台停止、批次停止，以及 run 資料夾中的 `stop-queued`、`stop-sent` 與 `console-stop-typed`；最後一個標記會以 `stopPhase: "Typed"` 回報。port 被其他程序占用時仍顯示「Port 被占用」。
 此次範圍為一般匯入與啟停，代理 Port 和路由由 `velocity.toml` 管理。
 
 Vue 與 CLI 共用 Rust 管理入口，批次啟動、正常停止及重啟由工作區的常駐 Manager 保存。
