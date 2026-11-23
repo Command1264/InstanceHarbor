@@ -207,10 +207,17 @@ enum Leaf<'a> {
 struct Reader<'a> {
     rest: &'a [u8],
     budget: usize,
+    total: usize,
 }
 type Parsed<T> = std::result::Result<T, ()>;
+/// A matched value and the byte range of its payload, including a string's length prefix.
+type Located<'a> = (Leaf<'a>, std::ops::Range<usize>);
 
 impl<'a> Reader<'a> {
+    fn offset(&self) -> usize {
+        self.total - self.rest.len()
+    }
+
     fn take(&mut self, count: usize) -> Parsed<&'a [u8]> {
         let (value, rest) = self.rest.split_at_checked(count).ok_or(())?;
         self.rest = rest;
@@ -272,12 +279,12 @@ impl<'a> Reader<'a> {
                 }
                 Ok(None)
             }
-            10 => self.compound(&[], depth + 1),
+            10 => self.compound(&[], depth + 1).map(|_| None),
             _ => Err(()),
         }
     }
 
-    fn compound(&mut self, path: &[&str], depth: usize) -> Parsed<Option<Leaf<'a>>> {
+    fn compound(&mut self, path: &[&str], depth: usize) -> Parsed<Option<Located<'a>>> {
         let mut value = None;
         let mut matched = false;
         self.visit(depth)?;
@@ -293,7 +300,8 @@ impl<'a> Reader<'a> {
                 }
                 matched = true;
                 if path.len() == 1 {
-                    value = self.tag(kind, depth + 1)?;
+                    let start = self.offset();
+                    value = self.tag(kind, depth + 1)?.map(|leaf| (leaf, start..self.offset()));
                 } else if kind == 10 {
                     value = self.compound(&path[1..], depth + 1)?;
                 } else {
@@ -308,9 +316,15 @@ impl<'a> Reader<'a> {
 }
 
 fn exact<'a>(bytes: &'a [u8], path: &[&str]) -> Option<Leaf<'a>> {
+    located(bytes, path).map(|(leaf, _)| leaf)
+}
+
+/// The value at `path` and its span, only when the whole document parses.
+fn located<'a>(bytes: &'a [u8], path: &[&str]) -> Option<Located<'a>> {
     let mut reader = Reader {
         rest: bytes,
         budget: 500_000,
+        total: bytes.len(),
     };
     if reader.byte().ok()? != 10 {
         return None;
@@ -461,6 +475,119 @@ pub(in crate::windows) fn observe(
     values
 }
 
+/// The save file holding the overworld's game rules for this core.
+fn rules_file(world: &Path, core: &CoreProfile) -> PathBuf {
+    if !core.minecraft.starts_with("26.") {
+        world.join("level.dat")
+    } else if core.family == "SPIGOT" {
+        world.join("data/minecraft/game_rules.dat")
+    } else {
+        world.join("dimensions/minecraft/overworld/data/minecraft/game_rules.dat")
+    }
+}
+
+/// `bytes` with one rule changed to `target`. The rule must already be stored with
+/// the type this version uses; anything else is left to the next start.
+fn with_rule(bytes: &[u8], key: &str, target: &str, modern: bool) -> Option<Vec<u8>> {
+    let (_, old, new) = world_live::RULE_KEYS.iter().copied().find(|(logical, _, _)| *logical == key)?;
+    let cramming = key == "gamerules.max_entity_cramming";
+    let number = || target.parse::<u32>().ok().filter(|value| *value <= 9999 && target.bytes().all(|b| b.is_ascii_digit()));
+    let flag = || match target {
+        "true" => Some(1u8),
+        "false" => Some(0u8),
+        _ => None,
+    };
+    let (payload, span) = if modern {
+        let name = format!("minecraft:{new}");
+        match (cramming, located(bytes, &["data", &name])?) {
+            (true, (Leaf::Int(_), span)) => ((number()? as i32).to_be_bytes().to_vec(), span),
+            (false, (Leaf::Byte(0 | 1), span)) => (vec![flag()?], span),
+            _ => return None,
+        }
+    } else {
+        if old.is_empty() {
+            return None;
+        }
+        if cramming { number()?; } else { flag()?; }
+        let (Leaf::Text(_), span) = located(bytes, &["Data", "GameRules", old])? else {
+            return None;
+        };
+        let mut payload = (target.len() as u16).to_be_bytes().to_vec();
+        payload.extend_from_slice(target.as_bytes());
+        (payload, span)
+    };
+    let mut changed = Vec::with_capacity(bytes.len() + payload.len());
+    changed.extend_from_slice(&bytes[..span.start]);
+    changed.extend_from_slice(&payload);
+    changed.extend_from_slice(&bytes[span.end..]);
+    Some(changed)
+}
+
+fn gzip(bytes: &[u8]) -> Result<Vec<u8>> {
+    use flate2::{write::GzEncoder, Compression};
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).map_err(fail)?;
+    encoder.finish().map_err(fail)
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = File::create_new(path).map_err(|_| "WorldSaveBackupFailed")?;
+    file.write_all(bytes).map_err(|_| "WorldSaveBackupFailed")?;
+    file.sync_all().map_err(|_| "WorldSaveBackupFailed")?;
+    Ok(())
+}
+
+fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = path.with_file_name(format!(
+        ".{}.instanceharbor-{}.tmp",
+        path.file_name().ok_or("WorldSaveUnavailable")?.to_string_lossy(),
+        std::process::id()
+    ));
+    write_new(&temporary, bytes).map_err(|_| "WorldSaveWriteFailed")?;
+    if let Err(error) = core_maintenance::move_durable_with_stage(&temporary, path, true, "replace-world-rules") {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Writes game rules into the saved overworld of a server that stopped normally.
+/// The caller holds the instance lock and the world's runtime lease. The original
+/// file is copied to `backup` first; any failure leaves the save as it was.
+pub(in crate::windows) fn write_rules(
+    instance: &Path,
+    core: &CoreProfile,
+    targets: &[(String, String)],
+    backup: &Path,
+) -> Result<()> {
+    let world = world_directory(instance).ok_or("WorldSaveUnavailable")?;
+    let modern = core.minecraft.starts_with("26.");
+    let file = rules_file(&world, core);
+    let original = locked_bytes(&file, MAX_GZIP)?.ok_or("WorldSaveUnavailable")?;
+    let before = inflate(original.clone()).map_err(|_| "WorldSaveUnreadable")?;
+    let mut changed = before.clone();
+    for (key, target) in targets {
+        changed = with_rule(&changed, key, target, modern).ok_or("WorldSaveFieldUnsupported")?;
+    }
+    if targets.iter().any(|(key, target)| rule_value(&changed, key, modern).as_deref() != Some(target.as_str())) {
+        return Err("WorldSaveVerifyFailed".into());
+    }
+    let encoded = gzip(&changed)?;
+    if inflate(encoded.clone()).ok().as_deref() != Some(changed.as_slice()) {
+        return Err("WorldSaveVerifyFailed".into());
+    }
+    write_new(backup, &original)?;
+    if locked_bytes(&file, MAX_GZIP)?.as_deref() != Some(original.as_slice()) {
+        return Err("WorldFileChanged".into());
+    }
+    replace(&file, &encoded)?;
+    if saved_file(&file).as_deref() != Some(changed.as_slice()) {
+        replace(&file, &original)?;
+        return Err("WorldSaveVerifyFailed".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +631,159 @@ mod tests {
         assert_eq!(clock_value(clock, true).as_deref(), Some("6000"));
         assert_eq!(clock_value(legacy_clock, false).as_deref(), Some("6000"));
         assert!(clock_value(legacy_clock, true).is_none());
+    }
+    /// Unnamed root compound with the given body (already encoded tags).
+    fn document(body: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![10, 0, 0];
+        bytes.extend_from_slice(body);
+        bytes.push(0);
+        bytes
+    }
+
+    fn named(kind: u8, name: &str, payload: &[u8]) -> Vec<u8> {
+        let mut bytes = vec![kind];
+        bytes.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(payload);
+        bytes
+    }
+
+    fn compound(name: &str, children: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload: Vec<u8> = children.concat();
+        payload.push(0);
+        named(10, name, &payload)
+    }
+
+    fn text(value: &str) -> Vec<u8> {
+        let mut payload = (value.len() as u16).to_be_bytes().to_vec();
+        payload.extend_from_slice(value.as_bytes());
+        payload
+    }
+
+    fn modern_rules() -> Vec<u8> {
+        document(&[
+            named(3, "DataVersion", &4903i32.to_be_bytes()),
+            compound("data", &[
+                named(1, "minecraft:spawn_mobs", &[1]),
+                named(3, "minecraft:max_entity_cramming", &24i32.to_be_bytes()),
+                named(1, "minecraft:pvp", &[1]),
+            ]),
+        ].concat())
+    }
+
+    fn legacy_level() -> Vec<u8> {
+        document(&compound("Data", &[
+            named(4, "Time", &5i64.to_be_bytes()),
+            compound("GameRules", &[
+                named(8, "doMobSpawning", &text("true")),
+                named(8, "maxEntityCramming", &text("24")),
+            ]),
+        ]))
+    }
+
+    fn core(family: &str, minecraft: &str) -> CoreProfile {
+        CoreProfile { family: family.into(), minecraft: minecraft.into(), build: "1".into(), sha256: "fixture".into() }
+    }
+
+    #[test]
+    fn modern_rules_change_in_place_with_their_stored_types() {
+        let bytes = modern_rules();
+        let changed = with_rule(&bytes, "gamerules.spawn_mobs", "false", true).unwrap();
+        let changed = with_rule(&changed, "gamerules.max_entity_cramming", "9999", true).unwrap();
+        let changed = with_rule(&changed, "serverProperties.pvp", "false", true).unwrap();
+        assert_eq!(changed.len(), bytes.len());
+        assert_eq!(rule_value(&changed, "gamerules.spawn_mobs", true).as_deref(), Some("false"));
+        assert_eq!(rule_value(&changed, "gamerules.max_entity_cramming", true).as_deref(), Some("9999"));
+        assert_eq!(rule_value(&changed, "serverProperties.pvp", true).as_deref(), Some("false"));
+        assert_eq!(exact(&changed, &["DataVersion"]), Some(Leaf::Int(4903)));
+        // Values outside the rule's range, a missing rule and a rule of another type stay unwritten.
+        assert!(with_rule(&bytes, "gamerules.spawn_mobs", "maybe", true).is_none());
+        assert!(with_rule(&bytes, "gamerules.max_entity_cramming", "10000", true).is_none());
+        assert!(with_rule(&bytes, "gamerules.max_entity_cramming", "+24", true).is_none());
+        assert!(with_rule(&bytes, "gamerules.advance_time", "false", true).is_none());
+        let wrong_type = document(&compound("data", &[named(3, "minecraft:spawn_mobs", &1i32.to_be_bytes())]));
+        assert!(with_rule(&wrong_type, "gamerules.spawn_mobs", "false", true).is_none());
+    }
+
+    #[test]
+    fn legacy_rules_rewrite_the_string_and_keep_the_rest() {
+        let bytes = legacy_level();
+        let changed = with_rule(&bytes, "gamerules.spawn_mobs", "false", false).unwrap();
+        let changed = with_rule(&changed, "gamerules.max_entity_cramming", "100", false).unwrap();
+        assert_eq!(rule_value(&changed, "gamerules.spawn_mobs", false).as_deref(), Some("false"));
+        assert_eq!(rule_value(&changed, "gamerules.max_entity_cramming", false).as_deref(), Some("100"));
+        assert_eq!(exact(&changed, &["Data", "Time"]), Some(Leaf::Long(5)));
+        // 26.x-only rules have no legacy name.
+        assert!(with_rule(&bytes, "serverProperties.pvp", "false", false).is_none());
+    }
+
+    struct Server(PathBuf);
+
+    impl Server {
+        fn new(rules: &str, bytes: &[u8]) -> Self {
+            let root = std::env::temp_dir().canonicalize().unwrap().join(format!("ih-world-write-{}-{}", std::process::id(), clock()));
+            let file = root.join("world").join(rules);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(root.join("server.properties"), "level-name=world\n").unwrap();
+            fs::write(file, gzip(bytes).unwrap()).unwrap();
+            Self(root)
+        }
+
+        fn saved(&self, rules: &str) -> Vec<u8> {
+            inflate(fs::read(self.0.join("world").join(rules)).unwrap()).unwrap()
+        }
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn writing_backs_up_the_original_and_failures_leave_the_save_unchanged() {
+        let modern = "dimensions/minecraft/overworld/data/minecraft/game_rules.dat";
+        for family in ["PAPER", "FOLIA"] {
+            let server = Server::new(modern, &modern_rules());
+            let original = fs::read(server.0.join("world").join(modern)).unwrap();
+            let backup = server.0.join("backup.dat");
+            let targets = vec![
+                ("gamerules.spawn_mobs".to_owned(), "false".to_owned()),
+                ("gamerules.max_entity_cramming".to_owned(), "50".to_owned()),
+            ];
+            write_rules(&server.0, &core(family, "26.1.2"), &targets, &backup).unwrap();
+            let saved = server.saved(modern);
+            assert_eq!(rule_value(&saved, "gamerules.spawn_mobs", true).as_deref(), Some("false"));
+            assert_eq!(rule_value(&saved, "gamerules.max_entity_cramming", true).as_deref(), Some("50"));
+            assert_eq!(fs::read(&backup).unwrap(), original);
+
+            // One unsupported rule stops the whole write before the backup or the save changes.
+            let before = fs::read(server.0.join("world").join(modern)).unwrap();
+            let refused = server.0.join("refused.dat");
+            let mixed = vec![
+                ("gamerules.spawn_mobs".to_owned(), "true".to_owned()),
+                ("gamerules.advance_time".to_owned(), "false".to_owned()),
+            ];
+            assert_eq!(write_rules(&server.0, &core(family, "26.3"), &mixed, &refused).unwrap_err(), "WorldSaveFieldUnsupported");
+            assert_eq!(fs::read(server.0.join("world").join(modern)).unwrap(), before);
+            assert!(!refused.exists());
+        }
+
+        let spigot = Server::new("data/minecraft/game_rules.dat", &modern_rules());
+        let targets = vec![("gamerules.spawn_mobs".to_owned(), "false".to_owned())];
+        write_rules(&spigot.0, &core("SPIGOT", "26.2"), &targets, &spigot.0.join("backup.dat")).unwrap();
+        assert_eq!(rule_value(&spigot.saved("data/minecraft/game_rules.dat"), "gamerules.spawn_mobs", true).as_deref(), Some("false"));
+
+        let legacy = Server::new("level.dat", &legacy_level());
+        write_rules(&legacy.0, &core("PAPER", "1.21.8"), &targets, &legacy.0.join("backup.dat")).unwrap();
+        assert_eq!(rule_value(&legacy.saved("level.dat"), "gamerules.spawn_mobs", false).as_deref(), Some("false"));
+
+        // A damaged save is reported and kept as it was.
+        let damaged = Server::new(modern, &modern_rules());
+        let path = damaged.0.join("world").join(modern);
+        fs::write(&path, b"not gzip").unwrap();
+        assert_eq!(write_rules(&damaged.0, &core("PAPER", "26.3"), &targets, &damaged.0.join("backup.dat")).unwrap_err(), "WorldSaveUnreadable");
+        assert_eq!(fs::read(&path).unwrap(), b"not gzip");
+        assert!(!damaged.0.join("backup.dat").exists());
     }
 }

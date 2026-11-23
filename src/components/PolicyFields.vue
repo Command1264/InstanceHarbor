@@ -55,7 +55,10 @@ function liveLabel(row: PolicyRow) {
   if (!observation) return row.status === 'unsupported' ? policyReason(row) || t('components.policy.unsupportedVersion') : t('components.policy.notChecked')
   const value = valueLabel(observation.target ?? observation.value)
   switch (observation.state) {
-    case 'Queued': return t('components.policy.live.queued', { value })
+    case 'Queued': return observation.saveWriteReason
+      ? t('components.policy.live.queuedNotWritten', { value, reason: saveWriteReason(observation.saveWriteReason) })
+      : t('components.policy.live.queued', { value })
+    case 'WrittenToSave': return t('components.policy.live.writtenToSave', { value })
     case 'LiveRetry': return t('components.policy.live.liveRetry', { value })
     case 'Applying': return t('components.policy.live.applying', { value })
     case 'AwaitingNormalStop': return t('components.policy.live.awaitingNormalStop', { value })
@@ -65,6 +68,16 @@ function liveLabel(row: PolicyRow) {
     case 'NoChange': return t('components.policy.live.noChange', { value })
     default: return t('components.policy.live.unchecked')
   }
+}
+const saveWriteReasons: Record<string, MessageId> = {
+  WorldStopUnverified: 'components.policy.saveWrite.stopUnverified',
+  WorldCoreChanged: 'components.policy.saveWrite.coreChanged',
+  WorldSaveFieldUnsupported: 'components.policy.saveWrite.unsupported',
+  WorldSaveUnavailable: 'components.policy.saveWrite.unavailable',
+  WorldSaveUnreadable: 'components.policy.saveWrite.unreadable',
+}
+function saveWriteReason(reason: string) {
+  return t(saveWriteReasons[reason] ?? 'components.policy.saveWrite.failed')
 }
 function inputValue(row: PolicyRow) {
   const live = props.liveValues?.[row.key]

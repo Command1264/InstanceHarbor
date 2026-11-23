@@ -682,11 +682,13 @@ pub(super) fn recover_pending_rules(root: &Path, name: &str) -> Result<bool> {
 
 pub(super) fn has_queued(root: &Path, name: &str) -> Result<bool> {
     Ok(queued::needs_reconcile(root, name)?
+        || queued::needs_save_write(root, name)?
         || live_activity(root, name)?.iter().any(|row| row["state"] == "AwaitingNormalStop"))
 }
 
 pub(super) fn recover_saved_locked(root: &Path, name: &str) -> Result<()> {
     queued::reconcile(root, name)?;
+    queued::write_unsent(root, name)?;
     for row in live_activity(root, name)? {
         if row["state"] == "AwaitingNormalStop" {
             let request = row["id"].as_str().ok_or("InvalidWorldJournal")?;
