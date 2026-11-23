@@ -646,7 +646,8 @@ export function resolveLanguage(
   preference: LanguagePreference | undefined,
   systemLanguages: readonly string[],
 ): Locale {
-  if (preference !== 'system') return preference === 'en' ? 'en' : 'zh-TW'
+  // A missing preference (older settings, or not loaded yet) follows the system too.
+  if (preference === 'en' || preference === 'zh-TW') return preference
 
   for (const candidate of systemLanguages) {
     let locale: Intl.Locale
@@ -658,7 +659,8 @@ export function resolveLanguage(
       || (!locale.script && ['TW', 'HK', 'MO'].includes(locale.region ?? ''))
     )) return 'zh-TW'
   }
-  return 'zh-TW'
+  // English is the fallback whenever the system language is not supported.
+  return 'en'
 }
 
 export function translate(locale: Locale, id: MessageId, values: MessageValues = {}): string {
@@ -693,7 +695,7 @@ function translator(locale: Readonly<{ value: Locale }>) {
 
 // Hold a getter, not the computed itself: ref() returns a ref argument unchanged, so a computed stored
 // here would become the read-only source and later assignments would be ignored.
-const activeLocale = shallowRef<() => Locale>(() => 'zh-TW')
+const activeLocale = shallowRef<() => Locale>(() => resolveLanguage('system', systemLanguages()))
 
 /** Translates outside components (for example manager.ts) with the app's current language. Reactive inside computed and templates. */
 export function tr(id: MessageId, values?: MessageValues): string {
@@ -701,7 +703,7 @@ export function tr(id: MessageId, values?: MessageValues): string {
 }
 
 const appLanguage: InjectionKey<ReturnType<typeof translator>> = Symbol('app-language')
-const fallback = translator(computed((): Locale => 'zh-TW'))
+const fallback = translator(computed((): Locale => resolveLanguage('system', systemLanguages())))
 
 export function provideAppLanguage(
   saved: () => LanguagePreference | undefined,

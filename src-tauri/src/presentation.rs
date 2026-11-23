@@ -63,11 +63,12 @@ enum TimeFormat {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) enum DisplayLanguage {
-    #[default]
     #[serde(rename = "zh-TW")]
     TraditionalChinese,
     #[serde(rename = "en")]
     English,
+    /// The default: follow the Windows display language, falling back to English.
+    #[default]
     #[serde(rename = "system")]
     System,
 }
@@ -370,9 +371,13 @@ fn chinese_interface(language: DisplayLanguage) -> bool {
     match language {
         DisplayLanguage::TraditionalChinese => true,
         DisplayLanguage::English => false,
-        // Like the GUI's resolveLanguage: English only for an English system (LANG_ENGLISH).
-        DisplayLanguage::System => (unsafe { GetUserDefaultUILanguage() } & 0x3ff) != 0x09,
+        // Like the GUI's resolveLanguage: Traditional Chinese (Taiwan, Hong Kong, Macao), else English.
+        DisplayLanguage::System => system_chinese(unsafe { GetUserDefaultUILanguage() }),
     }
+}
+
+fn system_chinese(ui_language: u16) -> bool {
+    matches!(ui_language, 0x0404 | 0x0C04 | 0x1404)
 }
 
 /// Title of a console window run (tier 3). It states the consequence of closing it.
@@ -1610,10 +1615,10 @@ mod tests {
     }
 
     #[test]
-    fn old_preferences_default_to_forward_paths_and_traditional_chinese() {
+    fn old_preferences_default_to_forward_paths_and_the_system_language() {
         let old: Preferences = serde_json::from_str(r#"{"theme":"system","pins":[]}"#).unwrap();
         assert_eq!(old.path_separator, "forward");
-        assert_eq!(old.language, DisplayLanguage::TraditionalChinese);
+        assert_eq!(old.language, DisplayLanguage::System);
         assert_eq!(old.time_format, TimeFormat::Local24);
         assert_eq!(old.console_title_template, "{instance}");
         assert!(old.console_title_overrides.is_empty());
@@ -1683,6 +1688,17 @@ mod tests {
             filetime_title(116_444_736_000_000_000 + 1_000 * 10_000).as_deref(),
             Some("1970-01-01 00:00:01 UTC")
         );
+    }
+
+    #[test]
+    fn the_system_language_is_traditional_chinese_only_for_taiwan_hong_kong_and_macao() {
+        for chinese in [0x0404, 0x0C04, 0x1404] {
+            assert!(system_chinese(chinese));
+        }
+        // English, Simplified Chinese, Japanese and German fall back to English.
+        for other in [0x0409, 0x0804, 0x0411, 0x0407] {
+            assert!(!system_chinese(other));
+        }
     }
 
     #[test]

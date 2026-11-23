@@ -31,7 +31,7 @@ const layout = new ResizeObserver(updateLayout)
 layout.observe(panels)
 window.addEventListener('resize', updateLayout)
 let pendingTitle = Promise.resolve()
-let locale = 'zh-TW'
+let locale = resolveLanguage('system', navigator.languages)
 let languagePreference
 const t = (id, values) => translate(locale, id, values)
 const clipboard = attachConsoleClipboard({

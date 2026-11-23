@@ -38,6 +38,8 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 
 ## 介面語言
 
+- 「應用程式設定」→「介面語言」的選項依序為「跟隨系統」、English、繁體中文。預設為「跟隨系統」，沒有語言設定的舊偏好設定也視為跟隨系統。
+- 跟隨系統時，Windows 顯示語言為繁體中文（台灣、香港、澳門）才使用繁體中文，其他語言一律使用英文。前端 `resolveLanguage` 與後端 `presentation.rs` 的後台視窗標題使用同一規則。
 - 介面文字放在 `src/i18n.ts`（共用字串）與 `src/messages/*.ts`（依區域分檔）。每筆為 `[繁體中文, English]`，兩種語言的 `{參數}` 必須相同。
 - 元件用 `useAppLanguage()` 的 `t()`；元件外的程式（例如 `manager.ts`）用 `tr()`，同樣跟隨目前語言。
 - `src/hardcoded-text.test.mjs` 會在 `.vue`、`.ts` 出現寫死的中文時失敗。資料用途的中文（語言名稱、後端送來的分類 ID）列在測試的允許清單。開發者用的 `console` 訊息使用英文。

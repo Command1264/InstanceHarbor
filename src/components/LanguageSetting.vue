@@ -10,9 +10,9 @@ const { t } = useAppLanguage()
     <label for="app-language">{{ t('appearance.language') }}</label>
     <div class="editor">
       <select id="app-language" v-model="language" name="language">
-        <option value="zh-TW" lang="zh-TW">繁體中文</option>
-        <option value="en" lang="en">English</option>
         <option value="system">{{ t('appearance.systemLanguage') }}</option>
+        <option value="en" lang="en">English</option>
+        <option value="zh-TW" lang="zh-TW">繁體中文</option>
       </select>
     </div>
   </div>
