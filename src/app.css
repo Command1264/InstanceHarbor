@@ -129,7 +129,7 @@ input,textarea,[contenteditable=true],pre,code,.mono,.selectable,.form-error,[ro
 .instances tr:focus-visible{outline-color:var(--row-selection-edge,var(--selection-edge))}
 :is(.instances tr.selected,.selection-color-sample) .badge{color:var(--row-selection-ink,var(--selection-ink));border-color:currentColor}
 :is(.instances tr.selected,.selection-color-sample) .badge.Listening{color:var(--row-selection-ok,var(--ok));background:var(--row-selection-ok-bg,transparent)}
-.instances tr.selected .badge:is(.Queued,.Starting){color:var(--row-selection-warn,var(--warn));background:var(--row-selection-warn-bg,transparent)}
+.instances tr.selected .badge:is(.Queued,.Starting,.Stopping){color:var(--row-selection-warn,var(--warn));background:var(--row-selection-warn-bg,transparent)}
 .instances tr.selected .badge:is(.PortOccupied,.RunUnconfirmed){color:var(--row-selection-error,var(--error));background:var(--row-selection-error-bg,transparent)}
 .instances tr.selected .badge.Stopped{color:var(--row-selection-muted,var(--muted));background:var(--row-selection-muted-bg,transparent)}
 

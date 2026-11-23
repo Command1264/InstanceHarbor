@@ -12,3 +12,19 @@ export function presentedState(row: Pick<Instance, 'state' | 'stopPhase'>, flags
   if ((flags.stopping || !!row.stopPhase) && stoppable.includes(row.state)) return 'Stopping'
   return row.state
 }
+
+/**
+ * Every state the instance list can show, and the status colour it uses.
+ * A new state needs an entry here. instance-state.test.mjs then checks that
+ * app.css colours its badge with this token, and that the selected-row badge
+ * uses the contrast-checked colour refreshSelectionTheme() computes for it.
+ */
+export const stateTones = {
+  Listening: 'ok',
+  Starting: 'warn',
+  Queued: 'warn',
+  Stopping: 'warn',
+  PortOccupied: 'error',
+  RunUnconfirmed: 'error',
+  Stopped: 'muted',
+} as const satisfies Record<string, 'ok' | 'warn' | 'error' | 'muted'>

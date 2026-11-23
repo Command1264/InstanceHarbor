@@ -140,6 +140,12 @@ copy:
   File "${PAYLOAD}\LICENSE"
   File "${PAYLOAD}\THIRD-PARTY-NOTICES.txt"
   File "${PAYLOAD}\MPL-SOURCES.zip"
+  ; 1.0.0-rc2 installed app-local Visual C++ runtime DLLs; 1.0 links the runtime
+  ; statically, so remove them on update and uninstall.
+  IfFileExists "$INSTDIR\vcruntime140.dll" 0 +2
+  Delete "$INSTDIR\vcruntime140.dll"
+  IfFileExists "$INSTDIR\vcruntime140_1.dll" 0 +2
+  Delete "$INSTDIR\vcruntime140_1.dll"
   StrCmp $Installed "" +2
   System::Call 'kernel32::CloseHandle(p r9)'
   IfErrors failed
@@ -221,6 +227,12 @@ Section "Uninstall"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD-PARTY-NOTICES.txt"
   Delete "$INSTDIR\MPL-SOURCES.zip"
+  ; 1.0.0-rc2 installed app-local Visual C++ runtime DLLs; 1.0 links the runtime
+  ; statically, so remove them on update and uninstall.
+  IfFileExists "$INSTDIR\vcruntime140.dll" 0 +2
+  Delete "$INSTDIR\vcruntime140.dll"
+  IfFileExists "$INSTDIR\vcruntime140_1.dll" 0 +2
+  Delete "$INSTDIR\vcruntime140_1.dll"
   IfErrors failed
   System::Call 'kernel32::CloseHandle(p r0)'
   Delete "${SHORTCUT}"
