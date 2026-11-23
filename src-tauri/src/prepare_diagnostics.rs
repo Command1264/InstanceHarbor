@@ -4,6 +4,7 @@ use super::*;
 #[path = "prepare_diagnostics/nbt.rs"]
 mod nbt;
 pub(super) use nbt::observe as observe_saved_world;
+pub(super) use nbt::write_rules as write_saved_rules;
 
 const FIRST_READY_PLAN: &str = ".instanceharbor-first-ready.json";
 const PREPARE_RECORD: &str = "prepare.json";

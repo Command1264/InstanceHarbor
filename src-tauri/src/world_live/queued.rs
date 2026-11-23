@@ -20,6 +20,10 @@ struct Edit {
     /// was typing in the console. The Host retries it during the same run.
     #[serde(default, skip_serializing_if = "is_false")]
     live_retry: bool,
+    /// After a normal stop, an unsent rule is written into the world save:
+    /// `Written`, or the reason it was left to the next start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    save_write: Option<String>,
 }
 
 type Edits = BTreeMap<String, Edit>;
@@ -375,6 +379,7 @@ fn submit(
                 readback_attempts: 0,
                 persistence_checked: false,
                 live_retry: false,
+                save_write: None,
             },
         );
     }
@@ -561,6 +566,7 @@ pub(super) fn values(root: &Path, name: &str) -> Result<Value> {
             Some(edit) if edit.sha256 != core.sha256 => "Unconfirmed",
             Some(edit) if edit.state == "Queued" && edit.live_retry && !stopped
                 && observation["run"]["id"].as_str() == edit.queued_after.as_deref() => "LiveRetry",
+            Some(edit) if edit.state == "Queued" && edit.save_write.as_deref() == Some("Written") => "WrittenToSave",
             Some(edit) => edit.state.as_str(),
             None if saved.contains_key(key) && stopped => "Saved",
             None if saved.contains_key(key) => "LastSaved",
@@ -571,7 +577,12 @@ pub(super) fn values(root: &Path, name: &str) -> Result<Value> {
             json!({
                 "value":saved.get(key),
                 "target":edit.filter(|edit| edit.state != "Saved").map(|edit| &edit.target),
-                "state":state
+                "state":state,
+                // Why an unsent rule could not be written to the save; the next start applies it.
+                "saveWriteReason":edit
+                    .filter(|edit| edit.state == "Queued")
+                    .and_then(|edit| edit.save_write.as_deref())
+                    .filter(|reason| *reason != "Written")
             }),
         );
     }
@@ -724,6 +735,114 @@ fn apply_matching(
     failure.map_or(Ok(()), Err)
 }
 
+/// The run id when the last run stopped through InstanceHarbor and Java exited 0.
+fn normal_stop_run(root: &Path, name: &str, observation: &Value) -> Result<Option<String>> {
+    let Some(run) = observation["run"]["id"].as_str() else {
+        return Ok(None);
+    };
+    let folder = child_directory(&child_directory(root, "runs")?, name)?;
+    let release = folder.join("run-release.json");
+    if observation["stopPhase"] != "Sent" || !release.is_file() {
+        return Ok(None);
+    }
+    no_redirect(&release)?;
+    let settled: Value = read(&release)?;
+    Ok((settled["run"] == observation["run"] && settled["exit"] == 0).then(|| run.to_owned()))
+}
+
+/// A game rule that was never sent and has not been written to the save yet.
+fn awaits_save_write(edit: &Edit) -> bool {
+    edit.state == "Queued" && edit.attempted_run.is_none() && edit.save_write.is_none()
+}
+
+const SAVE_BACKUPS: usize = 20;
+
+fn save_backup(root: &Path, name: &str, file: &str) -> Result<PathBuf> {
+    let folder = child_directory(root, "history")?.join(format!("world-save-backups-{name}"));
+    match fs::create_dir(&folder) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(fail(error)),
+    }
+    no_redirect(&folder)?;
+    let mut existing: Vec<_> = fs::read_dir(&folder)
+        .map_err(fail)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.path())
+        .collect();
+    existing.sort();
+    // Names start with a millisecond clock, so the oldest sort first.
+    while existing.len() >= SAVE_BACKUPS {
+        fs::remove_file(existing.remove(0)).map_err(fail)?;
+    }
+    Ok(folder.join(format!("{:013}-{file}", clock())))
+}
+
+/// Writes unsent game rules into the world save after a normal stop, so the save
+/// already holds them. The next start still confirms each one through the console.
+pub(super) fn write_unsent(root: &Path, name: &str) -> Result<()> {
+    let path = entry(root, name)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let _lock = lock(root, name)?;
+    let mut queue = load(&path)?;
+    if !queue.edits.iter().any(|(key, edit)| key != TIME && awaits_save_write(edit)) {
+        return Ok(());
+    }
+    let config = instance(root, name)?;
+    let observation = status(root, &config)?;
+    if observation["state"] != "Stopped" {
+        return Ok(());
+    }
+    let run = normal_stop_run(root, name, &observation)?;
+    let (directory, core) = verified(root, &config)?;
+    let keys: Vec<String> = queue
+        .edits
+        .iter()
+        .filter(|(key, edit)| *key != TIME && awaits_save_write(edit))
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut targets = Vec::new();
+    for key in &keys {
+        let edit = &queue.edits[key];
+        if edit.sha256 != core.sha256 {
+            queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?.save_write = Some("WorldCoreChanged".into());
+        } else if run.is_none() || edit.queued_after != run {
+            // Without proof of a normal stop the save may be incomplete; the next start applies it.
+            queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?.save_write = Some("WorldStopUnverified".into());
+        } else {
+            targets.push((key.clone(), edit.target.clone()));
+        }
+    }
+    if !targets.is_empty() {
+        // The Host can hold the world for a moment after Java exits. Record nothing then;
+        // the Manager sweep or the next start preflight tries again.
+        let Ok(_lease) = claim_runtime_directory(&directory) else {
+            return core_maintenance::write_durable(&path, &queue, true);
+        };
+        let file = if core.minecraft.starts_with("26.") { "game_rules.dat" } else { "level.dat" };
+        let outcome = save_backup(root, name, file)
+            .and_then(|backup| prepare_diagnostics::write_saved_rules(&directory, &core, &targets, &backup));
+        let result = match outcome {
+            Ok(()) => "Written".to_owned(),
+            Err(error) => error,
+        };
+        for (key, _) in &targets {
+            queue.edits.get_mut(key).ok_or("InvalidWorldJournal")?.save_write = Some(result.clone());
+        }
+    }
+    core_maintenance::write_durable(&path, &queue, true)
+}
+
+pub(super) fn needs_save_write(root: &Path, name: &str) -> Result<bool> {
+    Ok(load(&entry(root, name)?)?
+        .edits
+        .iter()
+        .any(|(key, edit)| key != TIME && awaits_save_write(edit)))
+}
+
 pub(super) fn reconcile(root: &Path, name: &str) -> Result<()> {
     let path = entry(root, name)?;
     if !path.exists() {
@@ -740,29 +859,21 @@ pub(super) fn reconcile(root: &Path, name: &str) -> Result<()> {
         return Ok(());
     }
     let mut saved = BTreeMap::new();
-    if let Some(run) = observation["run"]["id"].as_str() {
-        let folder = child_directory(&child_directory(root, "runs")?, name)?;
-        let release = folder.join("run-release.json");
-        if observation["stopPhase"] == "Sent" && release.is_file() {
-            no_redirect(&release)?;
-            let settled: Value = read(&release)?;
-            if settled["run"] == observation["run"] && settled["exit"] == 0 {
-                let (directory, core) = verified(root, &config)?;
-                let _lease = claim_runtime_directory(&directory)?;
-                let keys: Vec<_> = queue
-                    .edits
-                    .iter()
-                    .filter(|(_, edit)| {
-                        needs_stop_readback(edit)
-                            && edit.attempted_run.as_deref() == Some(run)
-                            && edit.sha256 == core.sha256
-                    })
-                    .map(|(key, _)| key.as_str())
-                    .collect();
-                if !keys.is_empty() {
-                    saved = prepare_diagnostics::observe_saved_world(&directory, &core, &keys);
-                }
-            }
+    if let Some(run) = normal_stop_run(root, name, &observation)? {
+        let (directory, core) = verified(root, &config)?;
+        let _lease = claim_runtime_directory(&directory)?;
+        let keys: Vec<_> = queue
+            .edits
+            .iter()
+            .filter(|(_, edit)| {
+                needs_stop_readback(edit)
+                    && edit.attempted_run.as_deref() == Some(run.as_str())
+                    && edit.sha256 == core.sha256
+            })
+            .map(|(key, _)| key.as_str())
+            .collect();
+        if !keys.is_empty() {
+            saved = prepare_diagnostics::observe_saved_world(&directory, &core, &keys);
         }
     }
     for (key, edit) in &mut queue.edits {
@@ -793,6 +904,12 @@ pub(super) fn activity(root: &Path, name: &str) -> Result<Vec<Value>> {
         let (rank, state, message) = match edit.state.as_str() {
             "Saved" => (0, "Completed", "已核對世界存檔"),
             "AwaitingNormalStop" => (1, "VerifiedLive", "正常停止後自動核對存檔"),
+            "Queued" if edit.save_write.as_deref() == Some("Written") => {
+                (2, "Pending", "已寫入世界存檔，下次啟動時核對")
+            }
+            "Queued" if edit.save_write.as_deref().is_some_and(|reason| reason != "WorldStopUnverified") => {
+                (2, "Pending", "無法寫入世界存檔，下次啟動套用")
+            }
             "Queued" if edit.live_retry => (2, "Pending", "等後台輸入完成後即時套用；未送出時下次啟動套用"),
             "Queued" => (2, "Pending", "下次啟動套用"),
             "Applying" => (3, "Pending", "世界變更待核對"),
@@ -892,6 +1009,7 @@ mod tests {
                 readback_attempts: 0,
                 persistence_checked: false,
                 live_retry: false,
+                save_write: None,
             },
         )]);
         save(&path, &legacy).unwrap();
@@ -1028,5 +1146,106 @@ mod tests {
             save_rules(root, "paper", "live-batch", batch).unwrap()["rows"][pvp]["state"],
             "AwaitingNormalStop"
         );
+    }
+    fn queue_rule(root: &Path, queued_after: &str) {
+        let config = instance(root, "paper").unwrap();
+        let core = config.core_profile.clone().unwrap();
+        let queue = Queue {
+            edits: Edits::from([(
+                "gamerules.spawn_mobs".into(),
+                Edit {
+                    request: "typed-while-stopping".into(),
+                    target: "false".into(),
+                    sha256: core.sha256,
+                    queued_after: Some(queued_after.into()),
+                    attempted_run: None,
+                    state: "Queued".into(),
+                    created_at: 1,
+                    readback_attempts: 0,
+                    persistence_checked: false,
+                    live_retry: true,
+                    save_write: None,
+                },
+            )]),
+            last_batch: None,
+        };
+        let path = entry(root, "paper").unwrap();
+        core_maintenance::write_durable(&path, &queue, path.exists()).unwrap();
+    }
+
+    fn stopped_run(root: &Path, through_instanceharbor: bool) -> Value {
+        let folder = root.join("runs").join("paper");
+        fs::create_dir_all(&folder).unwrap();
+        let dead = Identity { pid: u32::MAX, created: 1 };
+        let run = Run { id: "run-1".into(), host: dead.clone(), java: dead };
+        save(&folder.join("identity.json"), &run).unwrap();
+        save(&folder.join("run-release.json"), &json!({"run":run,"exit":0})).unwrap();
+        if through_instanceharbor {
+            fs::write(folder.join("stop-sent"), b"").unwrap();
+        }
+        json!(run)
+    }
+
+    fn rules_file(root: &Path) -> PathBuf {
+        root.join("instances/paper/world/dimensions/minecraft/overworld/data/minecraft/game_rules.dat")
+    }
+
+    fn write_world(root: &Path) -> Vec<u8> {
+        let file = rules_file(root);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        // {"": {data: {minecraft:spawn_mobs: 1b}}}
+        let raw = b"\x0a\0\0\x0a\0\x04data\x01\0\x14minecraft:spawn_mobs\x01\0\0".to_vec();
+        use flate2::{write::GzEncoder, Compression};
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        std::io::Write::write_all(&mut encoder, &raw).unwrap();
+        let bytes = encoder.finish().unwrap();
+        fs::write(&file, &bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn unsent_rules_are_written_to_the_save_after_a_normal_stop() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let original = write_world(root);
+        stopped_run(root, true);
+        queue_rule(root, "run-1");
+        assert!(world_live::has_queued(root, "paper").unwrap());
+        world_live::recover_saved(root, "paper").unwrap();
+
+        let edit = &load(&entry(root, "paper").unwrap()).unwrap().edits["gamerules.spawn_mobs"];
+        assert_eq!(edit.save_write.as_deref(), Some("Written"));
+        // Still due at the next start, which confirms it through the console.
+        assert!(eligible(edit, "run-2"));
+        assert!(!world_live::has_queued(root, "paper").unwrap());
+        let directory = root.join("instances/paper");
+        let core = instance(root, "paper").unwrap().core_profile.unwrap();
+        let saved = prepare_diagnostics::observe_saved_world(&directory, &core, &["gamerules.spawn_mobs"]);
+        assert_eq!(saved.get("gamerules.spawn_mobs").map(String::as_str), Some("false"));
+        assert_eq!(values(root, "paper").unwrap()["gamerules.spawn_mobs"]["state"], "WrittenToSave");
+        let backups: Vec<_> = fs::read_dir(root.join("history/world-save-backups-paper")).unwrap().collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(fs::read(backups[0].as_ref().unwrap().path()).unwrap(), original);
+        assert_eq!(activity(root, "paper").unwrap()[0]["message"], "已寫入世界存檔，下次啟動時核對");
+    }
+
+    #[test]
+    fn a_stop_without_proof_leaves_the_save_and_explains_why() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let original = write_world(root);
+        stopped_run(root, false);
+        queue_rule(root, "run-1");
+        world_live::recover_saved(root, "paper").unwrap();
+
+        let edit = &load(&entry(root, "paper").unwrap()).unwrap().edits["gamerules.spawn_mobs"];
+        assert_eq!(edit.save_write.as_deref(), Some("WorldStopUnverified"));
+        assert_eq!(fs::read(rules_file(root)).unwrap(), original);
+        let value = &values(root, "paper").unwrap()["gamerules.spawn_mobs"];
+        assert_eq!(value["state"], "Queued");
+        assert_eq!(value["saveWriteReason"], "WorldStopUnverified");
+        assert_eq!(activity(root, "paper").unwrap()[0]["message"], "等後台輸入完成後即時套用；未送出時下次啟動套用");
+        // The reason is recorded once, so the Manager sweep does not retry every second.
+        assert!(!world_live::has_queued(root, "paper").unwrap());
     }
 }
