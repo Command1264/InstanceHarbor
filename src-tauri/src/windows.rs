@@ -1454,17 +1454,6 @@ const CONSOLE_TIER: &str = "console-tier.json";
 /// Written by a user-confirmed start. Only then may the Host open a console window.
 const CONSOLE_WINDOW_ALLOWED: &str = "console-window-allowed";
 
-fn console_family(config: &Instance, jar: &Path) -> String {
-    match &config.core_profile {
-        Some(profile) => profile.family.clone(),
-        None => core_identity::read_identity(jar)
-            .ok()
-            .flatten()
-            .map(|identity| identity.family.to_owned())
-            .unwrap_or_default(),
-    }
-}
-
 /// Predicts the console tier of the next start, so the GUI can ask before a
 /// start would need a console window. The Host repeats every check at start.
 fn console_plan(root: &Path, config: &Instance) -> Result<Value> {
@@ -1478,7 +1467,6 @@ fn console_plan(root: &Path, config: &Instance) -> Result<Value> {
         }
     });
     let choice = native_console::choose(&native_console::Facts {
-        supported_core: native_console::supported_core(&console_family(config, &jar)),
         paths,
         bundled: native_console::bundled_runtime().map(|_| ()),
         system: native_console::system_runtime(),
@@ -1951,7 +1939,6 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     let stderr = File::create_new(folder.join("stderr.log")).map_err(fail)?;
     let mut startup_log = File::open(folder.join("stdout.log")).map_err(fail)?;
     let mut facts = native_console::Facts {
-        supported_core: native_console::supported_core(&console_family(config, &jar)),
         paths: native_console::launch_paths(&java, &path, &jar),
         bundled: native_console::bundled_runtime().map(|_| ()),
         system: native_console::system_runtime(),

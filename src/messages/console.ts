@@ -12,7 +12,7 @@ export const consoleMessages = {
   'console.reason.ConsoleRuntimeMissing': ['找不到隨附的後台元件（conpty.dll、OpenConsole.exe）', 'The bundled console files (conpty.dll, OpenConsole.exe) are missing'],
   'console.reason.ConsoleRuntimeMismatch': ['隨附的後台元件與已核對的版本不符', 'The bundled console files do not match the verified version'],
   'console.reason.ConsoleSystemUnavailable': ['這個 Windows 版本沒有內建主控台元件', 'This Windows version has no built-in console'],
-  'console.reason.ConsoleCoreUnsupported': ['後台只支援 Paper、Folia 與 Velocity', 'The console supports only Paper, Folia and Velocity'],
+  'console.reason.ConsoleCoreUnsupported': ['較舊的 InstanceHarbor 版本未替此核心開啟後台；重新啟動後會使用後台', 'An older InstanceHarbor version ran this core without a console. Restart it to use the console'],
   'console.reason.ConsolePathUnsupported': ['Java、伺服器目錄或核心的路徑太長（260 個字元以上）或經過重新導向', 'The Java, server folder or core path is too long (260 characters or more) or redirected'],
   'console.reason.ConsoleWindowNotConfirmed': ['沒有確認使用獨立主控台視窗', 'Using a separate console window was not confirmed'],
   'console.reason.ConsoleTierLimited': ['開發版測試設定限制了可用的後台', 'A development test setting limited the console'],
