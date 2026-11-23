@@ -3,3 +3,10 @@
 /instances/
 /runtime/
 /settings/
+/dist/
+/dist-dev/
+/dist-preview/
+/node_modules/
+/src-tauri/target/
+/src-tauri/gen/
+/.evidence/

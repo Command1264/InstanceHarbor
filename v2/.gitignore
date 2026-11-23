@@ -1,8 +1,0 @@
-/dist/
-/dist-dev/
-/node_modules/
-/src-tauri/target/
-/.evidence/
-/src-tauri/gen/
-
-/dist-preview/

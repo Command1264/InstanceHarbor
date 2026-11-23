@@ -1,8 +1,19 @@
 # InstanceHarbor
 
+English | [繁體中文](README.zh-TW.md)
+
 Manage Minecraft server instances on Windows x64 through the desktop app or PowerShell CLI.
 
-- [Windows build, operation and rollback guide](v2/README.md)
-- [繁體中文預發行說明](docs/windows-rc2.md)
+## Documentation
 
-InstanceHarbor source is available under the [MIT License](LICENSE). Third-party components retain their own terms. The Windows packages include the [distribution notices and corresponding MPL sources](docs/windows-distribution-licenses.md).
+The full documentation is in Traditional Chinese:
+
+- [Development guide](docs/development.md): build, test, isolated acceptance, system tray, and rollback.
+- [1.0.0-rc2 pre-release notes](docs/windows-rc2.md).
+- [Windows distribution and licenses](docs/windows-distribution-licenses.md) (English): how to build a distribution, plus the third-party notices and corresponding MPL sources.
+
+## License
+
+InstanceHarbor source is available under the [MIT License](LICENSE). Third-party components retain their own terms.
+
+This English README is the primary version. Keep [README.zh-TW.md](README.zh-TW.md) in sync when you change it.
