@@ -494,6 +494,7 @@ mod tests {
             save(
                 &record_path(&self.0, name),
                 &Instance {
+                    core_file: None,
                     name: name.into(),
                     java: directory.join("unused-java.exe"),
                     port,

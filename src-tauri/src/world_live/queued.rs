@@ -119,7 +119,7 @@ pub(super) fn verified(root: &Path, config: &Instance) -> Result<(PathBuf, CoreP
         return Err("WorldRunUnavailable".into());
     }
     let directory = instance_path(root, &config.name)?;
-    let jar = directory.join("server.jar");
+    let jar = core_artifact::jar(&directory, config);
     no_redirect(&jar)?;
     let hash = content_revision::file_revision(&jar)?;
     if config
@@ -961,6 +961,7 @@ mod tests {
             save(
                 &record_path(&root, "paper"),
                 &Instance {
+                    core_file: None,
                     name: "paper".into(),
                     java: directory.join("unused-java.exe"),
                     port,

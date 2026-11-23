@@ -135,6 +135,7 @@ pub(super) fn publish(
         timing: None,
         auto_restart: None,
         core_local_create: true,
+        core_file: None,
         management_discovered: false,
         core_profile: Some(core),
         directory: Some(path_format::display(&spec.target(root))),

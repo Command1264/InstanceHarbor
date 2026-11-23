@@ -43,6 +43,8 @@ mod core_prefetch;
 mod agent_rebuild;
 #[path = "core_identity.rs"]
 mod core_identity;
+#[path = "core_artifact.rs"]
+mod core_artifact;
 #[path = "gui_singleton.rs"]
 pub mod gui_singleton;
 #[path = "host_pipe.rs"]
@@ -287,6 +289,9 @@ struct Instance {
     auto_restart: Option<AutoRestart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     core_profile: Option<CoreProfile>,
+    /// The core JAR's file name inside the instance folder; absent means `server.jar`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    core_file: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     core_local_create: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -688,7 +693,7 @@ fn launch_java(root: &Path, config: &Instance, directory: &Path) -> Result<PathB
     if !config.can_inherit_java() {
         return Err("InvalidJavaExecutable".into());
     }
-    let jar = directory.join("server.jar");
+    let jar = core_artifact::jar(directory, config);
     no_redirect(&jar)?;
     let profile = core_maintenance::trusted_profile(config, content_revision::file_revision(&jar)?)
         .ok_or("AutoJavaUnavailable")?;
@@ -823,7 +828,10 @@ fn decode_instance(record: &Path, name: &str, bytes: &[u8]) -> Result<Instance> 
     let value: Instance = serde_json::from_slice(bytes).map_err(|error| {
         format!("InvalidInstanceRecord: {}: {error}", record.display())
     })?;
-    if value.name != name || value.port == 0 {
+    if value.name != name
+        || value.port == 0
+        || value.core_file.as_deref().is_some_and(|file| !core_artifact::valid_name(file))
+    {
         return Err("InvalidInstanceRecord".into());
     }
     Ok(value)
@@ -939,7 +947,7 @@ fn instance_listen_address(config: &Instance) -> Ipv4Addr {
 }
 
 fn validate_velocity_launch(path: &Path, profile: &CoreProfile, config: &Instance) -> Result<()> {
-    let jar = path.join("server.jar");
+    let jar = core_artifact::jar(path, config);
     no_redirect(&jar)?;
     if content_revision::file_revision(&jar)? != profile.sha256 {
         return Err("CoreArtifactChanged".into());
@@ -977,6 +985,7 @@ struct ImportSource {
     retained: Option<Instance>,
     explicit_directory: bool,
     velocity: Option<CoreProfile>,
+    core_file: String,
     address: Option<Ipv4Addr>,
     revision: Option<String>,
     _lease: std::os::windows::io::OwnedHandle,
@@ -1061,18 +1070,25 @@ fn checked_import_inner(
     if !admitted {
         return Err("InstanceExcludedOrInvalid".into());
     }
-    let core = target.join("server.jar");
+    let proxy_config = target.join("velocity.toml");
+    let proxy = match fs::symlink_metadata(&proxy_config) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(fail(error)),
+    };
+    let core_file = core_artifact::locate(&target, proxy)?.ok_or("MissingCoreArtifact")?;
+    let core = target.join(&core_file);
     no_redirect(&core)?;
     if !core.is_file() {
         return Err("MissingCoreArtifact".into());
     }
-    let proxy_config = target.join("velocity.toml");
-    let velocity = match fs::symlink_metadata(&proxy_config) {
-        Ok(_) => Some(verified_core_profile(&core)?
+    core_artifact::assert_unused(&core)?;
+    let velocity = if proxy {
+        Some(core_artifact::identify(&core)?
             .filter(|profile| profile.family == "VELOCITY")
-            .ok_or("UnverifiedVelocityCore")?),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(fail(error)),
+            .ok_or("UnverifiedVelocityCore")?)
+    } else {
+        None
     };
     if existing.as_ref().and_then(registered_velocity).is_some() && velocity.is_none() {
         return Err("InvalidVelocityBind".into());
@@ -1092,7 +1108,7 @@ fn checked_import_inner(
     let lease = claim_runtime_directory(&target)?;
     scan_policy::verify_import_idle(&target)?;
     let explicit_directory = directory.is_some();
-    Ok(ImportSource { target, port, retained: existing, explicit_directory, velocity, address, revision, _lease: lease })
+    Ok(ImportSource { target, port, retained: existing, explicit_directory, velocity, core_file, address, revision, _lease: lease })
 }
 
 fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
@@ -1303,6 +1319,7 @@ fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
             timing: retained_timing,
             auto_restart: import.as_ref().and_then(|source| source.retained.as_ref()).and_then(|item| item.auto_restart.clone()),
             core_local_create,
+            core_file: None,
             core_profile,
             management_discovered: false,
             directory: (prepared.is_some() || import.is_some_and(|source| source.explicit_directory))
@@ -1440,7 +1457,7 @@ fn console_family(config: &Instance, jar: &Path) -> String {
 /// start would need a console window. The Host repeats every check at start.
 fn console_plan(root: &Path, config: &Instance) -> Result<Value> {
     let path = instance_path(root, &config.name)?;
-    let jar = path.join("server.jar");
+    let jar = core_artifact::jar(&path, config);
     let paths = native_console::launch_paths(&jar, &path, &jar).and_then(|()| {
         if config.java.as_os_str().is_empty() {
             Ok(())
@@ -1488,6 +1505,8 @@ fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
     world_live::recover_saved_locked(root, &config.name)?;
     deferred_settings::apply_locked(root, &config.name)?;
     let refreshed = instance(root, &config.name)?;
+    // Follow a core replaced under another file name before any check reads it.
+    let refreshed = core_artifact::adopt(root, &instance_path(root, &config.name)?, refreshed)?;
     let config = &refreshed;
     if !admitted(root, &config.name)? {
         return Err("InstanceExcludedOrInvalid".into());
@@ -1508,7 +1527,7 @@ fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
     } else if property_port(&path)? != config.port {
         return Err("PortChanged".into());
     }
-    no_redirect(&path.join("server.jar"))?;
+    no_redirect(&core_artifact::jar(&path, config))?;
     instance_port_free(config)?;
     let executable = launch_java(root, config, &path)?;
     if let Some(jvm) = &config.jvm {
@@ -1801,7 +1820,7 @@ fn mark_host_phase(path: &Path) {
 
 fn verified_launch_jar(root: &Path, config: &Instance, local: &Path) -> Result<(PathBuf, Option<File>)> {
     use std::os::windows::fs::OpenOptionsExt;
-    let local = local.join("server.jar");
+    let local = core_artifact::jar(local, config);
     let _requested = match fs::symlink_metadata(root.join("shared-core.enabled")) {
         Ok(_) => { no_redirect(&root.join("shared-core.enabled"))?; true }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((local, None)),
@@ -1887,7 +1906,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
         validate_velocity_launch(&path, profile, config)?;
     }
     let (jar, _artifact_guard) = if velocity.is_some() {
-        (path.join("server.jar"), None)
+        (core_artifact::jar(&path, config), None)
     } else {
         verified_launch_jar(root, config, &path)?
     };
@@ -1965,10 +1984,9 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     } else {
         // Legacy Java resolves the local server JAR through a file URI. Passing
         // a verbatim Windows absolute path can make that URI invalid for ZipFS.
-        let java_jar = if jar == path.join("server.jar") {
-            Path::new("server.jar")
-        } else {
-            &jar
+        let java_jar = match jar.strip_prefix(&path) {
+            Ok(name) if name.components().count() == 1 => name,
+            _ => &jar,
         };
         let mut command = Command::new(&java);
         command.args(&args).arg("-jar").arg(java_jar);
@@ -3080,7 +3098,7 @@ mod start_preflight_tests {
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("server.jar"), b"not a real jar").unwrap();
         fs::write(directory.join("server.properties"), format!("server-ip=127.0.0.1\nserver-port={port}\n")).unwrap();
-        let config = Instance {
+        let config = Instance { core_file: None,
             name: "agent".into(),
             java: parent.join("removed-jdk").join("bin").join("java.exe"),
             port,

@@ -1,5 +1,5 @@
 //! Read only a bounded plugin identity from a Bukkit or Paper JAR.
-use super::core_identity::{le16, le32, read_directory};
+use super::core_identity::{le16, le32, read_directory, read_directory_with};
 use flate2::{Decompress, FlushDecompress, Status};
 use std::{
     fs::File,
@@ -32,15 +32,24 @@ pub(super) fn name(file: &mut File) -> Option<String> {
 /// distinct from an invalid ZIP, duplicate entry or invalid local header.
 pub(super) fn named_metadata(file: &mut File, wanted: &[u8]) -> Option<Option<Vec<u8>>> {
     let length = file.metadata().ok()?.len();
-    archive_metadata(file, length, wanted)
+    let (directory, offset) = read_directory(file, length).ok()??;
+    archive_metadata(file, directory, offset, wanted)
+}
+
+/// The same bounded read for a server core JAR, which may list up to the ZIP
+/// format's 65,535 entries.
+pub(super) fn core_metadata(file: &mut File, wanted: &[u8]) -> Option<Option<Vec<u8>>> {
+    let length = file.metadata().ok()?.len();
+    let (directory, offset) = read_directory_with(file, length, usize::from(u16::MAX)).ok()??;
+    archive_metadata(file, directory, offset, wanted)
 }
 
 fn archive_metadata(
     file: &mut (impl Read + Seek),
-    length: u64,
+    directory: Vec<u8>,
+    offset: u64,
     wanted: &[u8],
 ) -> Option<Option<Vec<u8>>> {
-    let (directory, offset) = read_directory(file, length).ok()??;
     let mut at = 0;
     let mut found = None;
     while at < directory.len() {
@@ -375,7 +384,9 @@ mod tests {
     fn named_zip_metadata_distinguishes_missing_duplicate_and_corrupt_entries() {
         let name = "META-INF/download-context";
         let read = |bytes: &[u8]| {
-            archive_metadata(&mut Cursor::new(bytes), bytes.len() as u64, name.as_bytes())
+            let mut cursor = Cursor::new(bytes);
+            let (directory, offset) = read_directory(&mut cursor, bytes.len() as u64).ok()??;
+            archive_metadata(&mut cursor, directory, offset, name.as_bytes())
         };
         for deflate in [false, true] {
             assert_eq!(read(&jar(&[(name, "context")], deflate)), Some(Some(b"context".to_vec())));

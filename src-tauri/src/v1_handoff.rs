@@ -1,15 +1,14 @@
 //! Hand a server folder that V1 managed over to this workspace (#14).
 //!
 //! The folder stays where it is. V1's markers move into a backup folder inside
-//! it, a Velocity core is renamed to `server.jar`, and the folder is then
-//! registered through the ordinary import checks. A manifest records every
+//! it, and the folder is then registered through the ordinary import checks,
+//! which record the core under its existing file name. A manifest records every
 //! change so `v1-handoff-rollback` can give the folder back to V1.
 use super::*;
 
 pub(super) const BACKUP: &str = ".instanceharbor-v1-handoff";
 const MANIFEST: &str = "manifest.json";
 const MARKERS: [&str; 3] = ["workspace.json", ".testlab-manager.lock", "testlab-console"];
-const CORE: &str = "server.jar";
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -17,13 +16,15 @@ struct Manifest {
     schema: u32,
     name: String,
     markers: Vec<String>,
+    /// Only manifests written by early test builds rename a Velocity core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     renamed_core: Option<String>,
 }
 
 struct Plan {
     directory: PathBuf,
     markers: Vec<String>,
-    renamed_core: Option<String>,
+    core: String,
     port: u16,
     listen: Option<Ipv4Addr>,
     revision: String,
@@ -38,31 +39,6 @@ fn entry(path: &Path) -> Result<Option<fs::Metadata>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(fail(error)),
     }
-}
-
-/// The only top-level JAR whose hash is a pinned Velocity core. V1 keeps the
-/// official download name, for example `velocity-3.4.0-SNAPSHOT-500.jar`.
-fn velocity_core(directory: &Path, pinned: impl Fn(&Path) -> Result<bool>) -> Result<String> {
-    let mut found = Vec::new();
-    for item in fs::read_dir(directory).map_err(fail)? {
-        let item = item.map_err(fail)?;
-        let name = item.file_name().to_string_lossy().into_owned();
-        if item.file_type().map_err(fail)?.is_file()
-            && name.to_ascii_lowercase().ends_with(".jar")
-            && pinned(&item.path())?
-        {
-            found.push(name);
-        }
-    }
-    match found.as_slice() {
-        [name] => Ok(name.clone()),
-        [] => Err("V1VelocityCoreNotFound".into()),
-        _ => Err("V1VelocityCoreAmbiguous".into()),
-    }
-}
-
-fn pinned_velocity(path: &Path) -> Result<bool> {
-    Ok(verified_core_profile(path)?.is_some_and(|profile| profile.family == "VELOCITY"))
 }
 
 fn plan(root: &Path, name: &str, directory: &str) -> Result<Plan> {
@@ -100,12 +76,8 @@ fn plan(root: &Path, name: &str, directory: &str) -> Result<Plan> {
         return Err("V1MarkersNotFound".into());
     }
     let velocity = entry(&target.join("velocity.toml"))?.is_some();
-    let renamed_core = if velocity && entry(&target.join(CORE))?.is_none() {
-        Some(velocity_core(&target, pinned_velocity)?)
-    } else {
-        None
-    };
-    let core = target.join(renamed_core.as_deref().unwrap_or(CORE));
+    let core_name = core_artifact::locate(&target, velocity)?.ok_or("MissingCoreArtifact")?;
+    let core = target.join(&core_name);
     if entry(&core)?.is_none() {
         return Err("MissingCoreArtifact".into());
     }
@@ -117,11 +89,12 @@ fn plan(root: &Path, name: &str, directory: &str) -> Result<Plan> {
         (property_port(&target)?, None, config)
     };
     legacy_preview::v1_stopped(&target, port)?;
+    core_artifact::assert_unused(&core)?;
     let revision = content_revision::revision(&serde_json::to_vec(&json!({
         "name": name, "directory": path_format::display(&target), "markers": evidence,
-        "core": [renamed_core, content_revision::file_revision(&core)?], "config": config, "port": port,
+        "core": [&core_name, content_revision::file_revision(&core)?], "config": config, "port": port,
     })).map_err(fail)?)?;
-    Ok(Plan { directory: target, markers, renamed_core, port, listen, revision })
+    Ok(Plan { directory: target, markers, core: core_name, port, listen, revision })
 }
 
 fn view(name: &str, plan: &Plan) -> Value {
@@ -130,7 +103,7 @@ fn view(name: &str, plan: &Plan) -> Value {
         "directory": path_format::display(&plan.directory),
         "markers": plan.markers,
         "backup": BACKUP,
-        "renameCore": plan.renamed_core.as_ref().map(|from| json!({"from": from, "to": CORE})),
+        "core": plan.core,
         "port": plan.port,
         "listenAddress": plan.listen.map(|ip| ip.to_string()),
         "allInterfaces": plan.listen.is_some_and(|ip| ip.is_unspecified()),
@@ -151,7 +124,7 @@ fn restore(directory: &Path, manifest: &Manifest) -> Result<()> {
     let backup = directory.join(BACKUP);
     let mut first = None;
     if let Some(original) = &manifest.renamed_core {
-        if let Err(error) = move_item(&directory.join(CORE), &directory.join(original)) {
+        if let Err(error) = move_item(&directory.join(core_artifact::DEFAULT), &directory.join(original)) {
             first.get_or_insert(error);
         }
     }
@@ -177,7 +150,7 @@ fn handoff(root: &Path, name: &str, request: &str, java: &str, directory: &str, 
         schema: 1,
         name: name.to_owned(),
         markers: plan.markers.clone(),
-        renamed_core: plan.renamed_core.clone(),
+        renamed_core: None,
     };
     let backup = plan.directory.join(BACKUP);
     fs::create_dir(&backup).map_err(fail)?;
@@ -190,9 +163,6 @@ fn handoff(root: &Path, name: &str, request: &str, java: &str, directory: &str, 
     let moved = (|| -> Result<Value> {
         for marker in &plan.markers {
             move_item(&plan.directory.join(marker), &backup.join(marker))?;
-        }
-        if let Some(original) = &plan.renamed_core {
-            move_item(&plan.directory.join(original), &plan.directory.join(CORE))?;
         }
         register(root, name, request, java, &plan, listen)
     })();
@@ -271,22 +241,6 @@ pub(super) fn dispatch_verb(root: &Path, verb: &str, args: &[String]) -> Option<
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_velocity_core_is_the_single_pinned_jar() {
-        let folder = std::env::temp_dir().join(format!("ih-v1-core-{}-{}", std::process::id(), clock()));
-        fs::create_dir(&folder).unwrap();
-        fs::write(folder.join("velocity-3.4.0-500.jar"), b"pinned").unwrap();
-        fs::write(folder.join("plugin-helper.jar"), b"other").unwrap();
-        let pinned = |path: &Path| Ok(fs::read(path).unwrap() == b"pinned");
-        assert_eq!(velocity_core(&folder, pinned).unwrap(), "velocity-3.4.0-500.jar");
-        fs::write(folder.join("velocity-copy.jar"), b"pinned").unwrap();
-        assert_eq!(velocity_core(&folder, pinned).unwrap_err(), "V1VelocityCoreAmbiguous");
-        fs::remove_file(folder.join("velocity-copy.jar")).unwrap();
-        fs::remove_file(folder.join("velocity-3.4.0-500.jar")).unwrap();
-        assert_eq!(velocity_core(&folder, pinned).unwrap_err(), "V1VelocityCoreNotFound");
-        fs::remove_dir_all(&folder).unwrap();
-    }
-
     struct V1 {
         parent: PathBuf,
         root: PathBuf,
@@ -363,7 +317,7 @@ mod tests {
         let before = v1.files();
         let preview = v1.call("v1-handoff-preview", &["lobby", &v1.directory()]).unwrap();
         assert_eq!(preview["markers"], json!(["workspace.json", ".testlab-manager.lock", "testlab-console"]));
-        assert!(preview["renameCore"].is_null());
+        assert_eq!(preview["core"], "server.jar");
         assert_eq!(v1.files(), before, "preview must not change the folder");
 
         let revision = preview["revision"].as_str().unwrap();

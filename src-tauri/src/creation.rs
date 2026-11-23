@@ -328,7 +328,7 @@ fn stage(root: &Path, inspection: &Inspection, draft: &Draft, work: &str, prepar
         velocity_listen_address: None, removed: false,
         directory: Some(path_format::display(&inspection.target)),
         jvm: None, timing: None, auto_restart: None, core_profile: Some(profile.clone()),
-        core_local_create: true, management_discovered: false,
+        core_file: None, core_local_create: true, management_discovered: false,
     };
     let scope = Scope {
         original_revision: inspection.scope.original_revision.clone(),

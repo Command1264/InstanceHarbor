@@ -304,7 +304,7 @@ pub(super) fn console_appearance(root: &Path, name: &str, run: &str) -> Result<(
                 .checked_add(116_444_736_000_000_000)?)?,
             "type" | "minecraft_version" | "server_build" | "server_sha256" => {
                 let profile = core.get_or_init(|| {
-                    let jar = directory.join("server.jar");
+                    let jar = core_artifact::jar(&directory, &config);
                     no_redirect(&jar).ok()?;
                     let hash = content_revision::file_revision(&jar).ok()?;
                     core_maintenance::trusted_profile(&config, hash)
@@ -324,7 +324,7 @@ pub(super) fn console_appearance(root: &Path, name: &str, run: &str) -> Result<(
 }
 
 pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
-    let jar = path.join("server.jar");
+    let jar = core_artifact::jar(path, row);
     let saved = row.core_profile.as_ref().filter(|profile| {
         profile.family != "PAPER"
             && content_revision::file_revision(&jar).is_ok_and(|hash| hash == profile.sha256)

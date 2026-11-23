@@ -298,16 +298,21 @@ fn inspect_candidate(
     row.kind = kind;
     row.port = Some(port);
     row.listen_address = ip.map(|ip| ip.to_string());
-    let core = path.join("server.jar");
+    let core_name = core_artifact::locate(path, kind == "Velocity")?.ok_or("MissingCoreArtifact")?;
+    let core = path.join(&core_name);
     if raw_entry(&core)?.is_none() {
         return Err("MissingCoreArtifact".into());
     }
+    // A running server keeps its core open; report that before port checks.
+    core_artifact::assert_unused(&core)?;
     let core_file = hold_file(&core)?;
     let core_token = file_token(&core, &core_file)?;
     held.push(core_file);
-    let detected_core = core_token[0]
-        .as_str()
-        .and_then(|hash| pinned_core_profile(hash.to_owned()));
+    let detected_core = match core_artifact::identify(&core) {
+        Ok(profile) => profile,
+        Err(error) if management.is_some() => return Err(error),
+        Err(_) => None,
+    };
     if let Some(profile) = &detected_core {
         row.core = Some(format!(
             "{} {} · {}",
@@ -337,7 +342,7 @@ fn inspect_candidate(
         Some(policy) => checked_import_with_policy(root, name, Some(&row.directory), confirmed, policy),
         None => checked_import(root, name, Some(&row.directory), confirmed),
     }?;
-    if source.port != port || source.address != ip || source.target != path {
+    if source.port != port || source.address != ip || source.target != path || source.core_file != core_name {
         return Err("BatchImportPreviewChanged".into());
     }
     let directory_id = held[folders.checked_sub(1).ok_or("BatchImportEvidenceUnavailable")?]
@@ -791,6 +796,7 @@ fn imported_record(
         } else {
             checked.source.velocity.clone()
         },
+        core_file: core_artifact::stored(&checked.source.core_file),
         core_local_create: false,
         management_discovered: automatic,
     };
@@ -1210,6 +1216,57 @@ mod tests {
             );
         }
         fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn a_core_under_any_file_name_is_recorded_and_a_running_core_is_refused() {
+        let f = Fixture::new();
+        f.server("instances/named/srv", ports(1)[0]);
+        let dir = f.root.join("instances/named/srv");
+        fs::rename(dir.join("server.jar"), dir.join("spigot-1.8.8.jar")).unwrap();
+        let preview = |f: &Fixture| {
+            let report = f.call("import-batch-preview", &[json!({"directory":"instances/named","java":f.java}).to_string()]).unwrap();
+            report["rows"][0].clone()
+        };
+
+        // A server still running from the folder keeps its core open.
+        let script = format!("$f=[IO.File]::Open('{}','Open','Read','ReadWrite'); Start-Sleep 20", dir.join("spigot-1.8.8.jar").display());
+        let mut child = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).spawn().unwrap();
+        let mut refused = Value::Null;
+        for _ in 0..100 {
+            refused = preview(&f);
+            if refused["reason"] == "CoreInUse" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(refused["reason"], "CoreInUse", "{refused}");
+
+        let row = preview(&f);
+        assert_eq!(row["state"], "Ready", "{row}");
+        let selection = Selection {
+            directory: "instances/named".into(),
+            automatic: false,
+            rows: vec![Selected {
+                directory: row["directory"].as_str().unwrap().into(),
+                name: "srv".into(),
+                java: f.java.clone(),
+                listen_address: None,
+                revision: row["revision"].as_str().unwrap().into(),
+            }],
+        };
+        f.apply("named", &selection).unwrap();
+        let record = instance(&f.root, "srv").unwrap();
+        assert_eq!(record.core_file.as_deref(), Some("spigot-1.8.8.jar"));
+        assert_eq!(core_artifact::jar(&instance_path(&f.root, "srv").unwrap(), &record), dir.join("spigot-1.8.8.jar"));
+
+        // A replaced core under a new name is followed before the next start.
+        fs::rename(dir.join("spigot-1.8.8.jar"), dir.join("spigot-1.8.8-new.jar")).unwrap();
+        let adopted = core_artifact::adopt(&f.root, &dir, record).unwrap();
+        assert_eq!(adopted.core_file.as_deref(), Some("spigot-1.8.8-new.jar"));
+        assert_eq!(instance(&f.root, "srv").unwrap().core_file.as_deref(), Some("spigot-1.8.8-new.jar"));
     }
 
     #[test]

@@ -885,11 +885,11 @@ pub(super) fn inspect(root: &Path, args: &[String]) -> Result<Value> {
     let proxy_file = proxy_directory
         .as_ref()
         .and_then(|path| ConfigEvidence::read(path, "velocity.toml").ok());
-    let core_stamp = |directory: Option<&Path>| {
-        directory.and_then(|dir| current_stamp(&dir.join("server.jar")).ok())
+    let core_stamp = |directory: Option<&Path>, owner: Option<&Instance>| {
+        directory.zip(owner).and_then(|(dir, owner)| current_stamp(&core_artifact::jar(dir, owner)).ok())
     };
-    let initial_subject_core = core_stamp(directory.as_deref());
-    let initial_proxy_core = core_stamp(proxy_directory.as_deref());
+    let initial_subject_core = core_stamp(directory.as_deref(), Some(&item));
+    let initial_proxy_core = core_stamp(proxy_directory.as_deref(), proxy);
     let backend = backend_file
         .as_ref()
         .and_then(|file| backend_endpoint(&file.bytes));
@@ -977,14 +977,14 @@ pub(super) fn inspect(root: &Path, args: &[String]) -> Result<Value> {
             });
     let current_subject = same_record(root, &item)
         && runtime(root, &item) == subject_run
-        && core_stamp(directory.as_deref()) == initial_subject_core
+        && core_stamp(directory.as_deref(), Some(&item)) == initial_subject_core
         && subject_run.run.as_ref().is_none_or(|run| {
             initial_subject_core.is_some_and(|core| core.changed <= run.java.created)
         });
     let current_proxy = proxy.zip(proxy_run.as_ref()).is_none_or(|(item, before)| {
         same_record(root, item)
             && runtime(root, item) == *before
-            && core_stamp(proxy_directory.as_deref()) == initial_proxy_core
+            && core_stamp(proxy_directory.as_deref(), proxy) == initial_proxy_core
             && before.run.as_ref().is_none_or(|run| {
                 initial_proxy_core.is_some_and(|core| core.changed <= run.java.created)
             })
@@ -993,8 +993,8 @@ pub(super) fn inspect(root: &Path, args: &[String]) -> Result<Value> {
         || proxy.is_some_and(|item| !same_record(root, item))
         || backend_file.as_ref().is_some_and(|file| !file.unchanged())
         || proxy_file.as_ref().is_some_and(|file| !file.unchanged())
-        || core_stamp(directory.as_deref()) != initial_subject_core
-        || core_stamp(proxy_directory.as_deref()) != initial_proxy_core
+        || core_stamp(directory.as_deref(), Some(&item)) != initial_subject_core
+        || core_stamp(proxy_directory.as_deref(), proxy) != initial_proxy_core
     {
         config.finding = finding("Unconfirmed", "VelocityConfig", "EvidenceChanged");
     }

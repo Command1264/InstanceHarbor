@@ -299,7 +299,7 @@ impl Target {
     }
 
     fn jar(&self) -> PathBuf {
-        self.directory.join("server.jar")
+        core_artifact::jar(&self.directory, &self.config)
     }
 
     fn pending(&self) -> Result<Option<Intent>> {
@@ -826,6 +826,7 @@ mod tests {
             )
             .unwrap();
             let config = Instance {
+                core_file: None,
                 name: "server".into(),
                 java: self.0.join("unused-java.exe"),
                 port,

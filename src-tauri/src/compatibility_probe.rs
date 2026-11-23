@@ -172,7 +172,7 @@ fn artifact_digest(path: &Path) -> Result<String> {
 }
 
 fn check_component(root: &Path, target: &Registered) -> Result<Value> {
-    let jar = target.directory.join("server.jar");
+    let jar = core_artifact::jar(&target.directory, &target.record);
     let digest = artifact_digest(&jar)?;
     let profile = pinned_core_profile(digest)
         .filter(|profile| target.role.supports(profile))

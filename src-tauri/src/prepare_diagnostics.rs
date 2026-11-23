@@ -114,7 +114,7 @@ fn doctor(root: &Path, name: Option<&str>) -> Result<Value> {
                     &mut findings,
                     "registeredCore",
                     (|| {
-                        let jar = instance_path(root, name)?.join("server.jar");
+                        let jar = core_artifact::jar(&instance_path(root, name)?, &instance(root, name)?);
                         no_redirect(&jar)?;
                         let digest = content_revision::file_revision(&jar)?;
                         match &config.core_profile {
@@ -248,7 +248,7 @@ fn defaults_diff(root: &Path, name: &str) -> Result<Value> {
     }
     let directory = instance_path(root, name)?;
     let (snapshot, core) = {
-        let source = directory.join("server.jar");
+        let source = core_artifact::jar(&directory, &config);
         no_redirect(&source)?;
         let digest = content_revision::file_revision(&source)?;
         if config

@@ -274,7 +274,7 @@ fn outstanding(root: &Path, config: &Instance, item: &Demand) -> bool {
     let Ok(directory) = instance_path(root, &config.name) else {
         return true;
     };
-    let jar = directory.join("server.jar");
+    let jar = core_artifact::jar(&directory, config);
     if no_redirect(&jar).is_err() {
         return true;
     }

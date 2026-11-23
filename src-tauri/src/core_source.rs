@@ -440,6 +440,44 @@ fn creation_builds(family: &str, version: &str, agent: &str) -> Result<Vec<Paper
     }
 }
 
+/// Confirm a local core that the built-in table does not know. The family and
+/// version come from the JAR's own metadata; only an exact SHA-256 match in the
+/// official PaperMC catalog makes the result trusted.
+pub(super) fn catalog_profile(family: &str, version: &str, sha256: &str) -> Result<Option<CoreProfile>> {
+    catalog_profile_with(family, version, sha256, &fetch_json)
+}
+
+fn catalog_profile_with(
+    family: &str,
+    version: &str,
+    sha256: &str,
+    fetch: &impl Fn(&str, &str) -> Result<Value>,
+) -> Result<Option<CoreProfile>> {
+    if !matches!(family, "PAPER" | "FOLIA" | "VELOCITY")
+        || version.is_empty()
+        || version.len() > 32
+        || !version.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    {
+        return Ok(None);
+    }
+    let agent = configured_paper_user_agent()?;
+    let key = SourceKey { family: family.to_owned(), version: version.to_owned() };
+    let builds = match fetch_group(&key, Ok(&agent), fetch).release {
+        Ok(Release::Paper(builds)) => builds,
+        Ok(Release::Spigot { .. }) => return Ok(None),
+        Err(_) => return Err("CoreCatalogUnavailable".into()),
+    };
+    Ok(builds
+        .into_iter()
+        .find(|build| build.sha256.as_deref() == Some(sha256))
+        .map(|build| CoreProfile {
+            family: family.to_owned(),
+            minecraft: version.to_owned(),
+            build: build.id.to_string(),
+            sha256: sha256.to_owned(),
+        }))
+}
+
 fn creation_jar_name(family: &str, version: &str, build: u64) -> Result<String> {
     let project = creation_project(family)?;
     Ok(format!("{project}-{version}-{build}.jar"))
@@ -613,7 +651,7 @@ fn check_with_agent(
             if !admitted(root, name)? || config.removed {
                 return Err("CoreTargetUnavailable".into());
             }
-            let jar = instance_path(root, name)?.join("server.jar");
+            let jar = core_artifact::jar(&instance_path(root, name)?, &config);
             no_redirect(&jar)?;
             let profile =
                 core_maintenance::trusted_profile(&config, content_revision::file_revision(&jar)?)
@@ -644,7 +682,9 @@ fn check_with_agent(
             // A source snapshot belongs to this exact file at this registration, even if a
             // stop/re-register or replace happened while other group members were queried.
             let same = registration_revision(root, name).is_ok_and(|value| value == registration)
-                && instance_path(root, name).is_ok_and(|path| path.join("server.jar") == jar)
+                && instance_path(root, name).is_ok_and(|path| {
+                    instance(root, name).is_ok_and(|item| core_artifact::jar(&path, &item) == jar)
+                })
                 && admitted(root, name).is_ok_and(|allowed| allowed)
                 && instance(root, name).is_ok_and(|item| !item.removed)
                 && no_redirect(&jar).is_ok()
@@ -1020,6 +1060,27 @@ mod tests {
         json!({"id":id,"channel":channel,"downloads":{"server:default":{
             "checksums":{"sha256":hash},"url":url
         }}})
+    }
+
+    #[test]
+    fn an_unlisted_core_is_trusted_only_by_an_exact_catalog_hash() {
+        let wanted = "1b243442fc3b3cbe945628f8af7911e4be439ca8b22106fb1568ac81d5a5792b";
+        let other = "a".repeat(64);
+        let seen = Mutex::new(Vec::new());
+        let fetch = |url: &str, _: &str| {
+            seen.lock().unwrap().push(url.to_owned());
+            Ok(json!([build(201, "STABLE", &other, None), build(202, "STABLE", wanted, None)]))
+        };
+        let found = catalog_profile_with("PAPER", "26.3", wanted, &fetch).unwrap().unwrap();
+        assert_eq!((found.family.as_str(), found.minecraft.as_str(), found.build.as_str()), ("PAPER", "26.3", "202"));
+        assert_eq!(seen.lock().unwrap()[0], format!("{FILL_PROJECTS}/paper/versions/26.3/builds"));
+        assert!(catalog_profile_with("PAPER", "26.3", &"b".repeat(64), &fetch).unwrap().is_none());
+        // Spigot has no official binary catalog, and a malformed version is never sent.
+        assert!(catalog_profile_with("SPIGOT", "1.8.8", wanted, &fetch).unwrap().is_none());
+        assert!(catalog_profile_with("PAPER", "26.3/../x", wanted, &fetch).unwrap().is_none());
+        assert_eq!(seen.lock().unwrap().len(), 2);
+        let offline = |_: &str, _: &str| -> Result<Value> { Err("network".into()) };
+        assert_eq!(catalog_profile_with("VELOCITY", "4.2.1-SNAPSHOT", wanted, &offline).err().as_deref(), Some("CoreCatalogUnavailable"));
     }
 
     #[test]

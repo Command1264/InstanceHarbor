@@ -275,6 +275,7 @@ mod tests {
             sha256: content_revision::revision(b"original").unwrap(),
         };
         let previous = Instance {
+            core_file: None,
             name: name.into(),
             java: PathBuf::from("java.exe"),
             port: spec.port,
