@@ -622,6 +622,20 @@ fn observation(path: &Path, port: u16, host: Option<&Path>, deadline: Instant) -
     )
 }
 
+/// Evidence that V1 no longer runs the server in `path`: its manager lock is
+/// free, no launch is preparing or held by a live V1 Host, its control pipe is
+/// absent and nothing listens on the port. Used before a V1 handoff.
+pub(super) fn v1_stopped(path: &Path, port: u16) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(6);
+    match observation(path, port, None, deadline) {
+        Ok(state) if state["state"] == "stopped" => Ok(()),
+        Ok(state) if state["state"] == "external" => Err("V1ServerListening".into()),
+        Ok(_) => Err("V1HostRunning".into()),
+        Err(error) if error == "HostUnconfirmed" => Err("V1HostRunning".into()),
+        Err(error) => Err(error),
+    }
+}
+
 fn is_redirect(entry: &fs::DirEntry) -> Result<bool> {
     Ok(entry
         .metadata()

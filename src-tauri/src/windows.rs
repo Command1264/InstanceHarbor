@@ -51,6 +51,8 @@ mod host_pipe;
 mod host_recovery;
 #[path = "legacy_preview.rs"]
 mod legacy_preview;
+#[path = "v1_handoff.rs"]
+mod v1_handoff;
 #[path = "path_format.rs"]
 mod path_format;
 #[path = "policy_settings.rs"]
@@ -2630,6 +2632,9 @@ pub fn dispatch_with_creation_progress(
         child_directory(&root, entry)?;
     }
     if let Some(result) = batch_import::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = v1_handoff::dispatch_verb(&root, verb, args) {
         return result;
     }
     if let Some(result) = creation::dispatch(&root, verb, args, progress) {
