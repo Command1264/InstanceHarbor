@@ -47,7 +47,7 @@ A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must conta
    $binaries = 'src-tauri/target/x86_64-pc-windows-msvc/release'
    ```
 
-3. Prepare the notices. Provide the official NSIS 3.08 `COPYING`, the Windows Terminal 1.25.2733.0 x64 ZIP from the release above, and the Rust toolchain's `share/doc/rust` directory. The generator reads the Windows x64 Cargo dependency closure (including build dependencies for coverage), the npm runtime tree, and the original MPL crate archives in Cargo's registry cache.
+3. Prepare the notices. Provide the official NSIS 3.13 `COPYING`, the Windows Terminal 1.25.2733.0 x64 ZIP from the release above, and the Rust toolchain's `share/doc/rust` directory. The generator reads the Windows x64 Cargo dependency closure (including build dependencies for coverage), the npm runtime tree, and the original MPL crate archives in Cargo's registry cache.
 
    ```powershell
    python prepare-windows-notices.py --output $notices --nsis-copying $nsisCopying --terminal-zip $terminalZip --rust-docs $rustDocs
@@ -59,7 +59,7 @@ A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must conta
    $packed = ./pack-windows.ps1 -BinaryDirectory $binaries -ConsoleRuntimeDirectory $binaries -NoticeDirectory $notices -OutputZip $zip -Version 1.0.0
    ```
 
-5. Build Setup from the ZIP and the SHA-256 that step 4 returned, with the NSIS 3.08 compiler. SourceForge refuses scripted downloads; `winget download --id NSIS.NSIS --version 3.08` fetches the official installer and checks its SHA-256 (`bbc76be36ecb2fc00d493c91befdaf71654226ad8a4fc4dc338458916bf224d0`). Install it to a folder of your choice with `/S /D=<folder>`; it needs administrator rights and does not change `PATH`.
+5. Build Setup from the ZIP and the SHA-256 that step 4 returned, with the NSIS 3.13 compiler. SourceForge refuses scripted downloads; `winget download --id NSIS.NSIS --version 3.13` fetches the official installer and checks its SHA-256 (`db9a1038bbc0e53fef24f423fd609979bd578e942f1be1198db186d1c42652a3`). Install it to a folder of your choice with `/S /D=<folder>`; it needs administrator rights and does not change `PATH`.
 
    ```powershell
    ./pack-windows-setup.ps1 -Package $zip -ExpectedPackageSha256 $packed.sha256 -Compiler $makensis -Output $setup
