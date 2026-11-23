@@ -110,4 +110,6 @@ export const appMessages = {
   'app.draft.body': ['目前欄位有尚未送出的內容。', 'The current fields contain content that has not been submitted.'],
   'app.draft.confirm': ['放棄草稿', 'Discard draft'],
   'app.failure.title': ['無法完成操作', 'Operation failed'],
+  'app.batchFailed': ['批次{action}有 {count} 台實例未完成：', 'Batch {action}: {count} instances did not complete:'],
+  'app.failure.items': ['未完成的實例', 'Instances that did not complete'],
 } as const satisfies Record<string, readonly [string, string]>

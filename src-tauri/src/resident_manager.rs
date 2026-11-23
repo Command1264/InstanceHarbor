@@ -691,6 +691,12 @@ fn prepare_item(
         item.reason = Some(reason);
         item.supersedes = None;
     }
+    if action != Action::Stop && item.phase == Phase::Queued {
+        if let Some(reason) = queued_start_problem(&instance(root, &item.target.name)?.java) {
+            item.phase = Phase::Failed;
+            item.reason = Some(reason.into());
+        }
+    }
     Ok(item)
 }
 
@@ -1075,10 +1081,8 @@ fn advance(
             item.reason = Some(
                 if receipt_exists {
                     "DispatchUnconfirmed"
-                } else if error == "StartIntentChanged" {
-                    "StartIntentChanged"
                 } else {
-                    "StartRejected"
+                    start_rejection_reason(&error)
                 }
                 .into(),
             );
@@ -1086,6 +1090,30 @@ fn advance(
     }
     let mut locked = state.lock().map_err(fail)?;
     replace(directory, &mut locked, batch, index, item)
+}
+
+/// The batch journal keeps only stable codes, never raw OS text. Codes the GUI can
+/// explain on their own pass through; anything else becomes StartRejected.
+fn start_rejection_reason(error: &str) -> &'static str {
+    let code = error.split(':').next().unwrap_or_default().trim();
+    match code {
+        "StartIntentChanged" => "StartIntentChanged",
+        "JavaExecutableMissing" => "JavaExecutableMissing",
+        "JavaExecutableUnreadable" => "JavaExecutableUnreadable",
+        "PortOccupied" => "PortOccupied",
+        _ => "StartRejected",
+    }
+}
+
+/// A start that would fail on a missing registered Java fails when the batch is
+/// created, so the GUI can report it at once while the other instances start.
+fn queued_start_problem(java: &Path) -> Option<&'static str> {
+    if java.as_os_str().is_empty() {
+        return None;
+    }
+    registered_java_present(java)
+        .err()
+        .map(|error| start_rejection_reason(&error))
 }
 
 fn auto_restart_one(root: &Path, name: &str) -> Result<bool> {
@@ -1393,5 +1421,35 @@ pub(super) fn run(root: &Path) -> Result<Value> {
         }
         recovering = false;
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod start_rejection_tests {
+    use super::{queued_start_problem, start_rejection_reason};
+
+    #[test]
+    fn batch_start_keeps_explainable_codes_and_drops_raw_text() {
+        assert_eq!(start_rejection_reason("JavaExecutableMissing"), "JavaExecutableMissing");
+        assert_eq!(
+            start_rejection_reason(r"JavaExecutableUnreadable: Access is denied. (os error 5) C:\Users\someone"),
+            "JavaExecutableUnreadable"
+        );
+        assert_eq!(start_rejection_reason("PortOccupied"), "PortOccupied");
+        assert_eq!(start_rejection_reason("StartIntentChanged"), "StartIntentChanged");
+        assert_eq!(start_rejection_reason("系統找不到指定的路徑。 (os error 3)"), "StartRejected");
+    }
+
+    #[test]
+    fn batch_start_checks_the_registered_java_before_queueing() {
+        let parent = std::env::temp_dir().join(format!("ih-batch-java-{}", std::process::id()));
+        std::fs::create_dir_all(&parent).unwrap();
+        let java = parent.join("java.exe");
+        assert_eq!(queued_start_problem(&java), Some("JavaExecutableMissing"));
+        std::fs::write(&java, b"").unwrap();
+        assert_eq!(queued_start_problem(&java), None);
+        // An empty path means the instance inherits Java; that is checked at dispatch.
+        assert_eq!(queued_start_problem(std::path::Path::new("")), None);
+        std::fs::remove_dir_all(&parent).unwrap();
     }
 }

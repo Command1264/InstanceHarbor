@@ -17,6 +17,7 @@ import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
 import {suppressBrowserMenu} from './context-menu'
+import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
@@ -159,14 +160,46 @@ const submittingBatch=ref(false)
 const openingConsoles=ref(false)
 const cancellingBatch=ref<string>()
 let firstBatchRead=true
-const failureDialog=ref<HTMLDialogElement>(), failureMessage=ref('')
-const pendingOperationErrors:string[]=[]
-function showOperationError(message:string){
-  feedback.value=message
-  if(failureMessage.value){if(message!==failureMessage.value&&!pendingOperationErrors.includes(message))pendingOperationErrors.push(message);return}
+const failureDialog=ref<HTMLDialogElement>(), failureMessage=ref(''), failureItems=ref<BatchFailure[]>([])
+type OperationFailure={message:string;items:BatchFailure[];batch?:{id:string;action:string}}
+const pendingOperationErrors:OperationFailure[]=[]
+let failureBatch:OperationFailure['batch']
+function batchFailureMessage(batch:{action:string},count:number){
+  const action=({'batch-start':'app.batch.start','batch-stop':'app.batch.stop','batch-restart':'app.batch.restart'} as const)[batch.action as 'batch-start']
+  return t('app.batchFailed',{action:action?t(action):batch.action,count})
+}
+// Operation errors appear only in this dialog, never in the status line above the list.
+function showOperationError(message:string,items:BatchFailure[]=[],batch?:OperationFailure['batch']){
+  if(failureMessage.value){
+    // More failures from the batch on screen join the open dialog.
+    if(batch && failureBatch?.id===batch.id){
+      failureItems.value=[...failureItems.value,...items]
+      failureMessage.value=batchFailureMessage(batch,failureItems.value.length)
+      return
+    }
+    const queued=batch&&pendingOperationErrors.find(entry=>entry.batch?.id===batch.id)
+    if(queued){queued.items=[...queued.items,...items];queued.message=batchFailureMessage(batch,queued.items.length);return}
+    const duplicate=(entry:{message:string;items:BatchFailure[]})=>entry.message===message&&!entry.items.length&&!items.length
+    if(!duplicate({message:failureMessage.value,items:failureItems.value})&&!pendingOperationErrors.some(duplicate))pendingOperationErrors.push({message,items,batch})
+    return
+  }
   failureMessage.value=message
+  failureItems.value=items
+  failureBatch=batch
   void nextTick(()=>{if(!failureDialog.value?.open)failureDialog.value?.showModal()})
 }
+// Batches sent from this window report each failed instance as soon as it fails,
+// while the other instances keep starting.
+const watchedBatches=new Map<string,Set<string>>()
+watch(residentJobs,list=>{
+  for(const job of list){
+    const reported=watchedBatches.get(job.id)
+    if(!reported)continue
+    const failures=newBatchFailures(job,reported)
+    if(job.state!=='Pending')watchedBatches.delete(job.id)
+    if(failures.length)showOperationError(batchFailureMessage(job,failures.length),failures,{id:job.id,action:job.action})
+  }
+})
 const activeRequestIds=ref(new Set<string>())
 const projectedJobs=computed(()=>[...residentJobs.value,...jobs.value,...coreBatches.value.map(coreBatchJob)].sort((a,b)=>(b.createdAt??0)-(a.createdAt??0)).map(job=>
   job.state==='Unconfirmed' && activeRequestIds.value.has(job.id) ? {...job,state:'Pending'} : job,
@@ -378,7 +411,7 @@ let pendingDiagnosticWarning=false
 function presentDiagnosticWarning(){
   if(pendingDiagnosticWarning && !failureMessage.value && !failureDialog.value?.open){pendingDiagnosticWarning=false;showOperationError(t('app.diagnosticWarning'))}
 }
-function afterFailureClose(){failureMessage.value='';const pending=pendingOperationErrors.shift();if(pending)showOperationError(pending);else void nextTick(presentDiagnosticWarning)}
+function afterFailureClose(){failureMessage.value='';failureItems.value=[];failureBatch=undefined;const pending=pendingOperationErrors.shift();if(pending)showOperationError(pending.message,pending.items,pending.batch);else void nextTick(presentDiagnosticWarning)}
 async function checkDiagnostics(){
   if(!nativeBridge||diagnosticFailureReported)return
   try{
@@ -739,6 +772,7 @@ async function operateOne(action:'start'|'stop'|'restart',row:Instance,options:{
       requests.delete(key)
       if(generation===forceGeneration)showOperationError(t('app.stopUnconfirmed',{name:row.name}))
     }else if(generation===forceGeneration)showOperationError(t('app.opFailed',{name:row.name,error:errorText(e)}))
+    if(generation===forceGeneration)feedback.value=''
   }finally{
     markActiveRequest(id,false)
     await refresh()
@@ -758,6 +792,7 @@ async function submitResidentBatch(action:'start'|'stop'|'restart',targets:Insta
   try{
     const work=await manage<Job>([verb,id,raw])
     requests.delete(key)
+    if(!watchedBatches.has(work.id))watchedBatches.set(work.id,new Set())
     residentRevision++
     residentJobs.value=[work,...residentJobs.value.filter(job=>job.id!==work.id)]
   }finally{
@@ -827,7 +862,7 @@ async function forceStop(){
   try{
     await manage<{forced?:boolean}>(['force-stop',item.name,id,item.run])
     feedback.value=''
-  }catch(e){showOperationError(t('app.forceStopError',{error:errorText(e)}))}
+  }catch(e){feedback.value='';showOperationError(t('app.forceStopError',{error:errorText(e)}))}
   finally{
     markActiveRequest(id,false)
     forceBusy.value=false
@@ -1106,7 +1141,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
   </dialog>
   <dialog ref="routeDialog" class="compact" aria-labelledby="route-dialog-title" @cancel.prevent="routeDialog?.close()"><h2 id="route-dialog-title">{{ t('action.discard') }}</h2><p>{{ t('app.route.body') }}</p><div class="dialog-actions"><button autofocus @click="routeDialog?.close()">{{ t('action.cancel') }}</button><button class="danger" @click="confirmRoute">{{ t('action.discard') }}</button></div></dialog>
   <dialog ref="discardProvisionDialog" class="compact" aria-labelledby="discard-provision-title" @cancel.prevent="discardProvisionDialog?.close()"><h2 id="discard-provision-title">{{ t('app.draft.title') }}</h2><p>{{ t('app.draft.body') }}</p><div class="dialog-actions"><button autofocus @click="discardProvisionDialog?.close()">{{ t('action.cancel') }}</button><button class="danger" @click="discardProvision">{{ t('app.draft.confirm') }}</button></div></dialog>
-  <dialog ref="failureDialog" @close="afterFailureClose" class="compact" role="alertdialog" aria-labelledby="failure-title" aria-describedby="failure-message"><h2 id="failure-title">{{ t('app.failure.title') }}</h2><p id="failure-message" class="selectable">{{ failureMessage }}</p><div class="dialog-actions"><button autofocus @click="failureDialog?.close()">{{ t('action.close') }}</button></div></dialog>
+  <dialog ref="failureDialog" @close="afterFailureClose" class="compact" role="alertdialog" aria-labelledby="failure-title" aria-describedby="failure-message"><h2 id="failure-title">{{ t('app.failure.title') }}</h2><p id="failure-message" class="selectable">{{ failureMessage }}</p><OverlayScroll v-if="failureItems.length" class="failure-items" :label="t('app.failure.items')"><ul class="selectable"><li v-for="item in failureItems" :key="item.name"><bdi translate="no">{{ item.name }}</bdi> · {{ t(batchFailureReasonId(item.reason,item.phase)) }}</li></ul></OverlayScroll><div class="dialog-actions"><button autofocus @click="failureDialog?.close()">{{ t('action.close') }}</button></div></dialog>
 </template>
 
 
