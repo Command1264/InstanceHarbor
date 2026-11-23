@@ -147,7 +147,7 @@ V1 管理的伺服器可以原地交給 1.0 管理，世界、插件與插件資
    & $ihctl $workspace v1-handoff-preview NAME DIRECTORY
    ```
 
-   預覽是唯讀的。它會確認 V1 已停止，包括 V1 管理器鎖沒有被占用、沒有準備中或仍由 V1 Host 持有的啟動、V1 控制管道不存在，以及 Port 上沒有監聽者。接著列出要移走的 V1 標記、核心 JAR 的檔名、Port、監聽位址，以及之後要帶入的 `revision`。V1 仍在執行時回報 `V1HostRunning`、`V1ServerListening` 或 `CoreInUse`，資料夾不會變動。
+   預覽是唯讀的。它會確認 V1 已停止，包括 V1 管理器鎖沒有被占用、V1 控制管道不存在、啟動紀錄裡沒有仍在執行的 V1 Host（PID 與啟動時間都要相符）、Port 上沒有監聽者，以及核心 JAR 沒有被其他程式開著。V1 在 `testlab-console` 累積的舊啟動紀錄，以及中斷後沒有 Host 身分的紀錄，不會擋下移交。接著列出要移走的 V1 標記、核心 JAR 的檔名、Port、監聽位址，以及之後要帶入的 `revision`。V1 仍在執行時回報 `V1HostRunning`、`V1ServerListening` 或 `CoreInUse`，資料夾不會變動。
 3. 移交。把預覽回傳的 `revision` 原樣帶入。Velocity 監聽非 `127.0.0.1` 時，要再附上監聽位址確認，例如 `0.0.0.0`：
 
    ```powershell
