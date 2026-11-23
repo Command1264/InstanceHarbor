@@ -103,6 +103,41 @@ $options = @{ proxy = 'diagnostics-velocity'; route = 'paper'; plugin = 'LuckPer
 達到掃描上限時，請縮小範圍後重新預覽。建立新實例仍由「建立實例」處理。舊版 CLI 匯入命令
 及匯入工作紀錄維持相容，桌面版的日常入口是「新增管理資料夾」。
 
+## 從 V1 移交伺服器
+
+V1 管理的伺服器可以原地交給 1.0 管理，世界、插件與插件資料都不搬動也不改寫。移交只能用 `ihctl`，每台伺服器各做一次；代理與後端分別移交，啟動順序由使用者決定。
+
+1. 在 V1 正常停止這台伺服器並關閉 V1 的管理器，確認 V1 不會再自動重啟。
+2. 預覽。`DIRECTORY` 是伺服器資料夾的絕對路徑，可以在工作區以外：
+
+   ```powershell
+   & $ihctl $workspace v1-handoff-preview NAME DIRECTORY
+   ```
+
+   預覽是唯讀的。它會確認 V1 已停止，包括 V1 管理器鎖沒有被占用、沒有準備中或仍由 V1 Host 持有的啟動、V1 控制管道不存在，以及 Port 上沒有監聽者。接著列出要移走的 V1 標記、Velocity 核心要不要改名、Port、監聽位址，以及之後要帶入的 `revision`。V1 仍在執行時回報 `V1HostRunning` 或 `V1ServerListening`，資料夾不會變動。
+3. 移交。把預覽回傳的 `revision` 原樣帶入。Velocity 監聽非 `127.0.0.1` 時，要再附上監聽位址確認，例如 `0.0.0.0`：
+
+   ```powershell
+   & $ihctl $workspace v1-handoff NAME REQUEST JAVA DIRECTORY REVISION [LISTEN_ADDRESS]
+   ```
+
+   移交依序做這些事：
+   - 寫入 `DIRECTORY\.instanceharbor-v1-handoff\manifest.json`。
+   - 把 `workspace.json`、`.testlab-manager.lock` 與 `testlab-console` 移進同一個資料夾。
+   - 把已核對雜湊的 `velocity-*.jar` 改名為 `server.jar`。
+   - 以與管理資料夾匯入相同的檢查登記這台伺服器。
+
+   任何一步失敗都會把資料夾還原。資料夾在預覽後有變動時，回報 `V1HandoffPreviewChanged`，需要重新預覽。
+4. 回退。伺服器停止時執行：
+
+   ```powershell
+   & $ihctl $workspace v1-handoff-rollback NAME
+   ```
+
+   回退會取消這台伺服器在 1.0 的登記，依清單把 V1 標記與核心檔名改回原狀，並刪除 `.instanceharbor-v1-handoff`，之後 V1 可以重新接手。
+
+鎖定的 Velocity 核心雜湊 `db6be7e3…aaa` 對應官方的 `velocity-4.2.1-SNAPSHOT-38.jar`（build 38，stable）。檔名標示的 build 與此不同時，以雜湊為準。
+
 ## 全域 Java 與建立實例
 
 「應用程式設定」的 Java 預設自動挑選與已核對核心相容的本機版本，也可以儲存指定的 `java.exe`。
@@ -343,7 +378,7 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 應用程式設定的「復原金鑰」可操作同一套保管功能。
 已釘住復原金鑰的工作階段可從原生介面或 PowerShell 接管。流程見可信 Host 接管。
 
-工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑。管理資料夾、匯入與新建可以使用工作區 instances 底下或工作區以外的任意本機資料夾；工作區的內部資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑一律拒絕，登記後仍依掃描白名單決定是否納管。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI。
+工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑。管理資料夾、匯入與新建可以使用工作區 instances 底下或工作區以外的任意本機資料夾；工作區的內部資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑一律拒絕，登記後仍依掃描白名單決定是否納管。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI；V1 伺服器改用「從 V1 移交伺服器」的 CLI 指令。
 
 Windows 一般匯入支援放有已核對 Velocity JAR（`server.jar`）與
 `velocity.toml` 的代理目錄。預設接受 `127.0.0.1:PORT`。要匯入綁定其他介面的代理，
