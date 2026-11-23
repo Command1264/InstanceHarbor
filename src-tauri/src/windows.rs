@@ -3100,6 +3100,18 @@ mod start_preflight_tests {
             );
             assert!(!root.join("jobs").join("start-2.json").exists());
         }
+
+        // The GUI keeps sending the same request ID until a start succeeds. Once the
+        // user puts a file back at the registered path, that ID must run preflight
+        // again and get past the Java check instead of replaying ResultUnconfirmed.
+        fs::create_dir_all(config.java.parent().unwrap()).unwrap();
+        fs::write(&config.java, b"not an executable").unwrap();
+        let error = lifecycle(&root, &config, "start-if-current", "start-2", None, Some(&guard)).unwrap_err();
+        assert!(
+            !error.contains("JavaExecutableMissing") && !error.contains("ResultUnconfirmed"),
+            "the retry did not run preflight again: {error}"
+        );
+        assert!(!root.join("jobs").join("start-2.json").exists());
         assert!(!root.join("runs").join("agent").join("identity.json").exists());
         fs::remove_dir_all(&parent).unwrap();
     }
