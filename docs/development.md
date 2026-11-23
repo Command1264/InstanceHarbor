@@ -359,6 +359,8 @@ PowerShell 可將 IPv4 附在 `import-preview NAME JAVA DIRECTORY IPV4`。
 
 Vue 與 CLI 共用 Rust 管理入口，批次啟動、正常停止及重啟由工作區的常駐 Manager 保存。
 關窗後可在操作紀錄查回原工作，行為與隔離驗證見批次生命週期。
+
+操作失敗只顯示在失敗對話框，不寫進實例清單上方的狀態文字。從本視窗送出的批次結束後，所有失敗或無法核對的實例集中列在同一個對話框，清單過長時在對話框內捲動。批次紀錄只保存穩定代碼：`JavaExecutableMissing`、`JavaExecutableUnreadable`、`PortOccupied` 與 `StartIntentChanged` 原樣保留，其他啟動錯誤記為 `StartRejected`，不保存原始系統訊息。
 Host 的控制管線限制同 Windows 帳戶及本候選執行檔。強制停止須由使用者明確確認。
 
 

@@ -1075,10 +1075,8 @@ fn advance(
             item.reason = Some(
                 if receipt_exists {
                     "DispatchUnconfirmed"
-                } else if error == "StartIntentChanged" {
-                    "StartIntentChanged"
                 } else {
-                    "StartRejected"
+                    start_rejection_reason(&error)
                 }
                 .into(),
             );
@@ -1086,6 +1084,19 @@ fn advance(
     }
     let mut locked = state.lock().map_err(fail)?;
     replace(directory, &mut locked, batch, index, item)
+}
+
+/// The batch journal keeps only stable codes, never raw OS text. Codes the GUI can
+/// explain on their own pass through; anything else becomes StartRejected.
+fn start_rejection_reason(error: &str) -> &'static str {
+    let code = error.split(':').next().unwrap_or_default().trim();
+    match code {
+        "StartIntentChanged" => "StartIntentChanged",
+        "JavaExecutableMissing" => "JavaExecutableMissing",
+        "JavaExecutableUnreadable" => "JavaExecutableUnreadable",
+        "PortOccupied" => "PortOccupied",
+        _ => "StartRejected",
+    }
 }
 
 fn auto_restart_one(root: &Path, name: &str) -> Result<bool> {
@@ -1393,5 +1404,22 @@ pub(super) fn run(root: &Path) -> Result<Value> {
         }
         recovering = false;
         thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod start_rejection_tests {
+    use super::start_rejection_reason;
+
+    #[test]
+    fn batch_start_keeps_explainable_codes_and_drops_raw_text() {
+        assert_eq!(start_rejection_reason("JavaExecutableMissing"), "JavaExecutableMissing");
+        assert_eq!(
+            start_rejection_reason(r"JavaExecutableUnreadable: Access is denied. (os error 5) C:\Users\someone"),
+            "JavaExecutableUnreadable"
+        );
+        assert_eq!(start_rejection_reason("PortOccupied"), "PortOccupied");
+        assert_eq!(start_rejection_reason("StartIntentChanged"), "StartIntentChanged");
+        assert_eq!(start_rejection_reason("系統找不到指定的路徑。 (os error 3)"), "StartRejected");
     }
 }
