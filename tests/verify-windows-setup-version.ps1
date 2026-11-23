@@ -1,4 +1,4 @@
-# Checks the Setup's version order (update, repair, downgrade) with the NSIS 3.08 compiler.
+# Checks the Setup's version order (update, repair, downgrade) with the NSIS 3.13 compiler.
 # The test installer writes its results to a temporary folder and installs nothing.
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$Compiler)

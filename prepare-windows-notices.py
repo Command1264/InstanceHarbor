@@ -130,7 +130,7 @@ def render(output, upstream, nsis_copying, terminal_zip, rust_docs):
     add(f"Rust standard library {rust_version}", "See upstream library copyright and exceptions",
         f"https://github.com/rust-lang/rust/tree/{rust_version}/library",
         [(f.name, f.read_bytes()) for f in rust_license_files])
-    add_file("NSIS 3.08 (Setup only)", "See upstream COPYING", "https://nsis.sourceforge.io/License",
+    add_file("NSIS 3.13 (Setup only)", "See upstream COPYING", "https://nsis.sourceforge.io/License",
              nsis_copying)
     expected_terminal = "bf3ef2012f6c44d8340a4c58125acc9498d19b580f9890dc043cdf831852e796"
     if digest(terminal_zip.read_bytes()) != expected_terminal:
