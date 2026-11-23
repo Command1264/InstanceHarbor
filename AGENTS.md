@@ -15,7 +15,7 @@
 
 ## 按需文件
 
-- 建置、測試、隔離驗收、系統匣與回退相容：讀 [v2/README.md](v2/README.md)。
+- 建置、測試、隔離驗收、系統匣與回退相容：讀 [docs/development.md](docs/development.md)。
 - 打包、Setup、授權通知或發版：讀 [docs/windows-rc2.md](docs/windows-rc2.md) 與
   [docs/windows-distribution-licenses.md](docs/windows-distribution-licenses.md)。
 - 使用專案用語或記錄架構決策：讀 [docs/agents/domain.md](docs/agents/domain.md)。

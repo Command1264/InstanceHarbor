@@ -1,0 +1,23 @@
+{
+  "name": "instanceharbor",
+  "version": "1.0.0-rc2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pwsh -NoProfile -File ./launch-development.ps1",
+    "preview:vue": "vite --config vite.preview.config.ts --host 127.0.0.1",
+    "build:preview": "vue-tsc --noEmit && vite build --config vite.preview.config.ts",
+    "test:preview": "node --test preview/lifecycle.test.mjs",
+    "build": "vue-tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "vue": "^3.5.0",
+    "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "vite": "^8.0.0",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "typescript": "~5.9.0",
+    "vue-tsc": "^3.0.0"
+  }
+}
