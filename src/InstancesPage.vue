@@ -69,9 +69,10 @@ const recentByName = computed(() => {
 const visible = computed(() => props.rows.filter(row => {
   const text = (row.name + ' ' + (metaByName.value.get(row.name)?.path ?? '')).toLocaleLowerCase()
   return text.includes(query.value.toLocaleLowerCase()) && (filter.value === 'all' ||
-    (filter.value === 'running' && row.state === 'Listening') ||
+    // A server that is stopping is no longer listed as listening.
+    (filter.value === 'running' && stateClass(row) === 'Listening') ||
     (filter.value === 'stopped' && row.state === 'Stopped') ||
-    (filter.value === 'attention' && !['Listening','Stopped'].includes(row.state)))
+    (filter.value === 'attention' && row.state !== 'Stopped' && stateClass(row) !== 'Listening'))
 }).sort((a,b) => {
   const ap = props.preferences.pins.indexOf(a.name), bp = props.preferences.pins.indexOf(b.name)
   if (ap !== -1 || bp !== -1) return ap === -1 ? 1 : bp === -1 ? -1 : ap-bp
