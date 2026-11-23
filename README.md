@@ -9,7 +9,7 @@ Manage Minecraft server instances on Windows x64 through the desktop app or Powe
 The full documentation is in Traditional Chinese:
 
 - [Development guide](docs/development.md): build, test, isolated acceptance, system tray, and rollback.
-- [1.0.0-rc2 pre-release notes](docs/windows-rc2.md).
+- [1.0.0 release notes](docs/windows-1.0.0.md) (Traditional Chinese). The earlier [1.0.0-rc2 pre-release notes](docs/windows-rc2.md) remain for reference.
 - [Windows distribution and licenses](docs/windows-distribution-licenses.md) (English): how to build a distribution, plus the third-party notices and corresponding MPL sources.
 
 ## License

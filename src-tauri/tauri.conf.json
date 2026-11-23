@@ -1,6 +1,6 @@
 {
   "productName": "InstanceHarbor",
-  "version": "1.0.0-rc2",
+  "version": "1.0.0",
   "identifier": "local.instanceharbor",
   "build": {
     "frontendDist": "../dist"

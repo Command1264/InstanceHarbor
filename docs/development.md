@@ -1,4 +1,4 @@
-# InstanceHarbor Windows 1.0.0-rc2
+# InstanceHarbor Windows 1.0.0
 
 新候選使用 `build-product.ps1` 建置並核對內嵌 Vite 資產；`launch-product.ps1` 只開啟本次已核對的隔離 Agent 工作區。
 舊的 `preview/` 與無框架 `index.html` 保留為純模擬對照，不會自動切換到真實控制。
