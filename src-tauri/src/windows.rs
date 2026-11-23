@@ -186,6 +186,14 @@ struct CoreProfile {
     minecraft: String,
     build: String,
     sha256: String,
+    /// Read from the JAR's own metadata but not confirmed by the built-in table
+    /// or the official catalog. Only Java selection may rely on it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    unverified: bool,
+    /// The Java major the JAR states for itself, used when the version table
+    /// has no entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    java: Option<u16>,
 }
 
 fn verified_core_profile(jar: &Path) -> Result<Option<CoreProfile>> {
@@ -213,7 +221,7 @@ fn pinned_core_profile(sha256: String) -> Option<CoreProfile> {
         "f649771a2190214306fb0cfba22c7b2cbac5df6308b1158309593603ed07d488" => ("PAPER", "26.3", "222"),
         _ => return None,
     };
-    Some(CoreProfile { family: family.into(), minecraft: minecraft.into(), build: build.into(), sha256 })
+    Some(CoreProfile { family: family.into(), minecraft: minecraft.into(), build: build.into(), sha256, unverified: false, java: None })
 }
 
 impl CoreProfile {
@@ -695,7 +703,10 @@ fn launch_java(root: &Path, config: &Instance, directory: &Path) -> Result<PathB
     }
     let jar = core_artifact::jar(directory, config);
     no_redirect(&jar)?;
-    let profile = core_maintenance::trusted_profile(config, content_revision::file_revision(&jar)?)
+    let digest = content_revision::file_revision(&jar)?;
+    // Java selection may use an unverified profile recorded for this exact file.
+    let profile = core_maintenance::trusted_profile(config, digest.clone())
+        .or_else(|| config.core_profile.clone().filter(|profile| profile.sha256 == digest))
         .ok_or("AutoJavaUnavailable")?;
     global_java::resolve(root, &profile)
 }
@@ -1085,6 +1096,7 @@ fn checked_import_inner(
     core_artifact::assert_unused(&core)?;
     let velocity = if proxy {
         Some(core_artifact::identify(&core)?
+            .profile
             .filter(|profile| profile.family == "VELOCITY")
             .ok_or("UnverifiedVelocityCore")?)
     } else {

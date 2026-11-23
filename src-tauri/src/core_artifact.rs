@@ -48,33 +48,111 @@ fn plain_file(path: &Path) -> Result<bool> {
     }
 }
 
-/// The family and version a JAR states about itself. This is a claim only;
-/// `identify` confirms it by hash.
-pub(super) fn claim(jar: &Path) -> Option<(&'static str, String)> {
-    let mut file = File::open(jar).ok()?;
-    if let Some(Some(list)) = plugin_descriptor::core_metadata(&mut file, b"META-INF/patches.list") {
-        let text = String::from_utf8(list).ok()?;
-        let output = text.lines().find(|line| line.starts_with("versions\t"))?.rsplit('\t').next()?;
-        let (version, file_name) = output.split_once('/')?;
-        let family = match file_name.strip_suffix(&format!("-{version}.jar"))? {
-            "paper" => "PAPER",
-            "folia" => "FOLIA",
-            _ => return None,
-        };
-        return Some((family, version.to_owned()));
-    }
-    let manifest = plugin_descriptor::core_metadata(&mut file, b"META-INF/MANIFEST.MF")??;
-    let text = String::from_utf8(manifest).ok()?;
-    let field = |key: &str| {
-        text.lines()
-            .find_map(|line| line.strip_prefix(key).map(str::trim))
-            .map(str::to_owned)
-    };
-    if field("Implementation-Title:")? != "Velocity" {
+/// What a JAR states about itself. This is a claim only; `identify` decides
+/// whether it is verified.
+#[derive(Debug, PartialEq)]
+pub(super) struct Claim {
+    pub(super) family: String,
+    pub(super) minecraft: String,
+    pub(super) java: Option<u16>,
+}
+
+fn token(value: &str) -> Option<String> {
+    (!value.is_empty()
+        && value.len() <= 32
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')))
+    .then(|| value.to_owned())
+}
+
+fn family_name(value: &str) -> Option<String> {
+    (!value.is_empty() && value.len() <= 24 && value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .then(|| value.to_ascii_uppercase())
+}
+
+fn text(file: &mut File, name: &[u8]) -> Option<String> {
+    String::from_utf8(plugin_descriptor::core_metadata(file, name)??).ok()
+}
+
+fn manifest_field(manifest: &str, key: &str) -> Option<String> {
+    manifest
+        .lines()
+        .find_map(|line| line.strip_prefix(key)?.strip_prefix(':').map(str::trim))
+        .map(str::to_owned)
+}
+
+/// The Java major the main class was compiled for: the lowest Java that can
+/// load it. Class file major 52 is Java 8.
+fn main_class_java(file: &mut File, manifest: &str) -> Option<u16> {
+    let main = manifest_field(manifest, "Main-Class")?;
+    if main.is_empty()
+        || main.len() > 200
+        || !main.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'$'))
+    {
         return None;
     }
-    let version = field("Implementation-Version:")?;
-    Some(("VELOCITY", version.split_whitespace().next()?.to_owned()))
+    let class = plugin_descriptor::core_metadata(file, format!("{}.class", main.replace('.', "/")).as_bytes())??;
+    if class.get(..4)? != [0xca, 0xfe, 0xba, 0xbe] {
+        return None;
+    }
+    let major = u16::from_be_bytes([*class.get(6)?, *class.get(7)?]);
+    (major >= 49).then(|| major - 44)
+}
+
+/// Read the family, Minecraft version and Java requirement a core states,
+/// without network access and without running it:
+/// - Paperclip cores (Paper, Folia, Purpur and other forks): `META-INF/patches.list`
+///   and `version.json`.
+/// - Velocity: `MANIFEST.MF`.
+/// - Spigot bundler JARs: `META-INF/versions.list`.
+/// - Older Spigot or CraftBukkit: Maven `pom.properties`.
+pub(super) fn claim(jar: &Path) -> Option<Claim> {
+    let mut file = File::open(jar).ok()?;
+    let manifest = text(&mut file, b"META-INF/MANIFEST.MF").unwrap_or_default();
+    let mojang = text(&mut file, b"version.json").and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    let stated_java = mojang
+        .as_ref()
+        .and_then(|value| value["java_version"].as_u64())
+        .and_then(|value| u16::try_from(value).ok());
+    let java = stated_java.or_else(|| main_class_java(&mut file, &manifest));
+    if let Some(list) = text(&mut file, b"META-INF/patches.list") {
+        let output = list.lines().find(|line| line.starts_with("versions\t"))?.rsplit('\t').next()?;
+        let (version, file_name) = output.split_once('/')?;
+        let family = family_name(file_name.strip_suffix(&format!("-{version}.jar"))?)?;
+        let minecraft = mojang.as_ref().and_then(|value| value["id"].as_str()).unwrap_or(version);
+        return Some(Claim { family, minecraft: token(minecraft)?, java });
+    }
+    if manifest_field(&manifest, "Implementation-Title").as_deref() == Some("Velocity") {
+        let version = manifest_field(&manifest, "Implementation-Version")?;
+        let version = token(version.split_whitespace().next()?)?;
+        return Some(Claim { family: "VELOCITY".into(), minecraft: version, java });
+    }
+    if let Some(list) = text(&mut file, b"META-INF/versions.list") {
+        // For example `<sha256>\tspigot-26.2-R0.1-SNAPSHOT.jar`.
+        let name = list.lines().next()?.rsplit('\t').next()?.strip_suffix(".jar")?;
+        let mut parts = name.split('-');
+        let family = family_name(parts.next()?)?;
+        let minecraft = token(parts.next()?)?;
+        return Some(Claim { family, minecraft, java });
+    }
+    for (pom, family) in [
+        (&b"META-INF/maven/org.spigotmc/spigot/pom.properties"[..], "SPIGOT"),
+        (&b"META-INF/maven/org.bukkit/craftbukkit/pom.properties"[..], "CRAFTBUKKIT"),
+    ] {
+        if let Some(properties) = text(&mut file, pom) {
+            let version = properties.lines().find_map(|line| line.strip_prefix("version="))?.trim();
+            // `1.8.8-R0.1-SNAPSHOT` is Minecraft 1.8.8.
+            let minecraft = token(version.split('-').next()?)?;
+            return Some(Claim { family: family.into(), minecraft, java });
+        }
+    }
+    None
+}
+
+/// The result of identifying a core. `warning` says why a core is accepted
+/// without verification; a verified core has none.
+pub(super) struct Identity {
+    pub(super) profile: Option<CoreProfile>,
+    pub(super) warning: Option<&'static str>,
 }
 
 enum Cached {
@@ -87,29 +165,57 @@ fn cache() -> &'static Mutex<HashMap<String, Cached>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The verified profile of a core: the built-in table first, then the
-/// official PaperMC catalog. `CoreCatalogUnavailable` means the catalog could
-/// not be reached; the result is not cached as unknown.
-pub(super) fn identify(jar: &Path) -> Result<Option<CoreProfile>> {
+fn catalog(family: &str, minecraft: &str, sha256: &str) -> std::result::Result<Option<CoreProfile>, ()> {
+    if let Ok(cache) = cache().lock() {
+        match cache.get(sha256) {
+            Some(Cached::Known(profile)) => return Ok(profile.clone()),
+            Some(Cached::Failed(at)) if at.elapsed() < CATALOG_RETRY => return Err(()),
+            _ => (),
+        }
+    }
+    let result = core_source::catalog_profile(family, minecraft, sha256).map_err(|_| ());
+    if let Ok(mut cache) = cache().lock() {
+        let entry = match &result {
+            Ok(profile) => Cached::Known(profile.clone()),
+            Err(()) => Cached::Failed(Instant::now()),
+        };
+        cache.insert(sha256.to_owned(), entry);
+    }
+    result
+}
+
+/// Identify a core. The built-in table and an exact match in the official
+/// PaperMC catalog give a verified profile. Otherwise a core that states its
+/// family and Minecraft version is accepted as unverified with a warning, so
+/// the program keeps working offline. A core that states nothing has no
+/// profile; it needs Java chosen by hand.
+pub(super) fn identify(jar: &Path) -> Result<Identity> {
     let sha256 = content_revision::file_revision(jar)?;
     if let Some(profile) = pinned_core_profile(sha256.clone()) {
-        return Ok(Some(profile));
+        return Ok(Identity { profile: Some(profile), warning: None });
     }
-    match cache().lock().map_err(|_| "CoreCatalogUnavailable")?.get(&sha256) {
-        Some(Cached::Known(profile)) => return Ok(profile.clone()),
-        Some(Cached::Failed(at)) if at.elapsed() < CATALOG_RETRY => return Err("CoreCatalogUnavailable".into()),
-        _ => (),
+    let Some(claim) = claim(jar) else {
+        return Ok(Identity { profile: None, warning: Some("CoreUnrecognized") });
+    };
+    let unverified = |warning| Identity {
+        profile: Some(CoreProfile {
+            family: claim.family.clone(),
+            minecraft: claim.minecraft.clone(),
+            build: String::new(),
+            sha256: sha256.clone(),
+            unverified: true,
+            java: claim.java,
+        }),
+        warning: Some(warning),
+    };
+    if !matches!(claim.family.as_str(), "PAPER" | "FOLIA" | "VELOCITY") {
+        return Ok(unverified("CoreUnverified"));
     }
-    let Some((family, version)) = claim(jar) else {
-        return Ok(None);
-    };
-    let result = core_source::catalog_profile(family, &version, &sha256);
-    let entry = match &result {
-        Ok(profile) => Cached::Known(profile.clone()),
-        Err(_) => Cached::Failed(Instant::now()),
-    };
-    cache().lock().map_err(|_| "CoreCatalogUnavailable")?.insert(sha256, entry);
-    result
+    Ok(match catalog(&claim.family, &claim.minecraft, &sha256) {
+        Ok(Some(profile)) => Identity { profile: Some(profile), warning: None },
+        Ok(None) => unverified("CoreNotInCatalog"),
+        Err(()) => unverified("CoreCatalogUnavailable"),
+    })
 }
 
 /// Find the core file of a folder. `server.jar` wins when present. Otherwise
@@ -134,7 +240,7 @@ pub(super) fn locate(directory: &Path, velocity: bool) -> Result<Option<String>>
     let matching: Vec<_> = jars
         .iter()
         .filter(|name| {
-            claim(&directory.join(name)).is_some_and(|(family, _)| (family == "VELOCITY") == velocity)
+            claim(&directory.join(name)).is_some_and(|claim| (claim.family == "VELOCITY") == velocity)
         })
         .cloned()
         .collect();
@@ -165,7 +271,7 @@ pub(super) fn adopt(root: &Path, path: &Path, config: Instance) -> Result<Instan
     if let Some(profile) = &config.core_profile {
         let core = path.join(&name);
         if content_revision::file_revision(&core)? != profile.sha256 {
-            match identify(&core)? {
+            match identify(&core)?.profile {
                 Some(found)
                     if found.family == profile.family
                         && (found.family == "VELOCITY" || found.minecraft == profile.minecraft) =>
@@ -346,20 +452,89 @@ mod tests {
     }
 
     fn folder() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("ih-core-artifact-{}-{}", std::process::id(), clock()));
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "ih-core-artifact-{}-{}-{}",
+            std::process::id(),
+            clock(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         fs::create_dir_all(&path).unwrap();
-        path
+        safe_directory(&path).unwrap()
+    }
+
+    fn claimed(family: &str, minecraft: &str, java: Option<u16>) -> Option<Claim> {
+        Some(Claim { family: family.into(), minecraft: minecraft.into(), java })
+    }
+
+    /// A class file header for the given Java major (major + 44).
+    fn class(java: u16) -> Vec<u8> {
+        let mut bytes = vec![0xca, 0xfe, 0xba, 0xbe, 0, 0];
+        bytes.extend((java + 44).to_be_bytes());
+        bytes
     }
 
     #[test]
-    fn a_core_states_its_family_and_version() {
+    fn a_core_states_its_family_version_and_java_without_running() {
         let dir = folder();
         velocity(&dir.join("velocity-4.2.1-SNAPSHOT-38.jar"), "4.2.1-SNAPSHOT");
         paper(&dir.join("paper.jar"), "paper", "26.3");
         paper(&dir.join("folia.jar"), "folia", "26.1.2");
-        assert_eq!(claim(&dir.join("velocity-4.2.1-SNAPSHOT-38.jar")), Some(("VELOCITY", "4.2.1-SNAPSHOT".into())));
-        assert_eq!(claim(&dir.join("paper.jar")), Some(("PAPER", "26.3".into())));
-        assert_eq!(claim(&dir.join("folia.jar")), Some(("FOLIA", "26.1.2".into())));
+        assert_eq!(claim(&dir.join("velocity-4.2.1-SNAPSHOT-38.jar")), claimed("VELOCITY", "4.2.1-SNAPSHOT", None));
+        assert_eq!(claim(&dir.join("paper.jar")), claimed("PAPER", "26.3", None));
+        assert_eq!(claim(&dir.join("folia.jar")), claimed("FOLIA", "26.1.2", None));
+
+        // A Paper fork names itself in patches.list; version.json states Java.
+        let list = "versions\ta\tb\tc\t26.2/server-26.2.jar\t26.2/server.patch\t26.2/purpur-26.2.jar\n";
+        jar_with(&dir.join("purpur.jar"), &[
+            ("META-INF/patches.list", list.as_bytes()),
+            ("version.json", br#"{"id":"26.2","java_version":25}"#),
+        ]);
+        assert_eq!(claim(&dir.join("purpur.jar")), claimed("PURPUR", "26.2", Some(25)));
+
+        // A Spigot bundler lists its inner JAR; Java comes from the main class.
+        let main = class(21);
+        jar_with(&dir.join("spigot-bundler.jar"), &[
+            ("META-INF/MANIFEST.MF", b"Main-Class: org.bukkit.craftbukkit.bootstrap.Main\r\n"),
+            ("org/bukkit/craftbukkit/bootstrap/Main.class", &main),
+            ("META-INF/versions.list", b"0c45\tspigot-26.2-R0.1-SNAPSHOT.jar\n"),
+        ]);
+        assert_eq!(claim(&dir.join("spigot-bundler.jar")), claimed("SPIGOT", "26.2", Some(21)));
+
+        // Old Spigot keeps its Maven coordinates.
+        let main = class(8);
+        jar_with(&dir.join("spigot-1.8.8.jar"), &[
+            ("META-INF/MANIFEST.MF", b"Main-Class: org.bukkit.craftbukkit.Main\r\n"),
+            ("org/bukkit/craftbukkit/Main.class", &main),
+            ("META-INF/maven/org.spigotmc/spigot/pom.properties", b"#Generated\nversion=1.8.8-R0.1-SNAPSHOT\ngroupId=org.spigotmc\n"),
+        ]);
+        assert_eq!(claim(&dir.join("spigot-1.8.8.jar")), claimed("SPIGOT", "1.8.8", Some(8)));
+
+        // Nothing usable, or an unsafe name, states nothing.
+        jar_with(&dir.join("plain.jar"), &[("README", b"x")]);
+        assert_eq!(claim(&dir.join("plain.jar")), None);
+        let list = "versions\ta\tb\tc\t26.2/x.jar\t26.2/x.patch\t26.2/../evil-26.2.jar\n";
+        jar_with(&dir.join("evil.jar"), &[("META-INF/patches.list", list.as_bytes())]);
+        assert_eq!(claim(&dir.join("evil.jar")), None);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_unlisted_fork_is_accepted_unverified_with_java_from_its_version() {
+        let dir = folder();
+        let list = "versions\ta\tb\tc\t26.2/server-26.2.jar\t26.2/server.patch\t26.2/purpur-26.2.jar\n";
+        jar_with(&dir.join("server.jar"), &[("META-INF/patches.list", list.as_bytes())]);
+        let identity = identify(&dir.join("server.jar")).unwrap();
+        assert_eq!(identity.warning, Some("CoreUnverified"));
+        let profile = identity.profile.unwrap();
+        assert!(profile.unverified);
+        assert_eq!((profile.family.as_str(), profile.minecraft.as_str()), ("PURPUR", "26.2"));
+        assert_eq!(global_java::supported_major(&profile), Some(25));
+
+        jar_with(&dir.join("server.jar"), &[("README", b"x")]);
+        let identity = identify(&dir.join("server.jar")).unwrap();
+        assert!(identity.profile.is_none());
+        assert_eq!(identity.warning, Some("CoreUnrecognized"));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -373,7 +548,7 @@ Implementation-Version: 4.2.1-SNAPSHOT (git-0-b38)
         let mut entries: Vec<(&str, &[u8])> = names.iter().map(|name| (name.as_str(), &b"x"[..])).collect();
         entries.push(("META-INF/MANIFEST.MF", manifest));
         jar_with(&dir.join("velocity.jar"), &entries);
-        assert_eq!(claim(&dir.join("velocity.jar")), Some(("VELOCITY", "4.2.1-SNAPSHOT".into())));
+        assert_eq!(claim(&dir.join("velocity.jar")), claimed("VELOCITY", "4.2.1-SNAPSHOT", None));
         fs::remove_dir_all(dir).unwrap();
     }
 

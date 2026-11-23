@@ -246,7 +246,7 @@ pub(super) fn trusted_profile(config: &Instance, sha256: String) -> Option<CoreP
         config
             .core_profile
             .as_ref()
-            .filter(|profile| profile.sha256 == sha256)
+            .filter(|profile| profile.sha256 == sha256 && !profile.unverified)
             .cloned()
     })
 }
@@ -852,7 +852,7 @@ mod tests {
     }
 
     fn profile(bytes: &[u8], build: &str) -> CoreProfile {
-        CoreProfile {
+        CoreProfile { unverified: false, java: None,
             family: "PAPER".into(),
             minecraft: "26.2".into(),
             build: build.into(),

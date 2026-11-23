@@ -971,7 +971,7 @@ mod tests {
                     jvm: None,
                     timing: None,
                     auto_restart: None,
-                    core_profile: Some(CoreProfile {
+                    core_profile: Some(CoreProfile { unverified: false, java: None,
                         family: "PAPER".into(),
                         minecraft: "26.3".into(),
                         build: "100".into(),

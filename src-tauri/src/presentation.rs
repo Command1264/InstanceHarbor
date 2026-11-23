@@ -329,9 +329,14 @@ pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
         profile.family != "PAPER"
             && content_revision::file_revision(&jar).is_ok_and(|hash| hash == profile.sha256)
     });
-    let core = if let Some(profile) = saved {
+    let mut core = if let Some(profile) = saved {
+        let label = if profile.build.is_empty() {
+            format!("{} {}", profile.family, profile.minecraft)
+        } else {
+            format!("{} {} build {}", profile.family, profile.minecraft, profile.build)
+        };
         json!({"state":"known","family":profile.family,"minecraft":profile.minecraft,
-            "build":profile.build,"label":format!("{} {} build {}",profile.family,profile.minecraft,profile.build)})
+            "build":profile.build,"label":label})
     } else if no_redirect(&jar).is_ok() {
         match core_identity::read_identity(&jar) {
             Ok(Some(identity)) => {
@@ -345,6 +350,10 @@ pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
     } else {
         json!({"state":"unknown","reason":"本機核心路徑尚未通過核對"})
     };
+    // Accepted without the built-in table or the official catalog (#14 offline use).
+    if row.core_profile.as_ref().is_some_and(|profile| profile.unverified) {
+        core["unverified"] = json!(true);
+    }
     json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core})
 }
 

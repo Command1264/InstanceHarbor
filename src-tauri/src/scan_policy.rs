@@ -880,7 +880,7 @@ mod tests {
         assert_eq!(initial["rows"][0]["visible"], false);
         assert_eq!(initial["candidates"][0]["name"], "child");
         assert_eq!(initial["candidates"][0]["port"], 25011);
-        assert_eq!(initial["candidates"][0]["state"], "Blocked");
+        assert_eq!(initial["candidates"][0]["state"], "Ready");
         assert_eq!(initial["complete"], true);
         assert_eq!(fs::read(policy_path(&f.0)).unwrap(), before);
         edit["previewRevision"] = initial["previewRevision"].clone();

@@ -475,6 +475,8 @@ fn catalog_profile_with(
             minecraft: version.to_owned(),
             build: build.id.to_string(),
             sha256: sha256.to_owned(),
+            unverified: false,
+            java: None,
         }))
 }
 
@@ -497,7 +499,7 @@ pub(super) fn latest_creation_core(family: &str, version: &str) -> Result<CorePr
     let agent = configured_paper_user_agent()?;
     let builds = creation_builds(family, version, &agent)?;
     let build = latest_stable(&builds, family, version)?;
-    Ok(CoreProfile {
+    Ok(CoreProfile { unverified: false, java: None,
         family: family.to_owned(),
         minecraft: version.to_owned(),
         build: build.id.to_string(),
@@ -767,7 +769,7 @@ pub(super) fn install_latest_guarded(
     let build = candidate["build"]
         .as_str()
         .ok_or("CoreCandidateUnverified")?;
-    let profile = CoreProfile {
+    let profile = CoreProfile { unverified: false, java: None,
         family: family.to_owned(),
         minecraft: minecraft.to_owned(),
         build: build.to_owned(),
@@ -1045,7 +1047,7 @@ mod tests {
     const TEST_AGENT: &str = "InstanceHarbor/2.0 (https://operator.example)";
 
     fn profile(family: &str, version: &str, build: &str, hash: &str) -> CoreProfile {
-        CoreProfile {
+        CoreProfile { unverified: false, java: None,
             family: family.into(),
             minecraft: version.into(),
             build: build.into(),

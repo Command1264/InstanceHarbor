@@ -80,6 +80,8 @@ struct PreviewRow {
     listen_address: Option<String>,
     state: &'static str,
     reason: Option<String>,
+    /// Why the core is accepted without verification, for a Ready row.
+    warning: Option<String>,
     revision: Option<String>,
     conflicts: Vec<String>,
 }
@@ -308,25 +310,28 @@ fn inspect_candidate(
     let core_file = hold_file(&core)?;
     let core_token = file_token(&core, &core_file)?;
     held.push(core_file);
-    let detected_core = match core_artifact::identify(&core) {
-        Ok(profile) => profile,
-        Err(error) if management.is_some() => return Err(error),
-        Err(_) => None,
-    };
+    // An unverified core is accepted with a warning so imports work offline.
+    let identity = core_artifact::identify(&core)?;
+    let detected_core = identity.profile;
+    row.warning = identity.warning.map(str::to_owned);
     if let Some(profile) = &detected_core {
-        row.core = Some(format!(
-            "{} {} · {}",
-            profile.family, profile.minecraft, profile.build
-        ));
+        row.core = Some(if profile.build.is_empty() {
+            format!("{} {}", profile.family, profile.minecraft)
+        } else {
+            format!("{} {} · {}", profile.family, profile.minecraft, profile.build)
+        });
     }
     let config_file = hold_file(&config)?;
     let config_token = file_token(&config, &config_file)?;
     held.push(config_file);
 
     let (java, java_token) = if management.is_some() {
-        if !detected_core
+        // A core that states nothing is registered too; it needs Java chosen
+        // in the instance settings before it can start.
+        if detected_core
             .as_ref()
-            .is_some_and(|profile| (profile.family == "VELOCITY") == (kind == "Velocity"))
+            .is_some_and(|profile| (profile.family == "VELOCITY") != (kind == "Velocity"))
+            || (kind == "Velocity" && detected_core.is_none())
         {
             return Err("UnverifiedManagementCore".into());
         }
@@ -393,6 +398,7 @@ fn new_row(root: &Path, path: &Path, name: Option<&str>, java: &str) -> Result<P
         core: None,
         port: None,
         listen_address: None,
+        warning: None,
         state: "Blocked",
         reason: None,
         revision: None,
@@ -1139,7 +1145,7 @@ mod tests {
     }
 
     #[test]
-    fn management_preview_reads_sources_without_java_and_does_not_register_unknown_core() {
+    fn management_preview_reads_sources_without_java_and_registers_an_unrecognized_core_with_a_warning() {
         let f = Fixture::new();
         f.server("instances/scope/unknown", ports(1)[0]);
         let before = snapshot(&f.root);
@@ -1147,8 +1153,9 @@ mod tests {
         let request = json!({"directory":"instances/scope","revision":policy["revision"]});
         let view = f.call("management-folder-preview", &[request.to_string()]).unwrap();
         assert_eq!(view["complete"], true);
-        assert_eq!(view["rows"][0]["state"], "Blocked");
-        assert_eq!(view["rows"][0]["reason"], "UnverifiedManagementCore");
+        // Offline use: a core that states nothing is accepted with a warning.
+        assert_eq!(view["rows"][0]["state"], "Ready", "{view}");
+        assert_eq!(view["rows"][0]["warning"], "CoreUnrecognized");
         assert_eq!(view["rows"][0]["java"], "");
         assert_eq!(snapshot(&f.root), before);
 
@@ -1158,13 +1165,15 @@ mod tests {
         });
         let saved = f.call("management-folder-save", &[request.to_string()]).unwrap();
         assert_eq!(saved["policy"]["managedFolders"], true);
-        assert!(saved["registration"].is_null());
+        assert!(!saved["registration"].is_null(), "{saved}");
         let sources = f.root.join("instances");
         assert_eq!(
             snapshot(&sources),
             before.into_iter().filter(|(p, _)| p != &sources && p.starts_with(&sources)).collect()
         );
-        assert!(!record_path(&f.root, "unknown").exists());
+        // Registered without Java or a core profile: Java is chosen before a start.
+        let record = instance(&f.root, "unknown").unwrap();
+        assert!(record.java.as_os_str().is_empty() && record.core_profile.is_none());
         assert_eq!(
             f.call("management-folder-save", &[request.to_string()]).unwrap_err(),
             "SettingsConflict"
@@ -1282,7 +1291,8 @@ mod tests {
         assert_eq!(view["rows"][0]["directory"], "instances");
         assert_eq!(view["rows"][0]["reason"], "ImportOutsideInstanceRoot");
         assert_eq!(view["rows"][1]["directory"], "instances/scope/unknown");
-        assert_eq!(view["rows"][1]["reason"], "UnverifiedManagementCore");
+        assert_eq!(view["rows"][1]["state"], "Ready");
+        assert_eq!(view["rows"][1]["warning"], "CoreUnrecognized");
     }
 
     #[test]
