@@ -329,7 +329,7 @@ Paper 26.3 的共用插件 JAR 隔離實驗也可使用同一份唯讀 JAR，各
 
 安裝腳本接受有預先核對 SHA-256 的便攜包，可驗證版本切換、
 還原與解除安裝，安裝或解除安裝時須先退出該安裝位置的程序。
-RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。1.0.0 起執行檔靜態連結 Visual C++ 執行階段（`.cargo/config.toml`），不再需要 Visual C++ 可轉散發套件。GUI 另使用 Windows WebView2。
+RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。1.0.0 起執行檔靜態連結 Visual C++ 執行階段（`.cargo/config.toml`），不再需要 Visual C++ 可轉散發套件。rc2 Setup 曾把 `vcruntime140.dll` 與 `vcruntime140_1.dll` 放在安裝資料夾；1.0 Setup 更新與解除安裝時會刪除這兩個檔案。GUI 另使用 Windows WebView2。
 ### Windows x64 發行版封裝（1.0.0-rc2 與正式版）
 
 完整步驟（取得 ConPTY 套件、建置、授權通知、ZIP 與 Setup）見 [docs/windows-distribution-licenses.md](windows-distribution-licenses.md) 的「Build a distribution」。
