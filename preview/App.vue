@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import logo from '../gui/icons/instanceharbor.png'
+import logo from '../src/assets/instanceharbor-brand.png'
 </script>
 
 <template>

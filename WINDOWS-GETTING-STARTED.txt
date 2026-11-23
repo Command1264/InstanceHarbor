@@ -1,4 +1,4 @@
-﻿InstanceHarbor 1.0.0-rc2 — Windows x64
+﻿InstanceHarbor — Windows x64
 
 1. Extract the entire ZIP to one folder and open InstanceHarbor.exe.
    The PowerShell CLI is ihctl.exe.
