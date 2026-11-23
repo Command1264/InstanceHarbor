@@ -243,6 +243,12 @@ Manager 重開可接續待寫入的設定，新啟動在啟動 Java 前完成相
 
 Java 與 JVM 頁面顯示有效預設值。欄位可還原上次儲存值，有可核對的預設則也可恢復預設。兩個動作只更新草稿。進階旗標預設摺疊，已有旗標或驗證出錯時會展開。可用有時限的 Java 探測核對草稿，例如 `-XX:ActiveProcessorCount=2`，再手動儲存。
 外觀可預覽 Windows 強調色或自選色票。清單選取底色預設不透明度為 25%，可用滑桿或直接輸入 0 到 100 的整數。輸入無效時保留上次有效預覽並停止滑桿同步。觀察狀態盡可能使用原色，必要時使用獨立底色維持對比。較濃的底色優先使用可讀的白字。取消會回復上次設定。
+
+**新增觀察狀態時的顏色檢查**：清單能顯示的每個狀態都列在 `src/instance-state.ts` 的 `stateTones`，並指定一種狀態色（`ok`、`warn`、`error`、`muted`）。選取列的徽章顏色由 `src/theme.ts` 的 `refreshSelectionTheme()` 依選取顏色與不透明度計算，確保對比至少 4.5:1。新增狀態時：
+
+1. 在 `stateTones` 加上狀態與狀態色。
+2. 在 `src/app.css` 加上未選取的 `.badge.<狀態>` 規則（`var(--<狀態色>)`），以及選取列 `.instances tr.selected .badge` 的規則（`var(--row-selection-<狀態色>)`）。
+3. 執行 `node --test src/instance-state.test.mjs`。介面有名稱卻沒有狀態色，或缺少任一條 CSS 規則時，測試會失敗。
 進階自動重啟可設定每次重試間隔、計算視窗和穩定期，Manager 重開後保留排程及暫停狀態。
 手動停止會抑制重啟，包含在 InstanceHarbor 後台輸入的 `stop`、`end`、`shutdown`、`restart`（可加 `/` 或 `minecraft:` 等前綴）及 Ctrl+C。
 其他就緒後的正常退出（退出碼 0）與一般模式相同，依「非預期退出時重啟」設定處理。
