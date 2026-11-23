@@ -518,6 +518,14 @@ fn retry_shared_file<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Res
 
 // Graceful and emergency work share request IDs, even while waiting independently.
 fn reserve_receipt(root: &Path, path: &Path, receipt: &Receipt) -> Result<()> {
+    let _lock = receipt_lock(root)?;
+    if path.exists() {
+        return Err("RequestConflict".into());
+    }
+    save(path, receipt)
+}
+
+fn receipt_lock(root: &Path) -> Result<File> {
     let lock_path = root.join("receipts.lock");
     if lock_path.exists() {
         no_redirect(&lock_path)?;
@@ -529,10 +537,25 @@ fn reserve_receipt(root: &Path, path: &Path, receipt: &Receipt) -> Result<()> {
         .open(&lock_path)
         .map_err(|e| file_error("open-receipt-lock", &lock_path, e))?;
     lock.lock().map_err(fail)?;
-    if path.exists() {
-        return Err("RequestConflict".into());
+    Ok(lock)
+}
+
+/// Removes a receipt reserved by `reserve_receipt` when its work failed before
+/// it changed anything. Keeps the original error; adds the removal error to it.
+fn release_receipt_on_error<T>(root: &Path, path: &Path, result: Result<T>) -> Result<T> {
+    let Err(error) = result else { return result };
+    let released = receipt_lock(root).and_then(|_lock| {
+        no_redirect(path)?;
+        let receipt: Receipt = read(path)?;
+        if receipt.complete {
+            return Err("ReceiptAlreadyComplete".into());
+        }
+        fs::remove_file(path).map_err(|e| file_error("remove-receipt", path, e))
+    });
+    match released {
+        Ok(()) => Err(error),
+        Err(cleanup) => Err(format!("{error}; {cleanup}")),
     }
-    save(path, receipt)
 }
 
 fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
@@ -657,6 +680,7 @@ fn java(path: &str) -> Result<PathBuf> {
 
 fn launch_java(root: &Path, config: &Instance, directory: &Path) -> Result<PathBuf> {
     if !config.java.as_os_str().is_empty() {
+        registered_java_present(&config.java)?;
         return java(config.java.to_str().ok_or("InvalidJavaPath")?);
     }
     if !config.can_inherit_java() {
@@ -667,6 +691,19 @@ fn launch_java(root: &Path, config: &Instance, directory: &Path) -> Result<PathB
     let profile = core_maintenance::trusted_profile(config, content_revision::file_revision(&jar)?)
         .ok_or("AutoJavaUnavailable")?;
     global_java::resolve(root, &profile)
+}
+
+/// A registered Java can disappear after registration, for example when its
+/// install folder is moved. Report that with a stable code instead of the raw
+/// OS message, so the GUI can send the user to the instance's Java settings.
+fn registered_java_present(path: &Path) -> Result<()> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            Err("JavaExecutableMissing".into())
+        }
+        Err(error) => Err(format!("JavaExecutableUnreadable: {error}")),
+    }
 }
 
 fn chosen_run_java(folder: &Path) -> Result<PathBuf> {
@@ -1418,7 +1455,17 @@ fn console_plan(root: &Path, config: &Instance) -> Result<Value> {
     Ok(value)
 }
 
-fn start(root: &Path, config: &Instance, attempt: u8, console_window: bool) -> Result<Value> {
+/// The checks a start passes before it changes any run state. A failure here
+/// launched nothing, so the caller may release the request's receipt.
+struct StartPlan {
+    config: Instance,
+    executable: PathBuf,
+    yaml_preflight: Option<Value>,
+    recovery_lock: File,
+    recovery_pin: Option<host_recovery::Pin>,
+}
+
+fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
     creation::assert_idle(root, &config.name)?;
     agent_rebuild::assert_idle(root, &config.name)?;
     if !admitted(root, &config.name)? {
@@ -1472,6 +1519,18 @@ fn start(root: &Path, config: &Instance, attempt: u8, console_window: bool) -> R
         let manager = resident_manager::initial_host_manager(root)?;
         Some(host_recovery::Pin { key, manager })
     } else { None };
+    Ok(StartPlan {
+        config: refreshed,
+        executable,
+        yaml_preflight,
+        recovery_lock,
+        recovery_pin,
+    })
+}
+
+fn launch_start(root: &Path, plan: StartPlan, attempt: u8, console_window: bool) -> Result<Value> {
+    let StartPlan { config, executable, yaml_preflight, recovery_lock, recovery_pin } = plan;
+    let config = &config;
     let run = format!("{}-{}", std::process::id(), clock());
     let folder = root.join("runs").join(&config.name);
     let budget = config.auto_restart.as_ref()
@@ -2299,15 +2358,20 @@ fn lifecycle(
             created_at,
         },
     )?;
+    // A start that fails before launch changed no run state, so the same
+    // request may be sent again instead of turning into ResultUnconfirmed.
+    let preflight = |result| release_receipt_on_error(root, &path, result);
     let mut output = match (verb, run) {
         ("start-if-current", None) if start_guard.is_some() => {
             let attempt = start_guard.and_then(|guard| guard.auto_attempt).unwrap_or(0);
             let console_window = start_guard.is_some_and(|guard| guard.console_window);
-            start(root, config, attempt, console_window)?
+            let plan = preflight(plan_start(root, config))?;
+            launch_start(root, plan, attempt, console_window)?
         }
         ("start" | "restart", None) => {
-            let _transition = transition_guard(root, &config.name)?;
-            start(root, config, 0, false)?
+            let _transition = release_receipt_on_error(root, &path, transition_guard(root, &config.name))?;
+            let plan = preflight(plan_start(root, config))?;
+            launch_start(root, plan, 0, false)?
         }
         ("stop", Some(run)) => stop(root, config, run, false)?,
         ("force-stop", Some(run)) => stop(root, config, run, true)?,
@@ -2326,7 +2390,8 @@ fn lifecycle(
                 &child_directory(&child_directory(root, "runs")?, &config.name)?,
                 run,
             )?;
-            start(root, config, 0, false)?
+            // The stop already happened, so this receipt stays unconfirmed on failure.
+            launch_start(root, plan_start(root, config)?, 0, false)?
         }
         _ => return Err("InvalidOperationOrState".into()),
     };
@@ -2952,5 +3017,122 @@ mod workspace_schema_tests {
         save(&file, &"instanceharbor-workspace-2").unwrap();
         assert_eq!(dispatch(&[path, "list".into()]).unwrap_err(), "UnsupportedWorkspace");
         fs::remove_dir_all(&parent).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod start_preflight_tests {
+    use super::*;
+
+    fn free_port() -> u16 {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port()
+    }
+
+    /// An isolated workspace with one instance whose registered Java was removed.
+    fn workspace_with_missing_java() -> (PathBuf, PathBuf, Instance) {
+        let parent = std::env::temp_dir().join(format!("ih-start-preflight-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&parent).unwrap();
+        let workspace = parent.join("workspace");
+        dispatch(&[workspace.to_string_lossy().into_owned(), "init".into()]).unwrap();
+        let root = workspace.canonicalize().unwrap();
+        let port = free_port();
+        let directory = root.join("instances").join("agent");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("server.jar"), b"not a real jar").unwrap();
+        fs::write(directory.join("server.properties"), format!("server-ip=127.0.0.1\nserver-port={port}\n")).unwrap();
+        let config = Instance {
+            name: "agent".into(),
+            java: parent.join("removed-jdk").join("bin").join("java.exe"),
+            port,
+            velocity_listen_address: None,
+            removed: false,
+            directory: None,
+            jvm: None,
+            timing: None,
+            auto_restart: None,
+            core_profile: None,
+            core_local_create: false,
+            management_discovered: false,
+        };
+        save(&record_path(&root, "agent"), &config).unwrap();
+        (parent, root, config)
+    }
+
+    #[test]
+    fn registered_java_reports_a_missing_file_with_a_stable_code() {
+        let parent = std::env::temp_dir().join(format!("ih-java-present-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&parent).unwrap();
+        assert_eq!(
+            registered_java_present(&parent.join("gone").join("bin").join("java.exe")).unwrap_err(),
+            "JavaExecutableMissing"
+        );
+        assert_eq!(registered_java_present(&parent.join("java.exe")).unwrap_err(), "JavaExecutableMissing");
+        fs::write(parent.join("java.exe"), b"").unwrap();
+        registered_java_present(&parent.join("java.exe")).unwrap();
+        fs::remove_dir_all(&parent).unwrap();
+    }
+
+    #[test]
+    fn start_with_missing_java_fails_in_preflight_and_can_be_sent_again() {
+        let (parent, root, config) = workspace_with_missing_java();
+        let receipt = root.join("jobs").join("start-1.json");
+        for _ in 0..2 {
+            assert_eq!(
+                lifecycle(&root, &config, "start", "start-1", None, None).unwrap_err(),
+                "JavaExecutableMissing"
+            );
+            assert!(!receipt.exists(), "a preflight failure must not leave an unconfirmed receipt");
+        }
+
+        let before = status(&root, &config).unwrap();
+        let guard = StartGuard {
+            previous_run: before["run"]["id"].as_str().map(str::to_owned),
+            stop_token: before["stopToken"].as_str().map(str::to_owned),
+            registration: None,
+            previous_identity: None,
+            auto_attempt: None,
+            console_window: false,
+        };
+        for _ in 0..2 {
+            assert_eq!(
+                lifecycle(&root, &config, "start-if-current", "start-2", None, Some(&guard)).unwrap_err(),
+                "JavaExecutableMissing"
+            );
+            assert!(!root.join("jobs").join("start-2.json").exists());
+        }
+
+        // The GUI keeps sending the same request ID until a start succeeds. Once the
+        // user puts a file back at the registered path, that ID must run preflight
+        // again and get past the Java check instead of replaying ResultUnconfirmed.
+        fs::create_dir_all(config.java.parent().unwrap()).unwrap();
+        fs::write(&config.java, b"not an executable").unwrap();
+        let error = lifecycle(&root, &config, "start-if-current", "start-2", None, Some(&guard)).unwrap_err();
+        assert!(
+            !error.contains("JavaExecutableMissing") && !error.contains("ResultUnconfirmed"),
+            "the retry did not run preflight again: {error}"
+        );
+        assert!(!root.join("jobs").join("start-2.json").exists());
+        assert!(!root.join("runs").join("agent").join("identity.json").exists());
+        fs::remove_dir_all(&parent).unwrap();
+    }
+
+    #[test]
+    fn releasing_keeps_completed_receipts_and_reports_why() {
+        let root = std::env::temp_dir().join(format!("ih-receipt-release-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let path = root.join("done.json");
+        let complete = Receipt { arguments: vec![], complete: true, output: Some(json!({})), created_at: None };
+        save(&path, &complete).unwrap();
+        let error = release_receipt_on_error::<()>(&root, &path, Err("PortChanged".into())).unwrap_err();
+        assert!(error.starts_with("PortChanged; ReceiptAlreadyComplete"), "{error}");
+        assert!(path.exists());
+
+        let pending = root.join("pending.json");
+        reserve_receipt(&root, &pending, &Receipt { arguments: vec![], complete: false, output: None, created_at: None }).unwrap();
+        assert_eq!(release_receipt_on_error::<()>(&root, &pending, Err("PortChanged".into())).unwrap_err(), "PortChanged");
+        assert!(!pending.exists());
+        assert_eq!(release_receipt_on_error(&root, &pending, Ok(7)).unwrap(), 7);
+        fs::remove_dir_all(&root).unwrap();
     }
 }
