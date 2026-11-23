@@ -3,7 +3,10 @@ import { test } from 'node:test'
 import { duplicateMessageIds, formatDisplayTime, messageParameterMismatches, renderConsoleTitle, resolveLanguage, translate, validateConsoleTitle } from './i18n.ts'
 
 test('a missing or explicit saved language is independent of the OS language', () => {
-  assert.equal(resolveLanguage(undefined, ['en-US']), 'zh-TW')
+  // A preference that is missing or not loaded yet follows the system.
+  assert.equal(resolveLanguage(undefined, ['en-US']), 'en')
+  assert.equal(resolveLanguage(undefined, ['zh-TW']), 'zh-TW')
+  assert.equal(resolveLanguage(undefined, []), 'en')
   assert.equal(resolveLanguage('zh-TW', ['en-US']), 'zh-TW')
   assert.equal(resolveLanguage('en', ['zh-TW']), 'en')
 })
@@ -13,7 +16,9 @@ test('system respects order and skips unsupported, malformed and explicitly simp
   assert.equal(resolveLanguage('system', ['not_a_language', 'zh-Hant-HK', 'en-GB']), 'zh-TW')
   assert.equal(resolveLanguage('system', ['zh-MO', 'en']), 'zh-TW')
   assert.equal(resolveLanguage('system', ['zh-Hans-HK', 'zh-CN', 'en']), 'en')
-  assert.equal(resolveLanguage('system', ['ja-JP', 'de-DE']), 'zh-TW')
+  // No supported system language falls back to English.
+  assert.equal(resolveLanguage('system', ['ja-JP', 'de-DE']), 'en')
+  assert.equal(resolveLanguage('system', []), 'en')
 })
 
 test('reviewed messages have paired translations and preserve supplied values', () => {

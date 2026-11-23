@@ -65,10 +65,10 @@ function pathPickerFailed() {
 }
 
 const { t, locale }=useAppLanguage()
-const language=ref<LanguagePreference>(props.preferences.language??'zh-TW')
+const language=ref<LanguagePreference>(props.preferences.language??'system')
 watch(language,value=>{if(tab.value==='appearance')emit('language-preview',value)})
 watch(()=>props.preferences.language,value=>{
-  if(!saving.value && !dirty.value)language.value=value??'zh-TW'
+  if(!saving.value && !dirty.value)language.value=value??'system'
 })
 const theme=ref(props.preferences.theme)
 const corePrefetch=ref(props.preferences.corePrefetch ?? false)
@@ -763,7 +763,7 @@ function useJava(){
 }
 function reset(){
   message.value='';error.value='';saveSucceeded.value=false;saveNeedsVerification.value=false
-  if(tab.value==='appearance'){language.value=props.preferences.language??'zh-TW';theme.value=props.preferences.theme;pathSeparator.value=props.preferences.pathSeparator ?? 'forward';resetDisplayPreferences()}
+  if(tab.value==='appearance'){language.value=props.preferences.language??'system';theme.value=props.preferences.theme;pathSeparator.value=props.preferences.pathSeparator ?? 'forward';resetDisplayPreferences()}
   else if(tab.value==='terminal'||tab.value==='updates')resetDisplayPreferences()
   else if(tab.value==='java' && savedJavaDraft.value){
     const saved=savedJavaDraft.value
