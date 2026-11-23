@@ -2,6 +2,7 @@ import { Channel, invoke } from '@tauri-apps/api/core'
 import { tr, type LanguagePreference, type MessageId, type TimeFormat } from './i18n'
 import type { SelectionColorPreference } from './theme'
 import type { ConsoleChoice } from './console-tier.ts'
+import { javaStartErrorId } from './java-start-error.ts'
 export { consoleFallbackReason, consoleSummary, type ConsoleChoice, type ConsolePlan } from './console-tier.ts'
 
 export interface Instance {
@@ -193,6 +194,8 @@ export function errorText(error: unknown) {
   if (raw.includes('ImportManagementUnconfirmed')) return tr('manager.error.importManagementUnconfirmed')
   if (raw.includes('PortAlreadyRegistered')) return tr('manager.error.portAlreadyRegistered')
   if (raw.includes('PortOccupied')) return tr('manager.error.portOccupied')
+  const javaStart = javaStartErrorId(raw)
+  if (javaStart) return tr(javaStart)
   if (raw.includes('JavaShimNotAllowed')) return tr('manager.error.javaShimNotAllowed')
   if (raw.includes('InvalidLifecycleTiming')) return tr('manager.error.invalidLifecycleTiming')
   if (raw.includes('UnverifiedCreationCore')) return tr('manager.error.unverifiedCreationCore')

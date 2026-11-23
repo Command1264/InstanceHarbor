@@ -63,6 +63,8 @@ export const managerMessages = {
   'manager.error.invalidJvmOption': ['進階旗標無效、重複或超出範圍。請核對欄位下方列出的格式。', 'An advanced flag is invalid, duplicated, or out of range. Check the formats listed below the field.'],
   'manager.error.jvmProbeFailed': ['所選 Java 無法以這組 JVM 參數啟動。請檢查記憶體與旗標後再儲存。', 'The selected Java cannot start with these JVM options. Check the memory and flags, then save.'],
   'manager.error.invalidJvmMemory': ['請核對記憶體上下限，最小記憶體不可大於最大記憶體。', 'Check the memory limits. The minimum memory cannot exceed the maximum.'],
+  'manager.error.javaExecutableMissing': ['找不到這台實例登記的 Java 執行檔，可能已被移動或刪除。請到「實例設定」→「Java 與 JVM」選擇 Java 執行檔後再啟動。', 'The Java executable registered for this instance was not found. It may have been moved or deleted. Go to Instance settings → "Java and JVM", choose a Java executable, and start again.'],
+  'manager.error.javaExecutableUnreadable': ['無法讀取這台實例登記的 Java 執行檔。請核對存取權限，或到「實例設定」→「Java 與 JVM」選擇 Java 執行檔後再啟動。', 'Could not read the Java executable registered for this instance. Check its permissions, or go to Instance settings → "Java and JVM", choose a Java executable, and start again.'],
   'manager.error.invalidJavaExecutable': ['選擇的 Java 執行檔無法使用。請重新探索或輸入有效路徑。', 'The selected Java executable cannot be used. Detect again or enter a valid path.'],
   'manager.error.invalidJavaScanDirectory': ['請核對 Java 搜尋範圍的資料夾路徑。', 'Check the folder paths in the Java search scope.'],
   'manager.error.javaScanDirectoryConflict': ['Java 搜尋範圍已被其他程序修改，請重新讀取後再儲存。', 'The Java search scope was changed by another process. Reload, then save.'],
