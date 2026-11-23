@@ -335,6 +335,51 @@ mod tests {
         assert_eq!(v1.files(), before, "rollback must restore the V1 folder exactly");
     }
 
+    fn ticket(v1: &V1, id: &str, body: Value) {
+        fs::write(v1.server.join("testlab-console").join(format!("launch-{id}.json")), body.to_string()).unwrap();
+    }
+
+    #[test]
+    fn stale_v1_launch_records_do_not_block_a_stopped_server() {
+        let v1 = V1::new();
+        // V1 leaves one record per launch. Interrupted launches can lack a Host
+        // identity, and old ones name Hosts that exited long ago.
+        ticket(&v1, "82dd701979b54828bc4a95ecbe983550", json!({"state":"Accepted"}));
+        ticket(&v1, "1162baba305d4a518ff73e8af7b101fc",
+            json!({"state":"Accepted","hostPid":4_000_000_u32,"hostStartUtc":"2026-10-05T08:46:25.9807852Z"}));
+        ticket(&v1, "2b7ba8e5f34e4dd59fd7b4601d82cf7c", json!({"state":"Preparing"}));
+        let preview = v1.call("v1-handoff-preview", &["lobby", &v1.directory()]).unwrap();
+        assert_eq!(preview["core"], "server.jar");
+    }
+
+    #[test]
+    fn a_live_v1_host_or_a_listener_still_blocks_the_handoff() {
+        let v1 = V1::new();
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Start-Sleep 30"])
+            .spawn()
+            .unwrap();
+        let started = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command",
+                &format!("(Get-Process -Id {}).StartTime.ToUniversalTime().ToString('o')", child.id())])
+            .output()
+            .unwrap();
+        let started = String::from_utf8(started.stdout).unwrap().trim().to_owned();
+        ticket(&v1, "9c224e07d6374deb98f9a7e81013a7d0",
+            json!({"state":"Accepted","hostPid":child.id(),"hostStartUtc":started}));
+        let running = v1.call("v1-handoff-preview", &["lobby", &v1.directory()]);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(running.unwrap_err(), "V1HostRunning");
+
+        fs::remove_file(v1.server.join("testlab-console").join("launch-9c224e07d6374deb98f9a7e81013a7d0.json")).unwrap();
+        let port = property_port(&v1.server).unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+        assert_eq!(v1.call("v1-handoff-preview", &["lobby", &v1.directory()]).unwrap_err(), "V1ServerListening");
+        drop(listener);
+        assert!(v1.call("v1-handoff-preview", &["lobby", &v1.directory()]).is_ok());
+    }
+
     #[test]
     fn a_running_v1_manager_blocks_the_handoff_and_leaves_the_folder_alone() {
         use std::os::windows::fs::OpenOptionsExt;

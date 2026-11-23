@@ -623,17 +623,65 @@ fn observation(path: &Path, port: u16, host: Option<&Path>, deadline: Instant) -
 }
 
 /// Evidence that V1 no longer runs the server in `path`: its manager lock is
-/// free, no launch is preparing or held by a live V1 Host, its control pipe is
-/// absent and nothing listens on the port. Used before a V1 handoff.
+/// free, its control pipe is absent, no launch record names a live Host (PID
+/// and start time both match) and nothing listens on the port. Used before a
+/// V1 handoff, which also refuses a core JAR another process holds open.
 pub(super) fn v1_stopped(path: &Path, port: u16) -> Result<()> {
-    let deadline = Instant::now() + Duration::from_secs(6);
-    match observation(path, port, None, deadline) {
-        Ok(state) if state["state"] == "stopped" => Ok(()),
-        Ok(state) if state["state"] == "external" => Err("V1ServerListening".into()),
-        Ok(_) => Err("V1HostRunning".into()),
-        Err(error) if error == "HostUnconfirmed" => Err("V1HostRunning".into()),
-        Err(error) => Err(error),
+    // V1 keeps one launch record per start. Old records name Hosts that have
+    // exited, and interrupted launches can lack a Host identity. Neither proves
+    // a running Host, so the handoff checks direct evidence instead.
+    if lock_is_held(path)? || pipe_present(path)? || live_host(path)? {
+        return Err("V1HostRunning".into());
     }
+    if !listeners(port)?.is_empty() {
+        return Err("V1ServerListening".into());
+    }
+    Ok(())
+}
+
+/// The server's V1 control pipe exists. Checked without connecting.
+fn pipe_present(path: &Path) -> Result<bool> {
+    let pipe: Vec<u16> = std::ffi::OsStr::new(&pipe_name(path)?)
+        .encode_wide()
+        .chain([0])
+        .collect();
+    let absent = unsafe { WaitNamedPipeW(pipe.as_ptr(), 1) } == 0
+        && io::Error::last_os_error().raw_os_error() == Some(2);
+    Ok(!absent)
+}
+
+/// A launch record whose Host PID and start time match a live process.
+fn live_host(path: &Path) -> Result<bool> {
+    let directory = path.join("testlab-console");
+    match checked_open(&directory, true) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err("LegacyDirectoryUnreadable".into()),
+    }
+    let mut budget = MAX_ENTRIES;
+    for entry in children(&directory, &mut budget)? {
+        let file = entry.file_name();
+        if !file
+            .to_str()
+            .and_then(|n| n.strip_prefix("launch-"))
+            .and_then(|n| n.strip_suffix(".json"))
+            .is_some_and(hex_id)
+        {
+            continue;
+        }
+        let Ok(item) = document(&entry.path()) else { continue };
+        let pid = item["hostPid"].as_u64().and_then(|p| u32::try_from(p).ok()).filter(|p| *p > 0);
+        let created = item["hostStartUtc"].as_str().and_then(timestamp);
+        if let (Some(pid), Some(created)) = (pid, created) {
+            if identity(pid)
+                .map_err(|_| "HostUnconfirmed")?
+                .is_some_and(|who| who.created == created)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn is_redirect(entry: &fs::DirEntry) -> Result<bool> {
