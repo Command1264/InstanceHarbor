@@ -31,7 +31,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 左鍵點圖示，或右鍵選「顯示應用程式」，可叫回主視窗。再次執行 `InstanceHarbor.exe` 也會叫回隱藏的視窗。
 - 「語言與外觀」的「關閉視窗時縮到系統匣」預設開啟：按 X 只隱藏視窗。關閉此設定後，按 X 會結束介面。
 - 右鍵選「結束」才會結束 GUI 程序。伺服器、Host 與 Manager 在任何情況下都不隨 GUI 結束。
-- 診斷：按 X、從圖示叫回視窗或選「結束」時，GUI 診斷紀錄（`%LOCALAPPDATA%\<應用程式資料夾>\v2\logs\gui-*.jsonl`）會記下
+- 診斷：按 X、從圖示叫回視窗或選「結束」時，GUI 診斷紀錄（`%LOCALAPPDATA%\<應用程式資料夾>\logs\gui-*.jsonl`）會記下
   `window-close`、`tray-show` 或 `tray-quit` 事件。`window-close` 包含是否縮到系統匣、隱藏前後視窗是否可見，以及錯誤種類。
   視窗關不掉時，先找這些事件。
 - 回退相容：此設定維持預設時不寫入 `preferences.json`。若已關閉此設定，回退到 `1.0.0-rc2` 前請先重新開啟並儲存，否則舊版無法讀取外觀設定。
@@ -312,6 +312,24 @@ $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-fe
 名稱可使用英數、連字號和底線。開發版 GUI 缺少 `IH_WORKSPACE` 或工作區不在此目錄時拒絕啟動。
 開發版 CLI 也要求明確傳入同範圍的工作區。正式版拒絕開發資料目錄，Manager 仍按工作區路徑區分。
 兩版同時啟動伺服器時，請為各工作區使用獨立副本，並為每台伺服器指派不同的系統連接埠。
+
+### 儲存位置
+
+`%LOCALAPPDATA%` 下，正式版使用 `InstanceHarbor`，開發版使用 `InstanceHarbor Dev`（下表以 `<應用程式資料夾>` 表示）。
+
+| 用途 | 位置 | 說明 |
+|---|---|---|
+| 工作區 | `<應用程式資料夾>\workspaces\default`（正式）、`InstanceHarbor Dev\workspaces\<名稱>`（開發） | 實例登記、設定、工作紀錄與執行狀態 |
+| GUI 診斷紀錄 | `<應用程式資料夾>\logs\gui-*.jsonl` | 1.0 之前寫在 `<應用程式資料夾>\v2\logs`；舊檔留在原處，可以手動刪除 |
+| WebView2 資料 | `<應用程式資料夾>\webview` | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
+| Setup 安裝位置 | `Programs\InstanceHarbor` | 解除安裝登錄 `InstanceHarbor-Desktop`，安裝租約檔 `instanceharbor.install` |
+
+1.0 之前的版本把 WebView2 資料放在 `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`）。
+裡面只有介面快取，1.0 不再使用，可以手動刪除。`<應用程式資料夾>` 下的 `diagnostics` 與 `lifecycle` 屬於 V1，1.0 不讀寫它們。
+
+工作區的 `workspace.json` 記錄格式值。1.0 新建的工作區寫入 `instanceharbor-workspace-1`。
+rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`；1.0 照常開啟且不改寫，所以舊版仍能開啟它們。
+舊版不認得 1.0 新建的工作區，會回報 `UnsupportedWorkspace`。格式值以 `instanceharbor-<用途>-<N>` 命名，只有不相容的變更才增加 `N`。
 
 ### 復原金鑰
 

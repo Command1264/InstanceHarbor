@@ -473,7 +473,7 @@ pub fn global() -> Result<&'static Diagnostics, String> {
             let app_directory = crate::desktop_channel::APP_DIRECTORY;
             #[cfg(not(windows))]
             let app_directory = "InstanceHarbor";
-            for part in [app_directory, "v2", "logs"] {
+            for part in [app_directory, "logs"] {
                 root.push(part);
                 match fs::create_dir(&root) {
                     Ok(()) => {}

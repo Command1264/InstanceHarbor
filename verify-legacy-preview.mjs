@@ -214,7 +214,7 @@ try {
       assert.equal(preferenceLock.exitCode,0)
       preferenceLock=undefined
     }
-    if (failLog) file(join(env.LOCALAPPDATA,'InstanceHarbor','v2','logs'),'isolated blocker')
+    if (failLog) file(join(env.LOCALAPPDATA,'InstanceHarbor','logs'),'isolated blocker')
     if (failPreferences) await lockPreferences('startup')
     let diagnosticStderr = ''
     gui = spawn(resolve(guiArg), [], {env:{...env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port='+cdp},cwd:sandbox,stdio:['ignore','ignore','pipe']})

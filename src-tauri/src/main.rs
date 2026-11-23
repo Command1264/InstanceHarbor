@@ -381,7 +381,7 @@ fn terminal_close(
 #[cfg(windows)]
 fn run_console(workspace: &str) -> Result<(), String> {
     desktop_channel::validate_workspace(std::path::Path::new(workspace), false)?;
-    workspace_binding::configure_development_desktop()?;
+    workspace_binding::configure_desktop()?;
     let Some(viewer) = instanceharbor::ConsoleViewer::start(workspace)? else {
         return Ok(());
     };
@@ -414,7 +414,11 @@ fn run_console(workspace: &str) -> Result<(), String> {
             .resizable(true)
             .enable_clipboard_access()
             .devtools(false)
-            .visible(false)
+            .visible(false);
+            let window = match workspace_binding::webview_data_directory() {
+                Some(folder) => window.data_directory(folder),
+                None => window,
+            }
             .build()?;
             let window_handle = window.clone();
             window.on_window_event(move |event| match event {
@@ -477,13 +481,19 @@ fn main() {
     #[cfg(windows)]
     if desktop_channel::DEVELOPMENT {
         if let Err(error) = workspace_binding::development_workspace()
-            .and_then(|_| workspace_binding::configure_development_desktop())
+            .and_then(|_| workspace_binding::configure_desktop())
         {
             workspace_binding::show_startup_error(&error);
             std::process::exit(1);
         }
-    } else if let Some(workspace) = std::env::var_os("IH_WORKSPACE") {
-        if let Err(error) = desktop_channel::validate_workspace(std::path::Path::new(&workspace), false) {
+    } else {
+        if let Some(workspace) = std::env::var_os("IH_WORKSPACE") {
+            if let Err(error) = desktop_channel::validate_workspace(std::path::Path::new(&workspace), false) {
+                workspace_binding::show_startup_error(&error);
+                std::process::exit(1);
+            }
+        }
+        if let Err(error) = workspace_binding::configure_desktop() {
             workspace_binding::show_startup_error(&error);
             std::process::exit(1);
         }
@@ -535,6 +545,9 @@ fn main() {
     for window in &mut context.config_mut().app.windows {
         window.devtools = Some(enable_devtools);
     }
+    // Create the main window in setup, so it can name its WebView2 folder.
+    #[cfg(windows)]
+    let main_window = std::mem::take(&mut context.config_mut().app.windows);
     let application = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             manage,
@@ -548,7 +561,16 @@ fn main() {
             report_gui_event,
             tray_status
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            #[cfg(windows)]
+            for config in &main_window {
+                let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+                match workspace_binding::webview_data_directory() {
+                    Some(folder) => window.data_directory(folder),
+                    None => window,
+                }
+                .build()?;
+            }
             #[cfg(windows)]
             tray::install(app.handle())?;
             #[cfg(not(windows))]

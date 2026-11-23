@@ -19,7 +19,7 @@ export const appMessages = {
   'app.name.characters': ['請使用小寫英文字母、數字或連字號。', 'Use lowercase English letters, digits, or hyphens.'],
   'app.name.reserved': ['這是 Windows 保留名稱，請改用其他實例名稱。', 'This is a reserved Windows name. Use a different instance name.'],
   'app.windowError': ['無法顯示桌面視窗：{error}', 'Could not show the desktop window: {error}'],
-  'app.diagnosticWarning': ['無法完整寫入應用程式診斷紀錄。請檢查磁碟空間及 %LOCALAPPDATA%/InstanceHarbor/v2/logs 的容量與存取狀態；既有紀錄不會自動刪除。', 'Could not fully write the application diagnostic log. Check the disk space and the access status of %LOCALAPPDATA%/InstanceHarbor/v2/logs. Existing logs are not deleted automatically.'],
+  'app.diagnosticWarning': ['無法完整寫入應用程式診斷紀錄。請檢查磁碟空間及 %LOCALAPPDATA%/InstanceHarbor/logs 的容量與存取狀態；既有紀錄不會自動刪除。', 'Could not fully write the application diagnostic log. Check the disk space and the access status of %LOCALAPPDATA%/InstanceHarbor/logs. Existing logs are not deleted automatically.'],
   'app.bridgeMissing': ['此瀏覽器沒有原生管理橋接。請使用 InstanceHarbor 桌面程式。', 'This browser has no native management bridge. Use the InstanceHarbor desktop app.'],
   'app.refresh.readable': ['已核對可讀取的實例', 'Readable instances checked'],
   'app.refresh.preferencesUnavailable': ['實例清單已核對，無法讀取外觀設定', 'Instance list checked. Appearance settings are unavailable.'],
