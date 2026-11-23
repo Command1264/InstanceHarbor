@@ -98,8 +98,8 @@ $options = @{ proxy = 'diagnostics-velocity'; route = 'paper'; plugin = 'LuckPer
 由管理資料夾登記的實例在停服後才離開清單。以往已登記和透過「建立實例」新增的實例會在白名單調整後保留，
 明確加入黑名單時則遵循相同的排除及停服流程。
 
-自動登記需要可核對版本與雜湊的 `server.jar` 和同層設定。需另外確認非 loopback 監聽位址的
-Velocity 保留待處理。掃描略過連結及排除路徑，回報名稱、路徑、連接埠及管理權衝突。
+自動登記需要可核對版本與雜湊的 `server.jar` 和同層設定。非 loopback 監聽位址的 Velocity
+需在匯入時另外確認位址，自動登記會略過。掃描略過連結及排除路徑，回報名稱、路徑、連接埠及管理權衝突。
 達到掃描上限時，請縮小範圍後重新預覽。建立新實例仍由「建立實例」處理。舊版 CLI 匯入命令
 及匯入工作紀錄維持相容，桌面版的日常入口是「新增管理資料夾」。
 
@@ -347,9 +347,9 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 
 Windows 一般匯入支援放有已核對 Velocity JAR（`server.jar`）與
 `velocity.toml` 的代理目錄。預設接受 `127.0.0.1:PORT`。要匯入綁定其他介面的代理，
-請在 GUI 的可選欄位輸入與頂層 `bind` 相符的明確 IPv4 位址。
+請在 GUI 的可選欄位輸入與頂層 `bind` 相符的 IPv4 位址。
 匯入確認使用同一組位址、Port、核心與設定檔預覽版本。啟動時再次核對登記的位址及 Port。
-更新監聽位址後須重新核對匯入。管理器拒絕所有介面的萬用字元位址。
+更新監聽位址後須重新核對匯入。代理可監聽所有介面（`0.0.0.0`），但要輸入 `0.0.0.0` 明確確認；詳細面板會警告代理對區網與外部開放。廣播與群播位址一律拒絕，後端路由仍須是明確位址。
 
 PowerShell 可將 IPv4 附在 `import-preview NAME JAVA DIRECTORY IPV4`。
 將預覽回傳的 Port 及 revision 原樣帶入 `import NAME REQUEST JAVA DIRECTORY PORT REVISION IPV4`。

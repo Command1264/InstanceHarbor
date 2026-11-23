@@ -203,6 +203,7 @@ const baseMessages = {
   'activity.cancelRemaining': ['取消後續操作', 'Cancel remaining work'],
   'activity.checkDiagnostics': ['請核對診斷紀錄', 'Review the diagnostics log'],
   'velocity.listenAddress': ['Velocity 監聽 IPv4 位址', 'Velocity IPv4 listen address'],
+  'velocity.allInterfaces': ['此代理監聽 0.0.0.0，所有網路介面都能連線，包括區網與外部網路。請確認防火牆只開放需要的 Port。', 'This proxy listens on 0.0.0.0, so every network interface can reach it, including the local network and the internet. Make sure the firewall opens only the ports you need.'],
   'velocity.listenAddressOptional': ['Velocity 監聽 IPv4 位址（選填）', 'Velocity IPv4 listen address (optional)'],
   'velocity.listenAddressRequired': ['此代理使用對外位址。請輸入 velocity.toml 的 bind 位址以確認。', 'This proxy listens on an external address. Enter the bind address from velocity.toml to confirm it.'],
   'velocity.listenAddressChanged': ['確認的位址與 velocity.toml 的 bind 不符。請核對位址後重新預覽。', 'The confirmed address differs from the bind address in velocity.toml. Check the address and preview again.'],

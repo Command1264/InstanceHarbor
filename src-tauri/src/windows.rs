@@ -648,7 +648,7 @@ fn ipv4_owner(address: Ipv4Addr, port: u16) -> Result<Option<u32>> {
         return Ok(rows.chunks_exact(6).find_map(|row| {
             let actual = Ipv4Addr::from(row[1].to_ne_bytes());
             (u16::from_be(row[2] as u16) == port
-                && (actual == address || actual.is_unspecified()))
+                && (actual == address || actual.is_unspecified() || address.is_unspecified()))
             .then_some(row[5])
         }));
     }
@@ -902,7 +902,9 @@ fn velocity_endpoint(text: &str) -> Result<(Ipv4Addr, u16)> {
 
 fn valid_velocity_address(raw: &str) -> Result<Ipv4Addr> {
     let address = raw.parse::<Ipv4Addr>().map_err(|_| "InvalidVelocityBind")?;
-    if address.is_unspecified() || address.is_multicast() || address.is_broadcast() {
+    // 0.0.0.0 opens the proxy on every interface. Registration needs it confirmed
+    // explicitly, like any other non-loopback address.
+    if address.is_multicast() || address.is_broadcast() {
         return Err("VelocityRequiresSpecificAddress".into());
     }
     Ok(address)
@@ -2910,7 +2912,6 @@ mod transition_tests {
     fn velocity_import_requires_explicit_single_bound_address() {
         assert_eq!(velocity_endpoint("# proxy\r\nbind = \"127.0.0.1:16001\" # local\r\n[servers]\r\nbind = \"ignored\"").unwrap(), (Ipv4Addr::LOCALHOST,16001));
         assert_eq!(velocity_endpoint("'bind' = '127.0.0.1:16002'").unwrap(), (Ipv4Addr::LOCALHOST,16002));
-        assert!(velocity_endpoint("bind = \"0.0.0.0:16001\"").is_err());
         let address = velocity_endpoint("bind = \"192.168.56.2:16001\"").unwrap().0;
         assert!(confirmed_velocity_address(address, None).is_err());
         assert!(confirmed_velocity_address(address, Some("192.168.56.1")).is_err());
@@ -2920,6 +2921,24 @@ mod transition_tests {
         assert!(velocity_endpoint("[servers]\nbind = \"127.0.0.1:16001\"").is_err());
         assert!(velocity_endpoint("bind = \"127.0.0.1:16001\"\n\"bind\" = \"127.0.0.1:16002\"").is_err());
         assert!(velocity_endpoint("motd = '''\nbind = \"127.0.0.1:16001\"\n'''").is_err());
+    }
+
+    #[test]
+    fn a_proxy_bound_to_every_interface_is_accepted_after_explicit_confirmation() {
+        let all = velocity_endpoint("bind = \"0.0.0.0:16001\"").unwrap();
+        assert_eq!(all, (Ipv4Addr::UNSPECIFIED, 16001));
+        assert_eq!(confirmed_velocity_address(all.0, None).unwrap_err(), "VelocityListenAddressConfirmationRequired");
+        assert_eq!(confirmed_velocity_address(all.0, Some("127.0.0.1")).unwrap_err(), "VelocityListenAddressChanged");
+        assert_eq!(confirmed_velocity_address(all.0, Some("0.0.0.0")).unwrap(), Ipv4Addr::UNSPECIFIED);
+        assert!(velocity_endpoint("bind = \"255.255.255.255:16001\"").is_err());
+        assert!(velocity_endpoint("bind = \"224.0.0.1:16001\"").is_err());
+    }
+
+    #[test]
+    fn a_port_query_on_every_interface_finds_a_listener_on_any_address() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(ipv4_owner(Ipv4Addr::UNSPECIFIED, port).unwrap(), Some(std::process::id()));
     }
 
     #[test]

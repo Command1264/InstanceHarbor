@@ -216,7 +216,10 @@ fn route_finding(
     let Some(parsed) = parsed else {
         return ("Unconfirmed", "VelocityConfigUnreadable", None);
     };
-    let Some(bind) = parsed.get("bind").and_then(endpoint) else {
+    // The proxy may listen on every interface; backend routes stay specific.
+    let bind = parsed.get("bind").and_then(|value| value.as_str()?.parse::<SocketAddrV4>().ok())
+        .filter(|bind| bind.port() != 0 && !bind.ip().is_broadcast() && !bind.ip().is_multicast());
+    let Some(bind) = bind else {
         return ("Unconfirmed", "ProxyBindingUnconfirmed", None);
     };
     if bind != proxy {
