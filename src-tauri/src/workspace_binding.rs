@@ -1,5 +1,5 @@
 use instanceharbor::desktop_channel::{self, create_plain_directory};
-use std::{env, fs, io, os::windows::fs::MetadataExt, path::PathBuf};
+use std::{env, ffi::OsStr, fs, io, os::windows::fs::MetadataExt, path::{Path, PathBuf}};
 
 const REPARSE_POINT: u32 = 0x400;
 
@@ -21,14 +21,34 @@ unsafe extern "system" {
     fn SetCurrentProcessExplicitAppUserModelID(identifier: *const u16) -> i32;
 }
 
-pub(super) fn configure_development_desktop() -> Result<(), String> {
-    if desktop_channel::DEVELOPMENT {
-        let profile = desktop_channel::local_app_data()?
-            .join(desktop_channel::APP_DIRECTORY)
-            .join("webview");
+/// The WebView2 profile folder this process should use, or None to keep the one a
+/// launcher already chose. Both channels keep it beside their workspaces, so the
+/// app's data stays in one folder instead of Tauri's identifier folder.
+pub(super) fn webview_profile(local_app_data: &Path, inherited: Option<&OsStr>) -> Option<PathBuf> {
+    // The development channel always isolates its profile; a stable launcher such as
+    // launch-acceptance.ps1 may pick a per-workspace profile.
+    if !desktop_channel::DEVELOPMENT && inherited.is_some_and(|folder| !folder.is_empty()) {
+        return None;
+    }
+    Some(local_app_data.join(desktop_channel::APP_DIRECTORY).join("webview"))
+}
+
+/// The WebView2 profile folder chosen by `configure_desktop` or the launcher. Tauri on
+/// Windows otherwise creates `%LOCALAPPDATA%\<identifier>` for every window, even
+/// when `WEBVIEW2_USER_DATA_FOLDER` points elsewhere, so each window passes this.
+pub(super) fn webview_data_directory() -> Option<PathBuf> {
+    env::var_os("WEBVIEW2_USER_DATA_FOLDER").filter(|folder| !folder.is_empty()).map(PathBuf::from)
+}
+
+pub(super) fn configure_desktop() -> Result<(), String> {
+    let local = desktop_channel::local_app_data()?;
+    if let Some(profile) = webview_profile(&local, env::var_os("WEBVIEW2_USER_DATA_FOLDER").as_deref()) {
+        create_plain_directory(&local.join(desktop_channel::APP_DIRECTORY))?;
         create_plain_directory(&profile)?;
         // Configure only this process and its children before WebView2 starts.
         env::set_var("WEBVIEW2_USER_DATA_FOLDER", profile);
+    }
+    if desktop_channel::DEVELOPMENT {
         let id: Vec<_> = desktop_channel::IDENTIFIER.encode_utf16().chain([0]).collect();
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
         if status < 0 {
@@ -78,4 +98,18 @@ pub(super) fn show_startup_error(error: &str) {
         .encode_utf16().chain([0]).collect();
     let title: Vec<_> = desktop_channel::TITLE.encode_utf16().chain([0]).collect();
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10); }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_stable_webview_profile_sits_beside_the_workspaces_unless_a_launcher_chose_one() {
+        let local = Path::new(r"C:\Users\someone\AppData\Local");
+        let profile = Some(local.join("InstanceHarbor").join("webview"));
+        assert_eq!(webview_profile(local, None), profile);
+        assert_eq!(webview_profile(local, Some(OsStr::new(""))), profile);
+        assert_eq!(webview_profile(local, Some(OsStr::new(r"D:\evidence\manual-webview"))), None);
+    }
 }

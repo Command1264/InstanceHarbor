@@ -3,7 +3,7 @@ use super::*;
 use std::collections::HashSet;
 
 const MAX_MANIFEST_BYTES: usize = 4096;
-const CONTRACT: &str = "v2-legacy-compatibility-preflight-1";
+const CONTRACT: &str = "instanceharbor-compatibility-preflight-1";
 const VIA_PLUGINS: [(&str, &str); 3] = [
     (
         "ViaVersion-5.12.0.jar",

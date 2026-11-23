@@ -88,7 +88,15 @@ use std::{
 type Result<T> = std::result::Result<T, String>;
 const FORCE_EXIT: i32 = 0x4948;
 const HIDDEN: u32 = 0x08000000;
-const SCHEMA: &str = "instanceharbor-v2-windows-preview-1";
+/// Written by `init`. Change the number only for an incompatible workspace layout.
+const SCHEMA: &str = "instanceharbor-workspace-1";
+/// Workspaces created before 1.0 (rc2 and development builds) keep this value. They
+/// open unchanged, so an older build can still open them.
+const PREVIOUS_SCHEMAS: &[&str] = &["instanceharbor-v2-windows-preview-1"];
+
+fn supported_schema(value: &str) -> bool {
+    value == SCHEMA || PREVIOUS_SCHEMAS.contains(&value)
+}
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -2443,7 +2451,7 @@ pub fn dispatch_recovery_backup(arguments: &[String], password: &[u8]) -> Result
     crate::desktop_channel::validate_workspace(root_path, false)?;
     let root = safe_directory(root_path)?;
     no_redirect(&root.join("workspace.json"))?;
-    if read::<String>(&root.join("workspace.json"))? != SCHEMA {
+    if !supported_schema(&read::<String>(&root.join("workspace.json"))?) {
         return Err("UnsupportedWorkspace".into());
     }
     let id = recovery_workspace_id(&root)?;
@@ -2523,7 +2531,7 @@ pub fn dispatch_with_creation_progress(
     }
     let root = safe_directory(path)?;
     no_redirect(&root.join("workspace.json"))?;
-    if read::<String>(&root.join("workspace.json"))? != SCHEMA {
+    if !supported_schema(&read::<String>(&root.join("workspace.json"))?) {
         return Err("UnsupportedWorkspace".into());
     }
     if let Some(result) = global_java::dispatch(&root, verb, args) {
@@ -2918,5 +2926,31 @@ mod transition_tests {
         fs::remove_file(root.join("restart-cancelled.json")).unwrap();
         fs::remove_file(root.join("transition-agent.lock")).unwrap();
         fs::remove_dir(&root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod workspace_schema_tests {
+    use super::*;
+
+    #[test]
+    fn new_workspaces_write_the_1_0_schema_and_earlier_workspaces_still_open() {
+        let parent = std::env::temp_dir().join(format!("ih-schema-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&parent).unwrap();
+        let workspace = parent.join("workspace");
+        let path = workspace.to_string_lossy().into_owned();
+        dispatch(&[path.clone(), "init".into()]).unwrap();
+        let file = workspace.join("workspace.json");
+        assert_eq!(read::<String>(&file).unwrap(), "instanceharbor-workspace-1");
+        assert!(dispatch(&[path.clone(), "list".into()]).is_ok());
+
+        // rc2 and development builds wrote the earlier value; it opens and stays unchanged.
+        save(&file, &"instanceharbor-v2-windows-preview-1").unwrap();
+        assert!(dispatch(&[path.clone(), "list".into()]).is_ok());
+        assert_eq!(read::<String>(&file).unwrap(), "instanceharbor-v2-windows-preview-1");
+
+        save(&file, &"instanceharbor-workspace-2").unwrap();
+        assert_eq!(dispatch(&[path, "list".into()]).unwrap_err(), "UnsupportedWorkspace");
+        fs::remove_dir_all(&parent).unwrap();
     }
 }
