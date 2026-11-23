@@ -18,9 +18,9 @@ if (Get-CimInstance Win32_Process -Filter "Name='InstanceHarbor.exe' OR Name='in
     Where-Object CommandLine -NotMatch '\s+native-console$') {
     throw 'An existing 2.0 window is open.'
 }
-$receipt = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'experiments/conpty-a-prototype/package-receipt.json') -Raw | ConvertFrom-Json
+$runtimeRecord = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'console-runtime.json') -Raw | ConvertFrom-Json
 foreach ($name in 'conpty.dll','OpenConsole.exe') {
-    if ((Get-FileHash -LiteralPath (Join-Path $Runtime $name)).Hash -ne $receipt.runtimeFiles.$name.sha256) {
+    if ((Get-FileHash -LiteralPath (Join-Path $Runtime $name)).Hash -ne $runtimeRecord.files.$name.sha256) {
         throw "Private runtime does not match the pinned identity: $name"
     }
 }

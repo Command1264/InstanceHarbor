@@ -367,6 +367,8 @@ npm run preview:vue -- --port 4176 --strictPort
 
 - Vue 版位於 `http://127.0.0.1:4176/preview/`。
 - 無框架版位於 `http://127.0.0.1:4176/preview/legacy.html`。來源是原有的 `docs/design/wireframe/index.html`，原檔維持不變。
+  這個頁面與其他審查參考（例如 `activity-review.html`、`settings-inventory.html`）只保留在維護者的私人封存，公開 repository 沒有收錄。
+  預覽伺服器與 `npm run build:preview` 只提供 `docs/design/wireframe/` 中實際存在的檔案，缺少的頁面連結會無法開啟。
 - `npm run build:preview` 將兩個入口輸出至 `dist-preview`，可用本機靜態 HTTP 伺服器開啟。既有 Tauri 建置入口仍是 `index.html`。
 
 Vue 元件負責預覽殼、實例表格與詳情、設定版面、操作紀錄、共用對話框、Java 選擇與核心維護。複雜表單、精靈的部分內容與模擬控制器仍以既有預覽流程為基礎，並經由共用的頁面與對話框邊界接入。生命週期佇列獨立於 Vue 元件。這些保留的相容區域可逐步替換為有型別的欄位與元件。

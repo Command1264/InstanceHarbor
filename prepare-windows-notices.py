@@ -29,6 +29,11 @@ for component in ("unic-char-property", "unic-char-range", "unic-common", "unic-
     FALLBACKS[component] = (f"{prefix}-LICENSE-MIT", f"{prefix}-LICENSE-APACHE")
 
 
+def app_version():
+    # The notices name the version being packaged, read from the same manifest as the binaries.
+    return tomllib.loads((ROOT / "src-tauri/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+
+
 def cargo(*args):
     return subprocess.check_output(["cargo", *args], cwd=ROOT / "src-tauri", encoding="utf-8")
 
@@ -136,7 +141,7 @@ def render(output, upstream, nsis_copying, terminal_zip, rust_docs):
             TERMINAL_RELEASE, [("LICENSE", (upstream / "windows-terminal-LICENSE").read_bytes()),
                                ("NOTICE.html", terminal.read(notice))])
 
-    source_index = "InstanceHarbor 1.0.0-rc2 — corresponding MPL 2.0 source\n" + MOZILLA + "\n"
+    source_index = f"InstanceHarbor {app_version()} — corresponding MPL 2.0 source\n" + MOZILLA + "\n"
     source_index += "The .crate archives are the original Source Code Form. Open them as gzip-compressed tar archives.\n"
     for filename, (data, url) in mpl_sources.items():
         source_index += f"\n{filename}\n  SHA-256: {digest(data)}\n  {url}\n"
@@ -146,7 +151,7 @@ def render(output, upstream, nsis_copying, terminal_zip, rust_docs):
         for filename, (data, _) in mpl_sources.items():
             archive.writestr(filename, data)
 
-    header = f"""InstanceHarbor 1.0.0-rc2 — Third-Party Notices
+    header = f"""InstanceHarbor {app_version()} — Third-Party Notices
 
 InstanceHarbor's own source terms are in LICENSE. This file preserves third-party terms
 for the Windows distribution. The Cargo dependency inventory also includes build-time

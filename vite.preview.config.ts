@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
@@ -14,7 +14,9 @@ const references = new Map([
   ['instanceharbor-future-plan.md', new URL('../../instanceharbor-future-plan.md', wireframe)],
   ...['refinement-notes.md', 'design-notes.md', 'validation.json', 'review-notes.md']
     .map(name => [name, new URL(name, wireframe)] as const),
-])
+// The historical review pages stay in the maintainer's private archive. Serve and bundle
+// only the references this checkout has, so the preview builds without them.
+].filter(([, source]) => existsSync(source)))
 const mimeTypes = { html: 'text/html', md: 'text/plain', json: 'application/json' }
 
 export default defineConfig({

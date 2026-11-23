@@ -18,7 +18,7 @@ const seed = [
  {id:'folia',name:'examplepack-folia-26.1.2',project:'ExamplePack',kind:'Human',core:'Folia',version:'26.1.2',port:49194,status:'stopped',build:7,latest:10,pin:null},
  {id:'agent',name:'Agent 隔離相容性測試',project:'InstanceHarbor',kind:'Agent',core:'Spigot',version:'1.14',port:31001,status:'unknown',build:39,latest:39,pin:null}
 ];
-const demoLocations={velocity:'instances/Velocity',example-survival:'instances/Human/Example/survival-sample',lobby:'instances/Human/Lobby/lobby',invite:'instances/Human/ExamplePack/examplepack-spigot-1.8.8',drop:'instances/Human/ExampleItems/exampleitems-paper-26.2',folia:'instances/Human/ExamplePack/examplepack-folia-26.1.2',agent:'instances/Agent/compat'};
+const demoLocations={velocity:'instances/Velocity','example-survival':'instances/Human/Example/survival-sample',lobby:'instances/Human/Lobby/lobby',invite:'instances/Human/ExamplePack/examplepack-spigot-1.8.8',drop:'instances/Human/ExampleItems/exampleitems-paper-26.2',folia:'instances/Human/ExamplePack/examplepack-folia-26.1.2',agent:'instances/Agent/compat'};
 for(const row of seed)row.path=demoBase+'\\'+demoLocations[row.id].replace(/\//g,'\\');
 const names = {running:'正在監聽',stopped:'已停止',starting:'啟動中',stopping:'停止中',failed:'啟動失敗',unknown:'尚未核對'};
 const marks = {running:'●',stopped:'○',starting:'▲',stopping:'▲',failed:'■',unknown:'◇'};
