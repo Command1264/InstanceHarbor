@@ -531,8 +531,12 @@ fn command_line(java: &Path, directory: &Path, jar: &Path, jvm: &[String], nogui
     // Legacy Java resolves the local server JAR through a file URI. A relative
     // name avoids the absolute-path ZipFS failure on old launchers.
     command.extend(" -jar \"".encode_utf16());
-    if jar == directory.join("server.jar") {
-        command.extend("server.jar".encode_utf16());
+    if let Some(name) = jar
+        .strip_prefix(directory)
+        .ok()
+        .filter(|name| name.components().count() == 1)
+    {
+        command.extend(name.as_os_str().encode_wide());
     } else {
         command.extend(launcher_path(jar)?.as_os_str().encode_wide());
     }

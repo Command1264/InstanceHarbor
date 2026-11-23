@@ -43,6 +43,8 @@ mod core_prefetch;
 mod agent_rebuild;
 #[path = "core_identity.rs"]
 mod core_identity;
+#[path = "core_artifact.rs"]
+mod core_artifact;
 #[path = "gui_singleton.rs"]
 pub mod gui_singleton;
 #[path = "host_pipe.rs"]
@@ -51,6 +53,8 @@ mod host_pipe;
 mod host_recovery;
 #[path = "legacy_preview.rs"]
 mod legacy_preview;
+#[path = "v1_handoff.rs"]
+mod v1_handoff;
 #[path = "path_format.rs"]
 mod path_format;
 #[path = "policy_settings.rs"]
@@ -182,6 +186,14 @@ struct CoreProfile {
     minecraft: String,
     build: String,
     sha256: String,
+    /// Read from the JAR's own metadata but not confirmed by the built-in table
+    /// or the official catalog. Only Java selection may rely on it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    unverified: bool,
+    /// The Java major the JAR states for itself, used when the version table
+    /// has no entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    java: Option<u16>,
 }
 
 fn verified_core_profile(jar: &Path) -> Result<Option<CoreProfile>> {
@@ -209,7 +221,7 @@ fn pinned_core_profile(sha256: String) -> Option<CoreProfile> {
         "f649771a2190214306fb0cfba22c7b2cbac5df6308b1158309593603ed07d488" => ("PAPER", "26.3", "222"),
         _ => return None,
     };
-    Some(CoreProfile { family: family.into(), minecraft: minecraft.into(), build: build.into(), sha256 })
+    Some(CoreProfile { family: family.into(), minecraft: minecraft.into(), build: build.into(), sha256, unverified: false, java: None })
 }
 
 impl CoreProfile {
@@ -285,6 +297,9 @@ struct Instance {
     auto_restart: Option<AutoRestart>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     core_profile: Option<CoreProfile>,
+    /// The core JAR's file name inside the instance folder; absent means `server.jar`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    core_file: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     core_local_create: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -648,7 +663,7 @@ fn ipv4_owner(address: Ipv4Addr, port: u16) -> Result<Option<u32>> {
         return Ok(rows.chunks_exact(6).find_map(|row| {
             let actual = Ipv4Addr::from(row[1].to_ne_bytes());
             (u16::from_be(row[2] as u16) == port
-                && (actual == address || actual.is_unspecified()))
+                && (actual == address || actual.is_unspecified() || address.is_unspecified()))
             .then_some(row[5])
         }));
     }
@@ -686,9 +701,12 @@ fn launch_java(root: &Path, config: &Instance, directory: &Path) -> Result<PathB
     if !config.can_inherit_java() {
         return Err("InvalidJavaExecutable".into());
     }
-    let jar = directory.join("server.jar");
+    let jar = core_artifact::jar(directory, config);
     no_redirect(&jar)?;
-    let profile = core_maintenance::trusted_profile(config, content_revision::file_revision(&jar)?)
+    let digest = content_revision::file_revision(&jar)?;
+    // Java selection may use an unverified profile recorded for this exact file.
+    let profile = core_maintenance::trusted_profile(config, digest.clone())
+        .or_else(|| config.core_profile.clone().filter(|profile| profile.sha256 == digest))
         .ok_or("AutoJavaUnavailable")?;
     global_java::resolve(root, &profile)
 }
@@ -821,7 +839,10 @@ fn decode_instance(record: &Path, name: &str, bytes: &[u8]) -> Result<Instance> 
     let value: Instance = serde_json::from_slice(bytes).map_err(|error| {
         format!("InvalidInstanceRecord: {}: {error}", record.display())
     })?;
-    if value.name != name || value.port == 0 {
+    if value.name != name
+        || value.port == 0
+        || value.core_file.as_deref().is_some_and(|file| !core_artifact::valid_name(file))
+    {
         return Err("InvalidInstanceRecord".into());
     }
     Ok(value)
@@ -902,7 +923,9 @@ fn velocity_endpoint(text: &str) -> Result<(Ipv4Addr, u16)> {
 
 fn valid_velocity_address(raw: &str) -> Result<Ipv4Addr> {
     let address = raw.parse::<Ipv4Addr>().map_err(|_| "InvalidVelocityBind")?;
-    if address.is_unspecified() || address.is_multicast() || address.is_broadcast() {
+    // 0.0.0.0 opens the proxy on every interface. Registration needs it confirmed
+    // explicitly, like any other non-loopback address.
+    if address.is_multicast() || address.is_broadcast() {
         return Err("VelocityRequiresSpecificAddress".into());
     }
     Ok(address)
@@ -935,7 +958,7 @@ fn instance_listen_address(config: &Instance) -> Ipv4Addr {
 }
 
 fn validate_velocity_launch(path: &Path, profile: &CoreProfile, config: &Instance) -> Result<()> {
-    let jar = path.join("server.jar");
+    let jar = core_artifact::jar(path, config);
     no_redirect(&jar)?;
     if content_revision::file_revision(&jar)? != profile.sha256 {
         return Err("CoreArtifactChanged".into());
@@ -973,6 +996,7 @@ struct ImportSource {
     retained: Option<Instance>,
     explicit_directory: bool,
     velocity: Option<CoreProfile>,
+    core_file: String,
     address: Option<Ipv4Addr>,
     revision: Option<String>,
     _lease: std::os::windows::io::OwnedHandle,
@@ -1057,18 +1081,26 @@ fn checked_import_inner(
     if !admitted {
         return Err("InstanceExcludedOrInvalid".into());
     }
-    let core = target.join("server.jar");
+    let proxy_config = target.join("velocity.toml");
+    let proxy = match fs::symlink_metadata(&proxy_config) {
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(fail(error)),
+    };
+    let core_file = core_artifact::locate(&target, proxy)?.ok_or("MissingCoreArtifact")?;
+    let core = target.join(&core_file);
     no_redirect(&core)?;
     if !core.is_file() {
         return Err("MissingCoreArtifact".into());
     }
-    let proxy_config = target.join("velocity.toml");
-    let velocity = match fs::symlink_metadata(&proxy_config) {
-        Ok(_) => Some(verified_core_profile(&core)?
+    core_artifact::assert_unused(&core)?;
+    let velocity = if proxy {
+        Some(core_artifact::identify(&core)?
+            .profile
             .filter(|profile| profile.family == "VELOCITY")
-            .ok_or("UnverifiedVelocityCore")?),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(fail(error)),
+            .ok_or("UnverifiedVelocityCore")?)
+    } else {
+        None
     };
     if existing.as_ref().and_then(registered_velocity).is_some() && velocity.is_none() {
         return Err("InvalidVelocityBind".into());
@@ -1088,7 +1120,7 @@ fn checked_import_inner(
     let lease = claim_runtime_directory(&target)?;
     scan_policy::verify_import_idle(&target)?;
     let explicit_directory = directory.is_some();
-    Ok(ImportSource { target, port, retained: existing, explicit_directory, velocity, address, revision, _lease: lease })
+    Ok(ImportSource { target, port, retained: existing, explicit_directory, velocity, core_file, address, revision, _lease: lease })
 }
 
 fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
@@ -1299,6 +1331,7 @@ fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
             timing: retained_timing,
             auto_restart: import.as_ref().and_then(|source| source.retained.as_ref()).and_then(|item| item.auto_restart.clone()),
             core_local_create,
+            core_file: None,
             core_profile,
             management_discovered: false,
             directory: (prepared.is_some() || import.is_some_and(|source| source.explicit_directory))
@@ -1436,7 +1469,7 @@ fn console_family(config: &Instance, jar: &Path) -> String {
 /// start would need a console window. The Host repeats every check at start.
 fn console_plan(root: &Path, config: &Instance) -> Result<Value> {
     let path = instance_path(root, &config.name)?;
-    let jar = path.join("server.jar");
+    let jar = core_artifact::jar(&path, config);
     let paths = native_console::launch_paths(&jar, &path, &jar).and_then(|()| {
         if config.java.as_os_str().is_empty() {
             Ok(())
@@ -1484,6 +1517,8 @@ fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
     world_live::recover_saved_locked(root, &config.name)?;
     deferred_settings::apply_locked(root, &config.name)?;
     let refreshed = instance(root, &config.name)?;
+    // Follow a core replaced under another file name before any check reads it.
+    let refreshed = core_artifact::adopt(root, &instance_path(root, &config.name)?, refreshed)?;
     let config = &refreshed;
     if !admitted(root, &config.name)? {
         return Err("InstanceExcludedOrInvalid".into());
@@ -1504,7 +1539,7 @@ fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
     } else if property_port(&path)? != config.port {
         return Err("PortChanged".into());
     }
-    no_redirect(&path.join("server.jar"))?;
+    no_redirect(&core_artifact::jar(&path, config))?;
     instance_port_free(config)?;
     let executable = launch_java(root, config, &path)?;
     if let Some(jvm) = &config.jvm {
@@ -1797,7 +1832,7 @@ fn mark_host_phase(path: &Path) {
 
 fn verified_launch_jar(root: &Path, config: &Instance, local: &Path) -> Result<(PathBuf, Option<File>)> {
     use std::os::windows::fs::OpenOptionsExt;
-    let local = local.join("server.jar");
+    let local = core_artifact::jar(local, config);
     let _requested = match fs::symlink_metadata(root.join("shared-core.enabled")) {
         Ok(_) => { no_redirect(&root.join("shared-core.enabled"))?; true }
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((local, None)),
@@ -1883,7 +1918,7 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
         validate_velocity_launch(&path, profile, config)?;
     }
     let (jar, _artifact_guard) = if velocity.is_some() {
-        (path.join("server.jar"), None)
+        (core_artifact::jar(&path, config), None)
     } else {
         verified_launch_jar(root, config, &path)?
     };
@@ -1961,10 +1996,9 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     } else {
         // Legacy Java resolves the local server JAR through a file URI. Passing
         // a verbatim Windows absolute path can make that URI invalid for ZipFS.
-        let java_jar = if jar == path.join("server.jar") {
-            Path::new("server.jar")
-        } else {
-            &jar
+        let java_jar = match jar.strip_prefix(&path) {
+            Ok(name) if name.components().count() == 1 => name,
+            _ => &jar,
         };
         let mut command = Command::new(&java);
         command.args(&args).arg("-jar").arg(java_jar);
@@ -2630,6 +2664,9 @@ pub fn dispatch_with_creation_progress(
     if let Some(result) = batch_import::dispatch(&root, verb, args) {
         return result;
     }
+    if let Some(result) = v1_handoff::dispatch_verb(&root, verb, args) {
+        return result;
+    }
     if let Some(result) = creation::dispatch(&root, verb, args, progress) {
         return result;
     }
@@ -2910,7 +2947,6 @@ mod transition_tests {
     fn velocity_import_requires_explicit_single_bound_address() {
         assert_eq!(velocity_endpoint("# proxy\r\nbind = \"127.0.0.1:16001\" # local\r\n[servers]\r\nbind = \"ignored\"").unwrap(), (Ipv4Addr::LOCALHOST,16001));
         assert_eq!(velocity_endpoint("'bind' = '127.0.0.1:16002'").unwrap(), (Ipv4Addr::LOCALHOST,16002));
-        assert!(velocity_endpoint("bind = \"0.0.0.0:16001\"").is_err());
         let address = velocity_endpoint("bind = \"192.168.56.2:16001\"").unwrap().0;
         assert!(confirmed_velocity_address(address, None).is_err());
         assert!(confirmed_velocity_address(address, Some("192.168.56.1")).is_err());
@@ -2920,6 +2956,24 @@ mod transition_tests {
         assert!(velocity_endpoint("[servers]\nbind = \"127.0.0.1:16001\"").is_err());
         assert!(velocity_endpoint("bind = \"127.0.0.1:16001\"\n\"bind\" = \"127.0.0.1:16002\"").is_err());
         assert!(velocity_endpoint("motd = '''\nbind = \"127.0.0.1:16001\"\n'''").is_err());
+    }
+
+    #[test]
+    fn a_proxy_bound_to_every_interface_is_accepted_after_explicit_confirmation() {
+        let all = velocity_endpoint("bind = \"0.0.0.0:16001\"").unwrap();
+        assert_eq!(all, (Ipv4Addr::UNSPECIFIED, 16001));
+        assert_eq!(confirmed_velocity_address(all.0, None).unwrap_err(), "VelocityListenAddressConfirmationRequired");
+        assert_eq!(confirmed_velocity_address(all.0, Some("127.0.0.1")).unwrap_err(), "VelocityListenAddressChanged");
+        assert_eq!(confirmed_velocity_address(all.0, Some("0.0.0.0")).unwrap(), Ipv4Addr::UNSPECIFIED);
+        assert!(velocity_endpoint("bind = \"255.255.255.255:16001\"").is_err());
+        assert!(velocity_endpoint("bind = \"224.0.0.1:16001\"").is_err());
+    }
+
+    #[test]
+    fn a_port_query_on_every_interface_finds_a_listener_on_any_address() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(ipv4_owner(Ipv4Addr::UNSPECIFIED, port).unwrap(), Some(std::process::id()));
     }
 
     #[test]
@@ -3056,7 +3110,7 @@ mod start_preflight_tests {
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("server.jar"), b"not a real jar").unwrap();
         fs::write(directory.join("server.properties"), format!("server-ip=127.0.0.1\nserver-port={port}\n")).unwrap();
-        let config = Instance {
+        let config = Instance { core_file: None,
             name: "agent".into(),
             java: parent.join("removed-jdk").join("bin").join("java.exe"),
             port,

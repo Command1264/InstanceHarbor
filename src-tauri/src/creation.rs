@@ -156,7 +156,7 @@ fn read_source(root: &Path, source: &Source, verify_latest: bool) -> Result<(Cor
             {
                 return Err("InvalidGuiCreationArguments".into());
             }
-            let core = CoreProfile { family: family.clone(), minecraft: minecraft.clone(), build: build.clone(), sha256: sha256.clone() };
+            let core = CoreProfile { unverified: false, java: None, family: family.clone(), minecraft: minecraft.clone(), build: build.clone(), sha256: sha256.clone() };
             if verify_latest && core_source::latest_creation_core(family, minecraft)? != core {
                 return Err("CreationPreviewChanged".into());
             }
@@ -328,7 +328,7 @@ fn stage(root: &Path, inspection: &Inspection, draft: &Draft, work: &str, prepar
         velocity_listen_address: None, removed: false,
         directory: Some(path_format::display(&inspection.target)),
         jvm: None, timing: None, auto_restart: None, core_profile: Some(profile.clone()),
-        core_local_create: true, management_discovered: false,
+        core_file: None, core_local_create: true, management_discovered: false,
     };
     let scope = Scope {
         original_revision: inspection.scope.original_revision.clone(),
@@ -683,7 +683,7 @@ mod tests {
         let (policy, original_revision) = scan_policy::load(root).unwrap();
         let proposed = policy.with_new_child(root, &parent, &target).unwrap();
         let added_revision = Some(scope_revision(&proposed).unwrap());
-        let profile = CoreProfile {
+        let profile = CoreProfile { unverified: false, java: None,
             family: "SPIGOT".into(), minecraft: "1.8.8".into(), build: "fixture".into(),
             sha256: content_revision::file_revision(&core).unwrap(),
         };

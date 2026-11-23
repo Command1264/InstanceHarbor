@@ -292,7 +292,7 @@ mod tests {
     fn prepare_keeps_registered_human_route_separate_and_refuses_traversal() {
         let root = Path::new("workspace");
         let request = Request::parse(&shape("example-paper-26.3", 20197).to_string()).unwrap();
-        let paper = CoreProfile {
+        let paper = CoreProfile { unverified: false, java: None,
             family: "PAPER".into(),
             minecraft: "26.3".into(),
             build: "205".into(),

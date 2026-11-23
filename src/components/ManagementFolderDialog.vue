@@ -16,6 +16,7 @@ interface Candidate {
   listenAddress: string | null
   state: 'Ready' | 'Blocked'
   reason: string | null
+  warning?: string | null
 }
 
 interface Preview {
@@ -64,6 +65,11 @@ const resultCounts = computed(() => {
 
 function path(value: string) {
   return displayPath(value, props.pathSeparator)
+}
+
+function coreWarning(value: string) {
+  const key = 'core.warning.' + value
+  return isMessageId(key) ? t(key) : t('core.warning.CoreUnverified')
 }
 
 function reason(value?: string | null) {
@@ -235,6 +241,7 @@ defineExpose({ open })
                 <bdi v-if="row.listenAddress" class="management-folder-port selectable" translate="no">{{ row.listenAddress }}</bdi>
               </p>
               <p v-if="row.reason && row.reason !== 'AlreadyManaged'" class="hint">{{ reason(row.reason) }}</p>
+              <p v-if="row.state === 'Ready' && row.warning" class="form-error" role="note">{{ coreWarning(row.warning) }}</p>
               <p v-else-if="row.state === 'Ready' && row.directory === preview.directory" class="hint">{{ t('management.rootLocked') }}</p>
             </div>
           </li>

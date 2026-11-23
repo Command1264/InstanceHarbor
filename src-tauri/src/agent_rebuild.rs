@@ -268,13 +268,14 @@ mod tests {
         fs::create_dir(&target).unwrap();
         let name = "rebuild";
         let request = "replace-one";
-        let mut profile = CoreProfile {
+        let mut profile = CoreProfile { unverified: false, java: None,
             family: "PAPER".into(),
             minecraft: "26.3".into(),
             build: "205".into(),
             sha256: content_revision::revision(b"original").unwrap(),
         };
         let previous = Instance {
+            core_file: None,
             name: name.into(),
             java: PathBuf::from("java.exe"),
             port: spec.port,

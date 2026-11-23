@@ -210,10 +210,13 @@ function batchRows(action:'start'|'stop'|'restart', rows:Instance[]) {
   return rows.filter(row=>!props.busyNames.has(row.name) && !props.queuedNames?.has(row.name) && !props.startingNames?.has(row.name) &&
     (action === 'start' ? row.state === 'Stopped' && !row.outsideManagement : canRestart(row)))
 }
+function batchCount(action:'start'|'stop'|'restart', rows:Instance[]) {
+  return action === 'stop'
+    ? rows.filter(row=>canStop(row)||props.queuedNames?.has(row.name)).length
+    : batchRows(action,rows).length
+}
 function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
-  return props.connected && (action === 'stop'
-    ? rows.some(row=>canStop(row)||props.queuedNames?.has(row.name))
-    : batchRows(action,rows).length>0)
+  return props.connected && batchCount(action,rows)>0
 }
 
 </script>
@@ -254,19 +257,19 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
     <aside class="detail-panel" :aria-label="t('instances.detailLabel')"><OverlayScroll class="detail-scroll" :label="t('instances.detailContentLabel')"><div class="detail-content">
       <template v-if="chosen.length > 1"><h2>{{ t('instances.selectedHeading', { count: chosen.length }) }}</h2>
         <div class="detail-actions">
-          <button :class="{primary:canSubmitBatch('start',chosen)}" :disabled="!canSubmitBatch('start',chosen)" @click="emit('batch-action','start',batchRows('start',chosen))">{{ t('instances.startSelected') }}</button>
+          <button :class="{primary:canSubmitBatch('start',chosen)}" :disabled="!canSubmitBatch('start',chosen)" @click="emit('batch-action','start',batchRows('start',chosen))">{{ t('instances.startSelected',{count:batchCount('start',chosen)}) }}</button>
           <span v-if="consoleAvailable" class="action-tooltip" :title="consoleHint">
             <button :class="{primary:connected && consoleTargets.length && !canSubmitBatch('start',chosen)}" :disabled="!connected || consoleBusy || !consoleTargets.length" aria-describedby="selected-console-hint" @click="emit('console',consoleTargets)">{{ t('instances.consoleSelected') }}</button>
             <span id="selected-console-hint" class="sr-only">{{ consoleHint }}</span>
           </span>
-          <button :disabled="!canSubmitBatch('stop',chosen)" @click="emit('batch-action','stop',batchRows('stop',chosen))">{{ t('instances.stopSelected') }}</button>
-          <button :disabled="!canSubmitBatch('restart',chosen)" @click="emit('batch-action','restart',batchRows('restart',chosen))">{{ t('instances.restartSelected') }}</button>
+          <button :disabled="!canSubmitBatch('stop',chosen)" @click="emit('batch-action','stop',batchRows('stop',chosen))">{{ t('instances.stopSelected',{count:batchCount('stop',chosen)}) }}</button>
+          <button :disabled="!canSubmitBatch('restart',chosen)" @click="emit('batch-action','restart',batchRows('restart',chosen))">{{ t('instances.restartSelected',{count:batchCount('restart',chosen)}) }}</button>
         </div>
         <button type="button" :disabled="!connected" @click="emit('batch-core',chosen.map(row=>row.name))">{{ t('core.batch.selected') }}</button>
         <details><summary>{{ t('instances.viewTargets') }}</summary><p v-for="row in chosen" :key="row.name" class="small">{{ row.name }} · {{ displayState(row) }}</p></details>
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
-        <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
+        <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><p v-if="single.listenAddress==='0.0.0.0'" class="form-error" role="note">{{ t('velocity.allInterfaces') }}</p><p v-if="metaByName.get(single.name)?.core?.unverified" class="form-error" role="note">{{ t('core.warning.unverifiedInstance') }}</p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
         <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
         <div class="detail-actions">
           <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>

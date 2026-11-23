@@ -21,7 +21,7 @@ export interface Instance {
   stopToken: string | null
   run?: { id: string; java: { pid: number }; host: { pid: number } }
 }
-export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string }
+export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean }
 export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity }
 export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean; closeToTray?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }
@@ -186,6 +186,9 @@ export function errorText(error: unknown) {
   if (raw.includes('DirectoryRedirected')) return tr('manager.error.directoryRedirected')
   if (raw.includes('ImportOutsideInstanceRoot')) return tr('manager.error.importOutsideInstanceRoot')
   if (raw.includes('ImportPreviewChanged')) return tr('manager.error.importPreviewChanged')
+  if (raw.includes('CoreInUse')) return tr('manager.error.coreInUse')
+  if (raw.includes('CoreCatalogUnavailable')) return tr('manager.error.coreCatalogUnavailable')
+  if (raw.includes('CoreArtifactAmbiguous')) return tr('manager.error.coreArtifactAmbiguous')
   if (raw.includes('UnverifiedVelocityCore')) return tr('manager.error.unverifiedVelocityCore')
   if (raw.includes('ExpectedLoopbackVelocityAddress')) return tr('manager.error.expectedLoopbackVelocityAddress')
   if (raw.includes('InvalidVelocityBind')) return tr('manager.error.invalidVelocityBind')

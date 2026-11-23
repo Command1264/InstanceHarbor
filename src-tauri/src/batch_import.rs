@@ -80,6 +80,8 @@ struct PreviewRow {
     listen_address: Option<String>,
     state: &'static str,
     reason: Option<String>,
+    /// Why the core is accepted without verification, for a Ready row.
+    warning: Option<String>,
     revision: Option<String>,
     conflicts: Vec<String>,
 }
@@ -116,6 +118,10 @@ fn parse<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
 }
 
 fn relative(root: &Path, path: &Path) -> Result<String> {
+    // A folder outside the workspace is named by its absolute path.
+    if path.strip_prefix(root).is_err() && scan_policy::manageable(root, path) {
+        return Ok(path_format::display(path));
+    }
     let value = path
         .strip_prefix(root)
         .map_err(|_| "BatchImportDirectoryOutsideScope")?;
@@ -135,7 +141,7 @@ fn scope(root: &Path, directory: &str) -> Result<PathBuf> {
     } else {
         scan_policy::rule_path(root, directory)?
     };
-    if !scan_policy::contains(&base, &path) {
+    if !scan_policy::manageable(root, &path) {
         return Err("BatchImportDirectoryOutsideScope".into());
     }
     Ok(path)
@@ -152,10 +158,18 @@ fn raw_entry(path: &Path) -> Result<Option<fs::Metadata>> {
 // Deny replacement of all checked directories until disk reads or publication
 // finish. OPEN_REPARSE_POINT makes the final path component inspectable in place.
 pub(super) fn hold_directories(root: &Path, path: &Path) -> Result<Vec<File>> {
+    // A folder outside the workspace is held from its drive root down.
+    let base = if path.strip_prefix(root).is_err() && scan_policy::manageable(root, path) {
+        path.components()
+            .take_while(|part| matches!(part, std::path::Component::Prefix(_) | std::path::Component::RootDir))
+            .collect::<PathBuf>()
+    } else {
+        root.to_path_buf()
+    };
     let suffix = path
-        .strip_prefix(root)
+        .strip_prefix(&base)
         .map_err(|_| "BatchImportDirectoryOutsideScope")?;
-    let mut current = root.to_path_buf();
+    let mut current = base;
     let mut held = Vec::new();
     for part in suffix.components() {
         current.push(part);
@@ -271,6 +285,7 @@ fn inspect_candidate(
         .into());
     }
     let mut held = hold_directories(root, path)?;
+    let folders = held.len();
     let policy_file = root.join("scan-policy.json");
     held.push(hold_file(&policy_file)?);
     let (_, policy_revision) = scan_policy::load(root)?;
@@ -285,30 +300,38 @@ fn inspect_candidate(
     row.kind = kind;
     row.port = Some(port);
     row.listen_address = ip.map(|ip| ip.to_string());
-    let core = path.join("server.jar");
+    let core_name = core_artifact::locate(path, kind == "Velocity")?.ok_or("MissingCoreArtifact")?;
+    let core = path.join(&core_name);
     if raw_entry(&core)?.is_none() {
         return Err("MissingCoreArtifact".into());
     }
+    // A running server keeps its core open; report that before port checks.
+    core_artifact::assert_unused(&core)?;
     let core_file = hold_file(&core)?;
     let core_token = file_token(&core, &core_file)?;
     held.push(core_file);
-    let detected_core = core_token[0]
-        .as_str()
-        .and_then(|hash| pinned_core_profile(hash.to_owned()));
+    // An unverified core is accepted with a warning so imports work offline.
+    let identity = core_artifact::identify(&core)?;
+    let detected_core = identity.profile;
+    row.warning = identity.warning.map(str::to_owned);
     if let Some(profile) = &detected_core {
-        row.core = Some(format!(
-            "{} {} · {}",
-            profile.family, profile.minecraft, profile.build
-        ));
+        row.core = Some(if profile.build.is_empty() {
+            format!("{} {}", profile.family, profile.minecraft)
+        } else {
+            format!("{} {} · {}", profile.family, profile.minecraft, profile.build)
+        });
     }
     let config_file = hold_file(&config)?;
     let config_token = file_token(&config, &config_file)?;
     held.push(config_file);
 
     let (java, java_token) = if management.is_some() {
-        if !detected_core
+        // A core that states nothing is registered too; it needs Java chosen
+        // in the instance settings before it can start.
+        if detected_core
             .as_ref()
-            .is_some_and(|profile| (profile.family == "VELOCITY") == (kind == "Velocity"))
+            .is_some_and(|profile| (profile.family == "VELOCITY") != (kind == "Velocity"))
+            || (kind == "Velocity" && detected_core.is_none())
         {
             return Err("UnverifiedManagementCore".into());
         }
@@ -324,10 +347,10 @@ fn inspect_candidate(
         Some(policy) => checked_import_with_policy(root, name, Some(&row.directory), confirmed, policy),
         None => checked_import(root, name, Some(&row.directory), confirmed),
     }?;
-    if source.port != port || source.address != ip || source.target != path {
+    if source.port != port || source.address != ip || source.target != path || source.core_file != core_name {
         return Err("BatchImportPreviewChanged".into());
     }
-    let directory_id = held[path.strip_prefix(root).map_err(fail)?.components().count() - 1]
+    let directory_id = held[folders.checked_sub(1).ok_or("BatchImportEvidenceUnavailable")?]
         .metadata()
         .map_err(fail)?
         .creation_time();
@@ -375,6 +398,7 @@ fn new_row(root: &Path, path: &Path, name: Option<&str>, java: &str) -> Result<P
         core: None,
         port: None,
         listen_address: None,
+        warning: None,
         state: "Blocked",
         reason: None,
         revision: None,
@@ -778,6 +802,7 @@ fn imported_record(
         } else {
             checked.source.velocity.clone()
         },
+        core_file: core_artifact::stored(&checked.source.core_file),
         core_local_create: false,
         management_discovered: automatic,
     };
@@ -1120,7 +1145,7 @@ mod tests {
     }
 
     #[test]
-    fn management_preview_reads_sources_without_java_and_does_not_register_unknown_core() {
+    fn management_preview_reads_sources_without_java_and_registers_an_unrecognized_core_with_a_warning() {
         let f = Fixture::new();
         f.server("instances/scope/unknown", ports(1)[0]);
         let before = snapshot(&f.root);
@@ -1128,8 +1153,9 @@ mod tests {
         let request = json!({"directory":"instances/scope","revision":policy["revision"]});
         let view = f.call("management-folder-preview", &[request.to_string()]).unwrap();
         assert_eq!(view["complete"], true);
-        assert_eq!(view["rows"][0]["state"], "Blocked");
-        assert_eq!(view["rows"][0]["reason"], "UnverifiedManagementCore");
+        // Offline use: a core that states nothing is accepted with a warning.
+        assert_eq!(view["rows"][0]["state"], "Ready", "{view}");
+        assert_eq!(view["rows"][0]["warning"], "CoreUnrecognized");
         assert_eq!(view["rows"][0]["java"], "");
         assert_eq!(snapshot(&f.root), before);
 
@@ -1139,17 +1165,117 @@ mod tests {
         });
         let saved = f.call("management-folder-save", &[request.to_string()]).unwrap();
         assert_eq!(saved["policy"]["managedFolders"], true);
-        assert!(saved["registration"].is_null());
+        assert!(!saved["registration"].is_null(), "{saved}");
         let sources = f.root.join("instances");
         assert_eq!(
             snapshot(&sources),
             before.into_iter().filter(|(p, _)| p != &sources && p.starts_with(&sources)).collect()
         );
-        assert!(!record_path(&f.root, "unknown").exists());
+        // Registered without Java or a core profile: Java is chosen before a start.
+        let record = instance(&f.root, "unknown").unwrap();
+        assert!(record.java.as_os_str().is_empty() && record.core_profile.is_none());
         assert_eq!(
             f.call("management-folder-save", &[request.to_string()]).unwrap_err(),
             "SettingsConflict"
         );
+    }
+
+    #[test]
+    fn a_folder_outside_the_workspace_can_be_whitelisted_scanned_and_imported() {
+        let f = Fixture::new();
+        let outside = f.root.with_file_name(format!("{}-outside", f.root.file_name().unwrap().to_string_lossy()));
+        let server = outside.join("srv");
+        fs::create_dir_all(server.join("world")).unwrap();
+        fs::write(server.join("server.jar"), b"fixture").unwrap();
+        fs::write(server.join("server.properties"), format!("server-ip=127.0.0.1\nserver-port={}\n", ports(1)[0])).unwrap();
+        let scan = path_format::display(&outside);
+
+        let policy = f.call("scan-policy", &[]).unwrap();
+        let request = json!({"revision":policy["revision"], "allowPaths":[scan], "excludePaths":[]});
+        let saved = f.call("save-scan-policy", &[request.to_string()]).unwrap();
+        assert_eq!(saved["policy"]["allowPaths"][0], scan);
+
+        let report = f.call("import-batch-preview", &[json!({"directory":scan,"java":f.java}).to_string()]).unwrap();
+        assert_eq!(report["complete"], true, "{report}");
+        let row = &report["rows"][0];
+        assert_eq!(row["state"], "Ready", "{row}");
+        assert_eq!(row["directory"], path_format::display(&server));
+        let selection = Selection {
+            directory: scan.clone(),
+            automatic: false,
+            rows: vec![Selected {
+                directory: row["directory"].as_str().unwrap().into(),
+                name: "srv".into(),
+                java: f.java.clone(),
+                listen_address: None,
+                revision: row["revision"].as_str().unwrap().into(),
+            }],
+        };
+        f.apply("outside", &selection).unwrap();
+        assert_eq!(instance_path(&f.root, "srv").unwrap(), safe_directory(&server).unwrap());
+        assert_eq!(f.call("list", &[]).unwrap().to_string().matches("\"srv\"").count() > 0, true);
+
+        // The workspace's own folders, its parents and a drive root stay out of reach.
+        for blocked in [f.root.join("registry"), f.root.parent().unwrap().to_path_buf(), PathBuf::from(r"C:\")] {
+            let request = json!({"directory":path_format::display(&blocked),"java":f.java});
+            assert_eq!(
+                f.call("import-batch-preview", &[request.to_string()]).unwrap_err(),
+                "BatchImportDirectoryOutsideScope",
+                "{}", blocked.display()
+            );
+        }
+        fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[test]
+    fn a_core_under_any_file_name_is_recorded_and_a_running_core_is_refused() {
+        let f = Fixture::new();
+        f.server("instances/named/srv", ports(1)[0]);
+        let dir = f.root.join("instances/named/srv");
+        fs::rename(dir.join("server.jar"), dir.join("spigot-1.8.8.jar")).unwrap();
+        let preview = |f: &Fixture| {
+            let report = f.call("import-batch-preview", &[json!({"directory":"instances/named","java":f.java}).to_string()]).unwrap();
+            report["rows"][0].clone()
+        };
+
+        // A server still running from the folder keeps its core open.
+        let script = format!("$f=[IO.File]::Open('{}','Open','Read','ReadWrite'); Start-Sleep 20", dir.join("spigot-1.8.8.jar").display());
+        let mut child = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).spawn().unwrap();
+        let mut refused = Value::Null;
+        for _ in 0..100 {
+            refused = preview(&f);
+            if refused["reason"] == "CoreInUse" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(refused["reason"], "CoreInUse", "{refused}");
+
+        let row = preview(&f);
+        assert_eq!(row["state"], "Ready", "{row}");
+        let selection = Selection {
+            directory: "instances/named".into(),
+            automatic: false,
+            rows: vec![Selected {
+                directory: row["directory"].as_str().unwrap().into(),
+                name: "srv".into(),
+                java: f.java.clone(),
+                listen_address: None,
+                revision: row["revision"].as_str().unwrap().into(),
+            }],
+        };
+        f.apply("named", &selection).unwrap();
+        let record = instance(&f.root, "srv").unwrap();
+        assert_eq!(record.core_file.as_deref(), Some("spigot-1.8.8.jar"));
+        assert_eq!(core_artifact::jar(&instance_path(&f.root, "srv").unwrap(), &record), dir.join("spigot-1.8.8.jar"));
+
+        // A replaced core under a new name is followed before the next start.
+        fs::rename(dir.join("spigot-1.8.8.jar"), dir.join("spigot-1.8.8-new.jar")).unwrap();
+        let adopted = core_artifact::adopt(&f.root, &dir, record).unwrap();
+        assert_eq!(adopted.core_file.as_deref(), Some("spigot-1.8.8-new.jar"));
+        assert_eq!(instance(&f.root, "srv").unwrap().core_file.as_deref(), Some("spigot-1.8.8-new.jar"));
     }
 
     #[test]
@@ -1165,7 +1291,8 @@ mod tests {
         assert_eq!(view["rows"][0]["directory"], "instances");
         assert_eq!(view["rows"][0]["reason"], "ImportOutsideInstanceRoot");
         assert_eq!(view["rows"][1]["directory"], "instances/scope/unknown");
-        assert_eq!(view["rows"][1]["reason"], "UnverifiedManagementCore");
+        assert_eq!(view["rows"][1]["state"], "Ready");
+        assert_eq!(view["rows"][1]["warning"], "CoreUnrecognized");
     }
 
     #[test]

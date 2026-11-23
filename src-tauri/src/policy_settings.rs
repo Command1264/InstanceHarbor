@@ -735,7 +735,7 @@ impl WorldSnapshot {
             return Err("InstanceRemoved".into());
         }
         let directory = instance_path(root, name)?;
-        let jar = directory.join("server.jar");
+        let jar = core_artifact::jar(&directory, &instance);
         let verified = match fs::symlink_metadata(&jar) {
             Ok(_) => {
                 no_redirect(&jar)?;
@@ -1033,7 +1033,7 @@ fn source_texts(snapshot: &WorldSnapshot) -> BTreeMap<String, String> {
 }
 
 fn core_sha256(root: &Path, name: &str) -> Result<String> {
-    content_revision::file_revision(&instance_path(root, name)?.join("server.jar"))
+    content_revision::file_revision(&core_artifact::jar(&instance_path(root, name)?, &instance(root, name)?))
 }
 
 fn pending_world_values(pending: &PendingWorld) -> Map<String, Value> {

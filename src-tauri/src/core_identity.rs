@@ -108,6 +108,16 @@ pub(super) fn read_directory(
     file: &mut (impl Read + Seek),
     length: u64,
 ) -> io::Result<Option<(Vec<u8>, u64)>> {
+    read_directory_with(file, length, MAX_ENTRIES)
+}
+
+/// A server core can hold far more entries than a plugin; a Velocity JAR has
+/// about 25,000. The directory size limit still bounds the read.
+pub(super) fn read_directory_with(
+    file: &mut (impl Read + Seek),
+    length: u64,
+    max_entries: usize,
+) -> io::Result<Option<(Vec<u8>, u64)>> {
     if length < 22 {
         return Ok(None);
     }
@@ -138,7 +148,7 @@ pub(super) fn read_directory(
     };
     let end_offset = length - tail_length as u64 + end as u64;
     if count == 0
-        || count > MAX_ENTRIES
+        || count > max_entries
         || size > MAX_DIRECTORY
         || offset.checked_add(size) != Some(end_offset)
     {

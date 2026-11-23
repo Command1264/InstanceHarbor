@@ -129,12 +129,13 @@ fn installed_major(executable: &Path) -> Result<u16> {
 pub(super) fn supported_major(profile: &CoreProfile) -> Option<u16> {
     Some(match (profile.family.as_str(), profile.minecraft.as_str()) {
         ("VELOCITY", "4.2.1-SNAPSHOT") => 25,
-        ("PAPER" | "FOLIA" | "SPIGOT", version) if version.starts_with("26.") => 25,
+        ("PAPER" | "FOLIA" | "SPIGOT" | "PURPUR" | "CRAFTBUKKIT", version) if version.starts_with("26.") => 25,
         ("PAPER" | "FOLIA", "1.20.6" | "1.21.8") => 21,
         ("SPIGOT", "1.8.8" | "1.12.2" | "1.14" | "1.16.5")
         | ("PAPER", "1.14" | "1.14.4") => 8,
-        ("PAPER" | "FOLIA", version) => return paper_java_major(version),
-        _ => return None,
+        ("PAPER" | "FOLIA", version) => return paper_java_major(version).or(profile.java),
+        ("SPIGOT" | "PURPUR" | "CRAFTBUKKIT", version) => return paper_java_major(version).or(profile.java),
+        _ => return profile.java,
     })
 }
 
@@ -440,7 +441,7 @@ mod tests {
 
     #[test]
     fn profiles_keep_legacy_and_current_java_separate() {
-        let profile = |family: &str, minecraft: &str| CoreProfile {
+        let profile = |family: &str, minecraft: &str| CoreProfile { unverified: false, java: None,
             family: family.into(), minecraft: minecraft.into(), build: String::new(), sha256: String::new(),
         };
         assert_eq!(supported_major(&profile("SPIGOT", "1.8.8")), Some(8));

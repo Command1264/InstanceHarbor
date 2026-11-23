@@ -494,6 +494,7 @@ mod tests {
             save(
                 &record_path(&self.0, name),
                 &Instance {
+                    core_file: None,
                     name: name.into(),
                     java: directory.join("unused-java.exe"),
                     port,
@@ -519,7 +520,7 @@ mod tests {
     }
 
     fn profile(bytes: &[u8], build: &str) -> CoreProfile {
-        CoreProfile {
+        CoreProfile { unverified: false, java: None,
             family: "PAPER".into(),
             minecraft: "26.3".into(),
             build: build.into(),

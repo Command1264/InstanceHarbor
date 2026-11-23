@@ -235,7 +235,7 @@ fn demand(row: &Value) -> Option<Demand> {
     Some(Demand {
         current,
         registration,
-        profile: CoreProfile {
+        profile: CoreProfile { unverified: false, java: None,
             family: field("family")?,
             minecraft: field("minecraft")?,
             build: candidate["build"].as_str()?.to_owned(),
@@ -274,7 +274,7 @@ fn outstanding(root: &Path, config: &Instance, item: &Demand) -> bool {
     let Ok(directory) = instance_path(root, &config.name) else {
         return true;
     };
-    let jar = directory.join("server.jar");
+    let jar = core_artifact::jar(&directory, config);
     if no_redirect(&jar).is_err() {
         return true;
     }
@@ -424,7 +424,7 @@ mod tests {
         let item = Demand {
             current: "1".repeat(64),
             registration: "2".repeat(64),
-            profile: CoreProfile {
+            profile: CoreProfile { unverified: false, java: None,
                 family: "PAPER".into(),
                 minecraft: "26.3".into(),
                 build: "253".into(),

@@ -137,7 +137,7 @@ pub(in crate::windows) fn apply(
     let claim = claim(directory, run)?;
     let mut checked = 0;
     let result = (|| {
-        let core = verified_core_profile(&directory.join("server.jar"))?
+        let core = verified_core_profile(&core_artifact::jar(directory, config))?
             .filter(|core| core.sha256 == plan.sha256)
             .filter(|core| {
                 config

@@ -98,10 +98,77 @@ $options = @{ proxy = 'diagnostics-velocity'; route = 'paper'; plugin = 'LuckPer
 由管理資料夾登記的實例在停服後才離開清單。以往已登記和透過「建立實例」新增的實例會在白名單調整後保留，
 明確加入黑名單時則遵循相同的排除及停服流程。
 
-自動登記需要可核對版本與雜湊的 `server.jar` 和同層設定。需另外確認非 loopback 監聽位址的
-Velocity 保留待處理。掃描略過連結及排除路徑，回報名稱、路徑、連接埠及管理權衝突。
+### 伺服器核心 JAR
+
+核心 JAR 不限檔名。登記時依下列順序找出核心，並記下實際檔名：
+
+1. 有 `server.jar` 時使用它。
+2. 否則使用資料夾最上層唯一一個自稱為同類核心的 JAR。代理資料夾只接受 Velocity，伺服器資料夾不接受 Velocity。
+3. 伺服器資料夾沒有自稱核心的 JAR、但最上層只有一個 JAR 時（例如 Spigot），使用那一個。
+
+同類核心超過一個時回報 `CoreArtifactAmbiguous`。插件放在 `plugins` 裡，不影響判斷。
+
+核心自述的內容在本機讀取，不需要網路，也不會執行核心：
+
+| 核心 | 讀取位置 | 取得的資訊 |
+|---|---|---|
+| Paperclip 核心（Paper、Folia、Purpur 等 Paper 分支） | `META-INF/patches.list`、`version.json` | 家族、Minecraft 版本、Java 版本 |
+| Velocity | `MANIFEST.MF` | 版本 |
+| Spigot bundler（新版） | `META-INF/versions.list` | 家族、Minecraft 版本 |
+| 舊版 Spigot／CraftBukkit | `META-INF/maven/.../pom.properties` | Minecraft 版本 |
+
+沒有寫明 Java 版本時，讀主類別（`Main-Class`）的 class 檔版本，得到能載入它的最低 Java。
+
+核心分成三級，**都不拒絕**，只有已核對的核心沒有警告：
+
+1. **已核對**：SHA-256 在內建清單，或與 PaperMC 官方清單（`fill.papermc.io`）完全相符。內建清單沒有的 Paper、Folia、Velocity 才會連線查詢；結果記入登記，之後離線也能使用。核心更新與共用核心只接受這一級。
+2. **未核對但可讀出版本**：Paper 分支（例如 Purpur）、Spigot、官方清單沒有的雜湊（`CoreNotInCatalog`），或連不上官方清單（`CoreCatalogUnavailable`，一分鐘內不重查）。登記會標記為未核對，Java 依核心自述的 Minecraft 版本自動選擇；預覽與詳細面板顯示警告。
+3. **無法辨認**（`CoreUnrecognized`）：讀不出 Minecraft 版本。仍可登記，但啟動前要在實例設定選擇 Java。
+
+Spigot 由 BuildTools 在本機建置，沒有官方檔案可比對，所以內建清單以外的 Spigot 一律是未核對。
+
+每次啟動前，登記的檔名不存在時，會依上述規則重新尋找並更新登記，例如 Velocity 換成檔名帶有新 build 的 JAR。新核心的雜湊與登記不同時，同家族的核心會被接受（離線時以未核對方式接受）；遊戲伺服器另外要求 Minecraft 版本相同，避免世界被意外升級。其他情況維持原本的錯誤，例如 `CoreArtifactChanged`。
+
+登記、匯入預覽與 V1 移交都會用 Windows Restart Manager 查詢哪些程式開著核心 JAR。其他程式（通常是仍在執行的伺服器）開著時回報 `CoreInUse`，不檢查 Port 也不登記。查詢只讀取，不會要求程式關閉。
+
+自動登記需要伺服器核心 JAR 和同層設定；核心未核對時會顯示警告。非 loopback 監聽位址的 Velocity
+需在匯入時另外確認位址，自動登記會略過。掃描略過連結及排除路徑，回報名稱、路徑、連接埠及管理權衝突。
 達到掃描上限時，請縮小範圍後重新預覽。建立新實例仍由「建立實例」處理。舊版 CLI 匯入命令
 及匯入工作紀錄維持相容，桌面版的日常入口是「新增管理資料夾」。
+
+## 從 V1 移交伺服器
+
+V1 管理的伺服器可以原地交給 1.0 管理，世界、插件與插件資料都不搬動也不改寫。移交只能用 `ihctl`，每台伺服器各做一次；代理與後端分別移交，啟動順序由使用者決定。
+
+1. 在 V1 正常停止這台伺服器並關閉 V1 的管理器，確認 V1 不會再自動重啟。
+2. 預覽。`DIRECTORY` 是伺服器資料夾的絕對路徑，可以在工作區以外：
+
+   ```powershell
+   & $ihctl $workspace v1-handoff-preview NAME DIRECTORY
+   ```
+
+   預覽是唯讀的。它會確認 V1 已停止，包括 V1 管理器鎖沒有被占用、沒有準備中或仍由 V1 Host 持有的啟動、V1 控制管道不存在，以及 Port 上沒有監聽者。接著列出要移走的 V1 標記、核心 JAR 的檔名、Port、監聽位址，以及之後要帶入的 `revision`。V1 仍在執行時回報 `V1HostRunning`、`V1ServerListening` 或 `CoreInUse`，資料夾不會變動。
+3. 移交。把預覽回傳的 `revision` 原樣帶入。Velocity 監聽非 `127.0.0.1` 時，要再附上監聽位址確認，例如 `0.0.0.0`：
+
+   ```powershell
+   & $ihctl $workspace v1-handoff NAME REQUEST JAVA DIRECTORY REVISION [LISTEN_ADDRESS]
+   ```
+
+   移交依序做這些事：
+   - 寫入 `DIRECTORY\.instanceharbor-v1-handoff\manifest.json`。
+   - 把 `workspace.json`、`.testlab-manager.lock` 與 `testlab-console` 移進同一個資料夾。
+   - 以與管理資料夾匯入相同的檢查登記這台伺服器，核心保留原本的檔名，例如 `velocity-4.2.1-SNAPSHOT-38.jar`。
+
+   任何一步失敗都會把資料夾還原。資料夾在預覽後有變動時，回報 `V1HandoffPreviewChanged`，需要重新預覽。
+4. 回退。伺服器停止時執行：
+
+   ```powershell
+   & $ihctl $workspace v1-handoff-rollback NAME
+   ```
+
+   回退會取消這台伺服器在 1.0 的登記，依清單把 V1 標記搬回原處，並刪除 `.instanceharbor-v1-handoff`，之後 V1 可以重新接手。
+
+鎖定的 Velocity 核心雜湊 `db6be7e3…aaa` 對應官方的 `velocity-4.2.1-SNAPSHOT-38.jar`（build 38，stable）。檔名標示的 build 與此不同時，以雜湊為準。內建清單沒有的官方 build 會改用 PaperMC 官方清單核對。
 
 ## 全域 Java 與建立實例
 
@@ -343,13 +410,13 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 應用程式設定的「復原金鑰」可操作同一套保管功能。
 已釘住復原金鑰的工作階段可從原生介面或 PowerShell 接管。流程見可信 Host 接管。
 
-工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑，一般匯入限定於工作區的 instances 之下。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI。
+工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑。管理資料夾、匯入與新建可以使用工作區 instances 底下或工作區以外的任意本機資料夾；工作區的內部資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑一律拒絕，登記後仍依掃描白名單決定是否納管。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI；V1 伺服器改用「從 V1 移交伺服器」的 CLI 指令。
 
-Windows 一般匯入支援放有已核對 Velocity JAR（`server.jar`）與
+Windows 一般匯入支援放有已核對 Velocity JAR（任意檔名）與
 `velocity.toml` 的代理目錄。預設接受 `127.0.0.1:PORT`。要匯入綁定其他介面的代理，
-請在 GUI 的可選欄位輸入與頂層 `bind` 相符的明確 IPv4 位址。
+請在 GUI 的可選欄位輸入與頂層 `bind` 相符的 IPv4 位址。
 匯入確認使用同一組位址、Port、核心與設定檔預覽版本。啟動時再次核對登記的位址及 Port。
-更新監聽位址後須重新核對匯入。管理器拒絕所有介面的萬用字元位址。
+更新監聽位址後須重新核對匯入。代理可監聽所有介面（`0.0.0.0`），但要輸入 `0.0.0.0` 明確確認；詳細面板會警告代理對區網與外部開放。廣播與群播位址一律拒絕，後端路由仍須是明確位址。
 
 PowerShell 可將 IPv4 附在 `import-preview NAME JAVA DIRECTORY IPV4`。
 將預覽回傳的 Port 及 revision 原樣帶入 `import NAME REQUEST JAVA DIRECTORY PORT REVISION IPV4`。
@@ -423,7 +490,7 @@ Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>
    批次啟動、自動重啟與 `restart` 永不進入 tier 3。
 4. **一般模式（plain）**：沒有後台。Spigot 等其他核心、Java／伺服器目錄／核心路徑 260 個 UTF-16 字元以上，或使用者未確認 tier 3 時使用。
 
-舊版 Java 由相對路徑 `server.jar` 啟動，避開絕對路徑造成的 ZipFS 問題。
+舊版 Java 由核心 JAR 的相對檔名（預設 `server.jar`）啟動，避開絕對路徑造成的 ZipFS 問題。
 
 **手動輸入與世界設定指令並存**：Host 追蹤使用者在後台正在編輯的那一行。受管指令（世界規則、遊戲規則）只在該行為空時送出；
 使用者有未送出的輸入時，指令等到使用者按 Enter 或到期限為止。到期仍未送出時回報 `WorldConsoleInputBusy`（未寫入，可重試）。

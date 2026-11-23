@@ -31,7 +31,7 @@ type ScopePreview = {
   reason?: string
   issues: ScopeIssue[]
   rows: ScanRow[]
-  candidates: { name: string; directory: string; state: string; reason?: string | null }[]
+  candidates: { name: string; directory: string; state: string; reason?: string | null; warning?: string | null }[]
 }
 type GlobalJavaMode = 'automatic' | 'manual'
 type GlobalJava = { java: string; revision: string; mode?: GlobalJavaMode; manualPath?: string }
@@ -339,6 +339,11 @@ function scopeCandidateReason(reason?: string | null) {
   if (!reason) return ''
   const key='batchImport.reason.'+reason
   return isMessageId(key)?t(key):t('batchImport.reason.unknown')
+}
+
+function scopeCandidateWarning(warning: string) {
+  const key='core.warning.'+warning
+  return isMessageId(key)?t(key):t('core.warning.CoreUnverified')
 }
 
 function applyScopeIssues(issues: ScopeIssue[]) {
@@ -1376,6 +1381,7 @@ void load()
             <strong>{{ row.name }}</strong> · {{ t(row.state === 'Ready' ? 'management.scopeRegister' : 'management.blocked') }}
             <small class="hint selectable">{{ pathLabel(row.directory) }}</small>
             <small v-if="row.reason" class="hint">{{ scopeCandidateReason(row.reason) }}</small>
+            <small v-if="row.state === 'Ready' && row.warning" class="form-error" role="note">{{ scopeCandidateWarning(row.warning) }}</small>
           </li>
         </ul>
       </section>

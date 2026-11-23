@@ -682,7 +682,7 @@ mod tests {
     }
 
     fn core(family: &str, minecraft: &str) -> CoreProfile {
-        CoreProfile { family: family.into(), minecraft: minecraft.into(), build: "1".into(), sha256: "fixture".into() }
+        CoreProfile { unverified: false, java: None, family: family.into(), minecraft: minecraft.into(), build: "1".into(), sha256: "fixture".into() }
     }
 
     #[test]
