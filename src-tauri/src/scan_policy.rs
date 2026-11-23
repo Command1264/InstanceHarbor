@@ -197,6 +197,18 @@ pub(super) fn contains(parent: &Path, child: &Path) -> bool {
     })
 }
 
+/// A folder this workspace may manage: the workspace's instances folder or a
+/// folder below it, or any local folder outside the workspace. The workspace's
+/// own data folders, folders that contain the workspace, and drive roots stay
+/// out of reach.
+pub(super) fn manageable(root: &Path, path: &Path) -> bool {
+    if contains(&root.join("instances"), path) {
+        return true;
+    }
+    let named = path.components().filter(|part| matches!(part, Component::Normal(_))).count();
+    named > 0 && !contains(root, path) && !contains(path, root)
+}
+
 pub(super) fn managed_path(root: &Path, value: &str) -> Result<PathBuf> {
     let base = root.join("instances");
     let path = if value.eq_ignore_ascii_case("instances") {
@@ -204,7 +216,7 @@ pub(super) fn managed_path(root: &Path, value: &str) -> Result<PathBuf> {
     } else {
         rule_path(root, value)?
     };
-    if !contains(&base, &path) {
+    if !manageable(root, &path) {
         return Err("BatchImportDirectoryOutsideScope".into());
     }
     let canonical = safe_directory(&path).map_err(|_| {
@@ -407,7 +419,7 @@ pub(super) fn registered_path(root: &Path, name: &str, directory: Option<&str>) 
         return Ok(base.join(name));
     };
     let target = rule_path(root, directory)?;
-    if contains(&target, &base) || !contains(&base, &target) {
+    if contains(&target, &base) || !manageable(root, &target) {
         return Err("ImportOutsideInstanceRoot".into());
     }
     Ok(target)

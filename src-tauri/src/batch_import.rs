@@ -116,6 +116,10 @@ fn parse<T: serde::de::DeserializeOwned>(raw: &str) -> Result<T> {
 }
 
 fn relative(root: &Path, path: &Path) -> Result<String> {
+    // A folder outside the workspace is named by its absolute path.
+    if path.strip_prefix(root).is_err() && scan_policy::manageable(root, path) {
+        return Ok(path_format::display(path));
+    }
     let value = path
         .strip_prefix(root)
         .map_err(|_| "BatchImportDirectoryOutsideScope")?;
@@ -135,7 +139,7 @@ fn scope(root: &Path, directory: &str) -> Result<PathBuf> {
     } else {
         scan_policy::rule_path(root, directory)?
     };
-    if !scan_policy::contains(&base, &path) {
+    if !scan_policy::manageable(root, &path) {
         return Err("BatchImportDirectoryOutsideScope".into());
     }
     Ok(path)
@@ -152,10 +156,18 @@ fn raw_entry(path: &Path) -> Result<Option<fs::Metadata>> {
 // Deny replacement of all checked directories until disk reads or publication
 // finish. OPEN_REPARSE_POINT makes the final path component inspectable in place.
 pub(super) fn hold_directories(root: &Path, path: &Path) -> Result<Vec<File>> {
+    // A folder outside the workspace is held from its drive root down.
+    let base = if path.strip_prefix(root).is_err() && scan_policy::manageable(root, path) {
+        path.components()
+            .take_while(|part| matches!(part, std::path::Component::Prefix(_) | std::path::Component::RootDir))
+            .collect::<PathBuf>()
+    } else {
+        root.to_path_buf()
+    };
     let suffix = path
-        .strip_prefix(root)
+        .strip_prefix(&base)
         .map_err(|_| "BatchImportDirectoryOutsideScope")?;
-    let mut current = root.to_path_buf();
+    let mut current = base;
     let mut held = Vec::new();
     for part in suffix.components() {
         current.push(part);
@@ -271,6 +283,7 @@ fn inspect_candidate(
         .into());
     }
     let mut held = hold_directories(root, path)?;
+    let folders = held.len();
     let policy_file = root.join("scan-policy.json");
     held.push(hold_file(&policy_file)?);
     let (_, policy_revision) = scan_policy::load(root)?;
@@ -327,7 +340,7 @@ fn inspect_candidate(
     if source.port != port || source.address != ip || source.target != path {
         return Err("BatchImportPreviewChanged".into());
     }
-    let directory_id = held[path.strip_prefix(root).map_err(fail)?.components().count() - 1]
+    let directory_id = held[folders.checked_sub(1).ok_or("BatchImportEvidenceUnavailable")?]
         .metadata()
         .map_err(fail)?
         .creation_time();
@@ -1150,6 +1163,53 @@ mod tests {
             f.call("management-folder-save", &[request.to_string()]).unwrap_err(),
             "SettingsConflict"
         );
+    }
+
+    #[test]
+    fn a_folder_outside_the_workspace_can_be_whitelisted_scanned_and_imported() {
+        let f = Fixture::new();
+        let outside = f.root.with_file_name(format!("{}-outside", f.root.file_name().unwrap().to_string_lossy()));
+        let server = outside.join("srv");
+        fs::create_dir_all(server.join("world")).unwrap();
+        fs::write(server.join("server.jar"), b"fixture").unwrap();
+        fs::write(server.join("server.properties"), format!("server-ip=127.0.0.1\nserver-port={}\n", ports(1)[0])).unwrap();
+        let scan = path_format::display(&outside);
+
+        let policy = f.call("scan-policy", &[]).unwrap();
+        let request = json!({"revision":policy["revision"], "allowPaths":[scan], "excludePaths":[]});
+        let saved = f.call("save-scan-policy", &[request.to_string()]).unwrap();
+        assert_eq!(saved["policy"]["allowPaths"][0], scan);
+
+        let report = f.call("import-batch-preview", &[json!({"directory":scan,"java":f.java}).to_string()]).unwrap();
+        assert_eq!(report["complete"], true, "{report}");
+        let row = &report["rows"][0];
+        assert_eq!(row["state"], "Ready", "{row}");
+        assert_eq!(row["directory"], path_format::display(&server));
+        let selection = Selection {
+            directory: scan.clone(),
+            automatic: false,
+            rows: vec![Selected {
+                directory: row["directory"].as_str().unwrap().into(),
+                name: "srv".into(),
+                java: f.java.clone(),
+                listen_address: None,
+                revision: row["revision"].as_str().unwrap().into(),
+            }],
+        };
+        f.apply("outside", &selection).unwrap();
+        assert_eq!(instance_path(&f.root, "srv").unwrap(), safe_directory(&server).unwrap());
+        assert_eq!(f.call("list", &[]).unwrap().to_string().matches("\"srv\"").count() > 0, true);
+
+        // The workspace's own folders, its parents and a drive root stay out of reach.
+        for blocked in [f.root.join("registry"), f.root.parent().unwrap().to_path_buf(), PathBuf::from(r"C:\")] {
+            let request = json!({"directory":path_format::display(&blocked),"java":f.java});
+            assert_eq!(
+                f.call("import-batch-preview", &[request.to_string()]).unwrap_err(),
+                "BatchImportDirectoryOutsideScope",
+                "{}", blocked.display()
+            );
+        }
+        fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]
