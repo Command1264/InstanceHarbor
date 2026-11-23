@@ -65,7 +65,6 @@ fn rank(tier: Tier) -> u8 {
 
 /// What the start-time checks found before trying a tier.
 pub(super) struct Facts {
-    pub(super) supported_core: bool,
     pub(super) paths: Result<()>,
     pub(super) bundled: Result<()>,
     pub(super) system: Result<()>,
@@ -79,9 +78,10 @@ pub(super) struct Facts {
 pub(super) fn choose(facts: &Facts) -> Choice {
     let mut skipped = Vec::new();
     for tier in [Tier::Bundled, Tier::System, Tier::Window] {
-        let blocked: Option<String> = if !facts.supported_core {
-            Some("ConsoleCoreUnsupported".into())
-        } else if facts.limit.is_some_and(|limit| rank(tier) < rank(limit)) {
+        // Every server core gets a console. The pseudoconsole hands keystrokes
+        // to the server's stdin, whether the core edits lines with JLine
+        // (Bukkit, Spigot, Paper and its forks, Velocity) or reads plain lines.
+        let blocked: Option<String> = if facts.limit.is_some_and(|limit| rank(tier) < rank(limit)) {
             Some("ConsoleTierLimited".into())
         } else if let Err(error) = &facts.paths {
             Some(error.clone())
@@ -99,12 +99,6 @@ pub(super) fn choose(facts: &Facts) -> Choice {
         }
     }
     Choice { tier: Tier::Plain, skipped }
-}
-
-/// Paper, Folia and Velocity read the console through JLine, which accepts
-/// the line editing keys the Host uses. Other cores run without a console.
-pub(super) fn supported_core(family: &str) -> bool {
-    matches!(family.to_ascii_uppercase().as_str(), "PAPER" | "FOLIA" | "VELOCITY")
 }
 
 enum InputMessage {
@@ -1356,7 +1350,6 @@ mod tier_tests {
 
     fn facts() -> Facts {
         Facts {
-            supported_core: true,
             paths: Ok(()),
             bundled: Ok(()),
             system: Ok(()),
@@ -1387,18 +1380,16 @@ mod tier_tests {
     }
 
     #[test]
-    fn unsupported_cores_and_long_paths_run_without_a_console() {
+    fn only_long_paths_or_missing_tiers_run_without_a_console() {
         let mut facts = facts();
         facts.window_confirmed = true;
         facts.paths = Err("ConsolePathUnsupported".into());
         let choice = choose(&facts);
         assert_eq!(choice.tier, Tier::Plain);
         assert!(choice.skipped.iter().all(|item| item.reason == "ConsolePathUnsupported"));
+        // No core family blocks a tier: the facts no longer carry one.
         facts.paths = Ok(());
-        facts.supported_core = false;
-        assert_eq!(choose(&facts).skipped[0].reason, "ConsoleCoreUnsupported");
-        assert!(supported_core("Paper") && supported_core("FOLIA") && supported_core("VELOCITY"));
-        assert!(!supported_core("SPIGOT") && !supported_core(""));
+        assert_eq!(choose(&facts), Choice { tier: Tier::Bundled, skipped: vec![] });
     }
 
     #[test]

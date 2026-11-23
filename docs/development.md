@@ -484,7 +484,7 @@ node docs/design/wireframe/verify-browser.cjs http://127.0.0.1:4176/preview/
 
 ### 伺服器後台（預設開啟）
 
-Paper、Folia 與 Velocity 每次啟動都使用後台，不再需要工作區開關檔（舊的 `native-console.enabled` 已無作用）。
+所有伺服器核心每次啟動都使用後台，包括 Spigot、Paper、Folia、Purpur 等 Paper 分支與 Velocity，不再依核心家族限制，也不需要工作區開關檔（舊的 `native-console.enabled` 已無作用）。後台把按鍵交給伺服器的標準輸入，不論核心用 JLine 編輯指令列或一般逐行讀取都適用。
 Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>/console-tier.json`；實例詳情的「後台」欄顯示本次使用哪一層及原因。
 
 1. **InstanceHarbor 後台（tier 1）**：執行檔旁、雜湊固定的 `conpty.dll` 與 `OpenConsole.exe`，在 InstanceHarbor 自己的後台視窗顯示。
@@ -494,7 +494,7 @@ Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>
    Windows 依預設終端機設定開啟 conhost 或 Windows Terminal。**關閉該視窗會立即停止伺服器。**
    Host 以主控台輸入事件送出 stop 與世界設定指令；輸出由 `logs/latest.log` 複製到 `stdout.log`。
    批次啟動、自動重啟與 `restart` 永不進入 tier 3。
-4. **一般模式（plain）**：沒有後台。Spigot 等其他核心、Java／伺服器目錄／核心路徑 260 個 UTF-16 字元以上，或使用者未確認 tier 3 時使用。
+4. **一般模式（plain）**：沒有後台。只有 Java／伺服器目錄／核心路徑 260 個 UTF-16 字元以上，或 tier 1、2 都無法建立且使用者未確認 tier 3 時使用。
 
 舊版 Java 由核心 JAR 的相對檔名（預設 `server.jar`）啟動，避開絕對路徑造成的 ZipFS 問題。
 
