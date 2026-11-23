@@ -109,7 +109,7 @@ export function manage<T>(arguments_: string[],origin:'manual'|'background'='man
   return invoke<T>('manage', { arguments: arguments_,origin })
 }
 const stateMessageIds: Record<string, MessageId> = {
-  Stopped: 'instance.state.stopped', Listening: 'instance.state.listening', Starting: 'instance.state.starting',
+  Stopped: 'instance.state.stopped', Listening: 'instance.state.listening', Starting: 'instance.state.starting', Stopping: 'instance.state.stopping',
   PortOccupied: 'instance.state.portOccupied', RunUnconfirmed: 'instance.state.runUnconfirmed',
 }
 export function stateName(state: string) { return Object.hasOwn(stateMessageIds, state) ? tr(stateMessageIds[state]) : state }

@@ -1353,6 +1353,9 @@ fn status(root: &Path, config: &Instance) -> Result<Value> {
         Some("Sent")
     } else if folder.join("stop-queued").is_file() {
         Some("Queued")
+    } else if folder.join(native_console::STOP_TYPED).is_file() {
+        // The user typed a stop command in the console; the GUI shows "Stopping".
+        Some("Typed")
     } else {
         None
     };
@@ -3026,6 +3029,19 @@ mod start_preflight_tests {
 
     fn free_port() -> u16 {
         TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port()
+    }
+
+    #[test]
+    fn a_stop_typed_in_the_console_is_reported_as_a_stop_phase() {
+        let (parent, root, config) = workspace_with_missing_java();
+        let folder = root.join("runs").join(&config.name);
+        fs::create_dir_all(&folder).unwrap();
+        assert!(status(&root, &config).unwrap()["stopPhase"].is_null());
+        fs::write(folder.join(native_console::STOP_TYPED), b"").unwrap();
+        assert_eq!(status(&root, &config).unwrap()["stopPhase"], "Typed");
+        fs::write(folder.join("stop-sent"), b"").unwrap();
+        assert_eq!(status(&root, &config).unwrap()["stopPhase"], "Sent");
+        fs::remove_dir_all(&parent).unwrap();
     }
 
     /// An isolated workspace with one instance whose registered Java was removed.
