@@ -17,7 +17,7 @@ import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
 import {suppressBrowserMenu} from './context-menu'
-import { batchFailureReasonId, settledBatchFailures, type BatchFailure } from './operation-failures'
+import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
@@ -161,29 +161,43 @@ const openingConsoles=ref(false)
 const cancellingBatch=ref<string>()
 let firstBatchRead=true
 const failureDialog=ref<HTMLDialogElement>(), failureMessage=ref(''), failureItems=ref<BatchFailure[]>([])
-const pendingOperationErrors:{message:string;items:BatchFailure[]}[]=[]
+type OperationFailure={message:string;items:BatchFailure[];batch?:{id:string;action:string}}
+const pendingOperationErrors:OperationFailure[]=[]
+let failureBatch:OperationFailure['batch']
+function batchFailureMessage(batch:{action:string},count:number){
+  const action=({'batch-start':'app.batch.start','batch-stop':'app.batch.stop','batch-restart':'app.batch.restart'} as const)[batch.action as 'batch-start']
+  return t('app.batchFailed',{action:action?t(action):batch.action,count})
+}
 // Operation errors appear only in this dialog, never in the status line above the list.
-function showOperationError(message:string,items:BatchFailure[]=[]){
+function showOperationError(message:string,items:BatchFailure[]=[],batch?:OperationFailure['batch']){
   if(failureMessage.value){
+    // More failures from the batch on screen join the open dialog.
+    if(batch && failureBatch?.id===batch.id){
+      failureItems.value=[...failureItems.value,...items]
+      failureMessage.value=batchFailureMessage(batch,failureItems.value.length)
+      return
+    }
+    const queued=batch&&pendingOperationErrors.find(entry=>entry.batch?.id===batch.id)
+    if(queued){queued.items=[...queued.items,...items];queued.message=batchFailureMessage(batch,queued.items.length);return}
     const duplicate=(entry:{message:string;items:BatchFailure[]})=>entry.message===message&&!entry.items.length&&!items.length
-    if(!duplicate({message:failureMessage.value,items:failureItems.value})&&!pendingOperationErrors.some(duplicate))pendingOperationErrors.push({message,items})
+    if(!duplicate({message:failureMessage.value,items:failureItems.value})&&!pendingOperationErrors.some(duplicate))pendingOperationErrors.push({message,items,batch})
     return
   }
   failureMessage.value=message
   failureItems.value=items
+  failureBatch=batch
   void nextTick(()=>{if(!failureDialog.value?.open)failureDialog.value?.showModal()})
 }
-// Batches sent from this window report their unfinished instances together once they settle.
-const watchedBatches=new Set<string>()
+// Batches sent from this window report each failed instance as soon as it fails,
+// while the other instances keep starting.
+const watchedBatches=new Map<string,Set<string>>()
 watch(residentJobs,list=>{
   for(const job of list){
-    if(!watchedBatches.has(job.id))continue
-    const failures=settledBatchFailures(job)
-    if(!failures)continue
-    watchedBatches.delete(job.id)
-    if(!failures.length)continue
-    const action=({'batch-start':'app.batch.start','batch-stop':'app.batch.stop','batch-restart':'app.batch.restart'} as const)[job.action as 'batch-start']
-    showOperationError(t('app.batchFailed',{action:action?t(action):job.action,count:failures.length}),failures)
+    const reported=watchedBatches.get(job.id)
+    if(!reported)continue
+    const failures=newBatchFailures(job,reported)
+    if(job.state!=='Pending')watchedBatches.delete(job.id)
+    if(failures.length)showOperationError(batchFailureMessage(job,failures.length),failures,{id:job.id,action:job.action})
   }
 })
 const activeRequestIds=ref(new Set<string>())
@@ -397,7 +411,7 @@ let pendingDiagnosticWarning=false
 function presentDiagnosticWarning(){
   if(pendingDiagnosticWarning && !failureMessage.value && !failureDialog.value?.open){pendingDiagnosticWarning=false;showOperationError(t('app.diagnosticWarning'))}
 }
-function afterFailureClose(){failureMessage.value='';failureItems.value=[];const pending=pendingOperationErrors.shift();if(pending)showOperationError(pending.message,pending.items);else void nextTick(presentDiagnosticWarning)}
+function afterFailureClose(){failureMessage.value='';failureItems.value=[];failureBatch=undefined;const pending=pendingOperationErrors.shift();if(pending)showOperationError(pending.message,pending.items,pending.batch);else void nextTick(presentDiagnosticWarning)}
 async function checkDiagnostics(){
   if(!nativeBridge||diagnosticFailureReported)return
   try{
@@ -778,7 +792,7 @@ async function submitResidentBatch(action:'start'|'stop'|'restart',targets:Insta
   try{
     const work=await manage<Job>([verb,id,raw])
     requests.delete(key)
-    watchedBatches.add(work.id)
+    if(!watchedBatches.has(work.id))watchedBatches.set(work.id,new Set())
     residentRevision++
     residentJobs.value=[work,...residentJobs.value.filter(job=>job.id!==work.id)]
   }finally{

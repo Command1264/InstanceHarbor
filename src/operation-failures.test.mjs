@@ -1,26 +1,27 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { translate } from './i18n.ts'
-import { batchFailureReasonId, settledBatchFailures } from './operation-failures.ts'
+import { batchFailureReasonId, newBatchFailures } from './operation-failures.ts'
 
 const item = (name, phase, reason = null) => ({ name, phase, reason, runId: null, canCancel: false })
 const job = (state, items, action = 'batch-start') => ({ id: 'b1', action, instance: '', state, items })
 
-test('a running batch reports nothing yet', () => {
-  assert.equal(settledBatchFailures(job('Pending', [item('a', 'Failed', 'StartRejected'), item('b', 'Starting')])), undefined)
+test('a running batch reports each failure as soon as it appears, once', () => {
+  const reported = new Set()
+  const running = job('Pending', [item('a', 'Failed', 'JavaExecutableMissing'), item('b', 'Starting'), item('c', 'Queued')])
+  assert.deepEqual(newBatchFailures(running, reported), [{ name: 'a', phase: 'Failed', reason: 'JavaExecutableMissing' }])
+  assert.deepEqual(newBatchFailures(running, reported), [])
+  const later = job('Pending', [item('a', 'Failed', 'JavaExecutableMissing'), item('b', 'Unconfirmed', 'ReadinessUnconfirmed'), item('c', 'Starting')])
+  assert.deepEqual(newBatchFailures(later, reported), [{ name: 'b', phase: 'Unconfirmed', reason: 'ReadinessUnconfirmed' }])
 })
 
-test('a settled batch lists every instance that failed or could not be verified, in order', () => {
-  const failures = settledBatchFailures(job('Failed', [
+test('only failed or unverified instances count, in batch order', () => {
+  const failures = newBatchFailures(job('Failed', [
     item('a', 'Completed'), item('b', 'Failed', 'ExitedBeforeReady'), item('c', 'Skipped', 'AlreadyRunning'),
     item('d', 'Unconfirmed', 'ReadinessUnconfirmed'), item('e', 'Cancelled'), item('f', 'StopUnconfirmed'),
-  ]))
-  assert.deepEqual(failures, [
-    { name: 'b', phase: 'Failed', reason: 'ExitedBeforeReady' },
-    { name: 'd', phase: 'Unconfirmed', reason: 'ReadinessUnconfirmed' },
-    { name: 'f', phase: 'StopUnconfirmed', reason: null },
-  ])
-  assert.deepEqual(settledBatchFailures(job('Completed', [item('a', 'Completed')])), [])
+  ]), new Set())
+  assert.deepEqual(failures.map(failure => failure.name), ['b', 'd', 'f'])
+  assert.deepEqual(newBatchFailures(job('Completed', [item('a', 'Completed')]), new Set()), [])
 })
 
 test('batch failure reasons use the activity reason, the Java start message, or the diagnostics hint', () => {

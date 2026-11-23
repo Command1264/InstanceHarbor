@@ -6,12 +6,14 @@ export interface BatchFailure { name: string; phase: BatchItem['phase']; reason:
 
 const failedPhases: readonly BatchItem['phase'][] = ['Failed', 'Unconfirmed', 'StopUnconfirmed']
 
-// Items a finished batch could not complete or verify. Skipped and cancelled items
-// are not failures. Returns undefined while the batch is still running.
-export function settledBatchFailures(job: Job): BatchFailure[] | undefined {
-  if (job.state === 'Pending') return undefined
-  return (job.items ?? []).filter(item => failedPhases.includes(item.phase))
-    .map(({ name, phase, reason }) => ({ name, phase, reason }))
+// Instances in a batch that failed or could not be verified and are not in
+// `reported` yet. They are added to `reported`, so each one is reported once,
+// even while the rest of the batch is still running. Skipped and cancelled
+// instances are not failures.
+export function newBatchFailures(job: Job, reported: Set<string>): BatchFailure[] {
+  const fresh = (job.items ?? []).filter(item => failedPhases.includes(item.phase) && !reported.has(item.name))
+  for (const item of fresh) reported.add(item.name)
+  return fresh.map(({ name, phase, reason }) => ({ name, phase, reason }))
 }
 
 export function batchFailureReasonId(reason: string | null, phase: BatchItem['phase']): MessageId {

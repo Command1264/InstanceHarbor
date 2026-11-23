@@ -691,6 +691,12 @@ fn prepare_item(
         item.reason = Some(reason);
         item.supersedes = None;
     }
+    if action != Action::Stop && item.phase == Phase::Queued {
+        if let Some(reason) = queued_start_problem(&instance(root, &item.target.name)?.java) {
+            item.phase = Phase::Failed;
+            item.reason = Some(reason.into());
+        }
+    }
     Ok(item)
 }
 
@@ -1099,6 +1105,17 @@ fn start_rejection_reason(error: &str) -> &'static str {
     }
 }
 
+/// A start that would fail on a missing registered Java fails when the batch is
+/// created, so the GUI can report it at once while the other instances start.
+fn queued_start_problem(java: &Path) -> Option<&'static str> {
+    if java.as_os_str().is_empty() {
+        return None;
+    }
+    registered_java_present(java)
+        .err()
+        .map(|error| start_rejection_reason(&error))
+}
+
 fn auto_restart_one(root: &Path, name: &str) -> Result<bool> {
     let config = instance(root, name)?;
     let Some(policy) = config.auto_restart.as_ref() else { return Ok(false) };
@@ -1409,7 +1426,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
 
 #[cfg(test)]
 mod start_rejection_tests {
-    use super::start_rejection_reason;
+    use super::{queued_start_problem, start_rejection_reason};
 
     #[test]
     fn batch_start_keeps_explainable_codes_and_drops_raw_text() {
@@ -1421,5 +1438,18 @@ mod start_rejection_tests {
         assert_eq!(start_rejection_reason("PortOccupied"), "PortOccupied");
         assert_eq!(start_rejection_reason("StartIntentChanged"), "StartIntentChanged");
         assert_eq!(start_rejection_reason("系統找不到指定的路徑。 (os error 3)"), "StartRejected");
+    }
+
+    #[test]
+    fn batch_start_checks_the_registered_java_before_queueing() {
+        let parent = std::env::temp_dir().join(format!("ih-batch-java-{}", std::process::id()));
+        std::fs::create_dir_all(&parent).unwrap();
+        let java = parent.join("java.exe");
+        assert_eq!(queued_start_problem(&java), Some("JavaExecutableMissing"));
+        std::fs::write(&java, b"").unwrap();
+        assert_eq!(queued_start_problem(&java), None);
+        // An empty path means the instance inherits Java; that is checked at dispatch.
+        assert_eq!(queued_start_problem(std::path::Path::new("")), None);
+        std::fs::remove_dir_all(&parent).unwrap();
     }
 }
