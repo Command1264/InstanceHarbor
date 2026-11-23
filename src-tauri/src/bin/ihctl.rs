@@ -35,7 +35,7 @@ fn main() {
     };
     let mut arguments: Vec<_> = std::env::args().skip(1).collect();
     if arguments.as_slice() == ["--version"] {
-        println!("{} CLI {}", instanceharbor::desktop_channel::TITLE, env!("CARGO_PKG_VERSION"));
+        println!("{}", instanceharbor::about::cli_version(instanceharbor::desktop_channel::TITLE));
         return;
     }
     let plain_list = arguments.len() == 2 && arguments[1] == "list";

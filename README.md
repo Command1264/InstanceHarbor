@@ -55,6 +55,8 @@ $workspace = "$env:LOCALAPPDATA\InstanceHarbor\workspaces\default"
 & $ihctl $workspace status lobby
 ```
 
+`& $ihctl --version` prints the version and the Git commit of the build, for example `InstanceHarbor CLI 1.0.0 (33dfd35)`. The same values, with links to this repository, are under **Application settings** → **About**.
+
 See the [development guide](docs/development.md) for the full set of commands.
 
 ## Build from source
