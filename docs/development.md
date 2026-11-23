@@ -222,6 +222,37 @@ Spigot 使用 [官方 BuildTools](https://www.spigotmc.org/wiki/buildtools/) 在
 可先完成伺服器資料夾與連接埠設定，再由 CLI 選擇明確的 Java 匯入。這條路徑適用於
 已確定來源的本機成品，日常的管理資料夾自動登記仍依原有核心核對規則。
 
+## 測試管理員權限
+
+「應用程式設定 → 測試管理員」可設定最多 10 位測試管理員（Minecraft 名稱與 UUID）。設定只存在
+工作區的 `test-administrators.json`，不進 repository。清單留空表示停用：新建實例不安裝 LuckPerms，
+也不授權。授權方式預設為直接授予 `* = true`；改為「加入 LuckPerms 群組」時，建立時另寫入該群組並
+授予群組 `* = true`。群組不可為 `default`，避免所有玩家都得到全部權限。授予 LuckPerms 權限不會
+加入 OP，OP 仍依實例預設處理。
+
+LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方來源與 SHA-256：
+
+| 平台 | 檔案 | 適用核心 |
+|---|---|---|
+| Bukkit | `LuckPerms-Bukkit-5.5.85.jar` | Paper、Folia、Spigot 等需要 Java 11 以上的版本 |
+| Bukkit（Java 8） | `LuckPerms-Bukkit-5.4.145.jar` | 仍以 Java 8 執行的版本，例如 Spigot 1.8.8、Paper 1.14.4 |
+| Velocity | `LuckPerms-Velocity-5.5.85.jar` | Velocity 代理 |
+
+5.5 系列以 Java 11 編譯，所以依核心可用的 Java 主版本選擇。設定頁的「下載 LuckPerms」只下載缺少或
+雜湊不符的檔案，核對 SHA-256 後才放入工作區的 `plugin-cache/luckperms/`。建立實例時只讀這份快取，
+不會下載；快取缺少或雜湊不符時停止建立並說明原因，不改用其他版本。
+
+建立實例的「測試管理員權限」預設依位置決定：`instances/Agent/` 底下的 Agent 隔離實例不授權，
+其他位置授權。可在建立時改為「授權」或「不授權」。授權時，新實例的 `plugins/` 會有核對過的
+LuckPerms JAR，`plugins/LuckPerms/`（Velocity 為 `plugins/luckperms/`）寫入 `storage-method: json` 的
+`config.yml`、每位管理員的 `json-storage/users/<uuid>.json`，以及讓 `lp user <名稱>` 在首次登入前
+就能查到的 `json-storage/uuidcache.txt`。每台實例的權限資料各自獨立。確認畫面會列出授權人數與檔案。
+LuckPerms 首次啟動時會向自己的來源下載執行所需的程式庫，需要網路連線。
+
+既有實例不會自動授權，已有 LuckPerms 資料的資料夾也不會被覆寫。需要時先停止並備份該實例，
+啟動後在主控台執行 `lp user <名稱> permission set * true`，再用 `lp user <名稱> permission info` 讀回確認。
+只放入 JAR 不算授權完成。
+
 
 
 ## 候選邊界
@@ -282,6 +313,8 @@ Manager 重開時先核對已進入替換交易的原請求，已取消的項目
 `managed-id` 是 2.0 管理清單識別碼，`instance` 是實際目錄名稱及 Human 的預定路由名稱。
 Human 新建核對已登記的名稱及連接埠，並保存在 `instances/Human/<project>/<instance>`。
 Agent 建立要求獨立指定用途及空閒連接埠，使用 `instances/Agent/<project>/<instance>`。
+`testAdministrators` 可選 `true` 或 `false`：省略時 Human 授予已設定的測試管理員，Agent 不授權。
+授權時寫入的資料與 GUI 建立相同，`prepare.json` 另記錄 `testAdministrators` 人數。
 既有 `create` 及一般匯入保留原入口。
 
 使用同一個 `managed-id`、Agent 專案、實例名稱和連接埠，並在 `prepare` 請求加入
@@ -395,6 +428,7 @@ $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-fe
 | 用途 | 位置 | 說明 |
 |---|---|---|
 | 工作區 | `<應用程式資料夾>\workspaces\default`（正式）、`InstanceHarbor Dev\workspaces\<名稱>`（開發） | 實例登記、設定、工作紀錄與執行狀態 |
+| 測試管理員 | 工作區的 `test-administrators.json` 與 `plugin-cache/luckperms/` | 只存在本機；見「測試管理員權限」 |
 | GUI 診斷紀錄 | `<應用程式資料夾>\logs\gui-*.jsonl` | 1.0 之前寫在 `<應用程式資料夾>\v2\logs`；舊檔留在原處，可以手動刪除 |
 | WebView2 資料 | `<應用程式資料夾>\webview` | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
 | Setup 安裝位置 | `Programs\InstanceHarbor` | 解除安裝登錄 `InstanceHarbor-Desktop`，安裝租約檔 `instanceharbor.install` |

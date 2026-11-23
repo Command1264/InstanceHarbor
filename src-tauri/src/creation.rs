@@ -24,6 +24,9 @@ struct Draft {
     parent: String,
     port: u16,
     source: Source,
+    /// Absent: grant unless the instance is under `instances/Agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    test_administrators: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -54,6 +57,13 @@ struct Inspection {
     assets: Assets,
     scope: Scope,
     revision: String,
+    test_admins: TestAdmins,
+}
+
+struct TestAdmins {
+    requested: bool,
+    configured: usize,
+    grant: Option<test_admins::Grant>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -216,11 +226,18 @@ fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Ins
     port_unassigned(root, draft.port, &draft.name)?;
     port_free(draft.port)?;
     let (core, assets) = read_source(root, &draft.source, verify_latest)?;
+    let requested = draft.test_administrators.unwrap_or_else(|| !test_admins::agent_path(root, &target));
+    let (configured, grant) = test_admins::plan(root, &core, requested)?;
     let scope = Scope { original_revision, added_revision };
-    let revision = content_revision::revision(&serde_json::to_vec(&json!({
+    let mut identity = json!({
         "draft":draft,"target":path_format::display(&target),"core":core,"scope":scope
-    })).map_err(fail)?)?;
-    Ok(Inspection { parent, target, core, assets, scope, revision })
+    });
+    if let Some(grant) = &grant {
+        identity["testAdministrators"] = grant.summary();
+    }
+    let revision = content_revision::revision(&serde_json::to_vec(&identity).map_err(fail)?)?;
+    let test_admins = TestAdmins { requested, configured, grant };
+    Ok(Inspection { parent, target, core, assets, scope, revision, test_admins })
 }
 
 fn report(inspection: &Inspection) -> Value {
@@ -230,6 +247,10 @@ fn report(inspection: &Inspection) -> Value {
         "whitelist":inspection.scope.added_revision.as_ref().map(|_| path_format::display(&inspection.target)),
         "core":inspection.core,"javaMajor":global_java::supported_major(&inspection.core),"revision":inspection.revision,
         "initializationDefaults":policy_settings::has_creation_defaults(&inspection.core),
+        "testAdministrators":{
+            "requested":inspection.test_admins.requested,"configured":inspection.test_admins.configured,
+            "grant":inspection.test_admins.grant.as_ref().map(test_admins::Grant::summary),
+        },
     })
 }
 
@@ -321,6 +342,9 @@ fn stage(root: &Path, inspection: &Inspection, draft: &Draft, work: &str, prepar
         policy_settings::write_basic_creation_settings(&stage.path, draft.port)?;
     } else {
         policy_settings::write_creation_settings(root, &stage.path, draft.port, profile)?;
+    }
+    if let Some(grant) = &inspection.test_admins.grant {
+        test_admins::install(&stage.path, grant)?;
     }
     let hashes = stage_hashes(&stage.path, profile)?;
     let config = Instance {
@@ -615,6 +639,7 @@ mod tests {
             parent: "instances/existing".into(),
             port,
             source,
+            test_administrators: None,
         }
     }
 
@@ -672,6 +697,56 @@ mod tests {
     }
 
     #[test]
+    fn test_administrators_follow_audience_default_and_stop_on_missing_cache() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let mut draft = draft(Source::Download { family: "PAPER".into(), minecraft: "26.3".into() });
+        let empty = report(&inspect_source(root, &draft, false).unwrap());
+        assert_eq!(empty["testAdministrators"], json!({"requested":true,"configured":0,"grant":null}));
+        test_admins::tests::save_fake_administrators(root, "");
+        assert_eq!(inspect_source(root, &draft, false).err().unwrap(), "TestPermissionArtifactMissing");
+        draft.test_administrators = Some(false);
+        let declined = report(&inspect_source(root, &draft, false).unwrap());
+        assert_eq!(declined["testAdministrators"], json!({"requested":false,"configured":2,"grant":null}));
+        fs::create_dir_all(root.join("instances").join("Agent").join("Lobby")).unwrap();
+        draft.test_administrators = None;
+        draft.parent = "instances/Agent/Lobby".into();
+        let agent = report(&inspect_source(root, &draft, false).unwrap());
+        assert_eq!(agent["testAdministrators"]["requested"], false);
+        draft.test_administrators = Some(true);
+        assert_eq!(inspect_source(root, &draft, false).err().unwrap(), "TestPermissionArtifactMissing");
+    }
+
+    #[test]
+    fn staged_creation_installs_verified_luckperms_and_seeded_identities() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("downloaded.jar");
+        let mojang = root.join("mojang.jar");
+        fs::write(&core, b"official download fixture").unwrap();
+        fs::write(&mojang, b"launcher artifact fixture").unwrap();
+        let mojang_hash = content_revision::file_revision(&mojang).unwrap();
+        let draft = draft(Source::Official {
+            family: "FOLIA".into(), minecraft: "26.3".into(), build: "26".into(),
+            sha256: content_revision::file_revision(&core).unwrap(),
+        });
+        let mut inspected = inspect_source(root, &draft, false).unwrap();
+        inspected.test_admins.grant = Some(test_admins::tests::stand_in_grant(root, test_admins::Platform::Bukkit));
+        let (stage, publication) = stage(root, &inspected, &draft, "seeded", Some((core, Some((mojang, mojang_hash))))).unwrap();
+        let jar = "plugins/LuckPerms-Bukkit-5.5.85.jar";
+        assert!(publication.hashes.contains_key(jar));
+        assert!(publication.hashes.contains_key("plugins/LuckPerms/config.yml"));
+        assert_eq!(
+            publication.hashes.keys().filter(|key| key.starts_with("plugins/LuckPerms/json-storage/users/")).count(),
+            2
+        );
+        assert!(!stage.path.join("ops.json").exists());
+        verified_publication(&stage.path, &inspected.core, &publication.hashes).unwrap();
+        fs::write(stage.path.join(jar), b"changed").unwrap();
+        assert!(verified_publication(&stage.path, &inspected.core, &publication.hashes).is_err());
+    }
+
+    #[test]
     fn retry_completes_interrupted_creation_without_duplicate_registry_or_scope() {
         let fixture = Fixture::new();
         let root = &fixture.0;
@@ -692,6 +767,7 @@ mod tests {
             assets: Assets::Local { core, mojang: None },
             scope: Scope { original_revision, added_revision },
             revision: "fixture".into(),
+            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
         };
         let work = "resume-creation";
         let raw = json!({"draft":draft,"revision":inspection.revision}).to_string();

@@ -31,6 +31,8 @@ mod agent_profiles;
 mod agent_inventory;
 #[path = "test_permissions.rs"]
 mod test_permissions;
+#[path = "test_admins.rs"]
+mod test_admins;
 #[path = "core_batch.rs"]
 mod core_batch;
 #[path = "auto_restart.rs"]
@@ -1260,7 +1262,7 @@ fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
     };
     port_unassigned(root, port, name)?;
     let prepared_assets = match (&prepared, &sources) {
-        (Some(request), Some((_, _, profile))) => Some(request.verify(profile)?),
+        (Some(request), Some((_, _, profile))) => Some(request.verify(root, profile)?),
         _ => None,
     };
     reserve_receipt(
@@ -2624,6 +2626,9 @@ pub fn dispatch_with_creation_progress(
         return Err("UnsupportedWorkspace".into());
     }
     if let Some(result) = global_java::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = test_admins::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = prepare_diagnostics::dispatch(&root, verb, args) {

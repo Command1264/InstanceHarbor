@@ -72,4 +72,8 @@ export const settingsMessages = {
   'settingsPage.javaInstalls': ['可用 Java 安裝', 'Available Java installations'],
   'settingsPage.javaVersionUnknown': ['無法確認版本', 'Version not verified'],
   'settingsPage.javaUnusable': ['無法使用', 'Unusable'],
+  'settingsPage.testAdmins': ['測試管理員', 'Test administrators'],
+  'settingsPage.testAdminsFetched': ['LuckPerms 已下載並核對。', 'LuckPerms was downloaded and verified.'],
+  'settingsPage.testAdminsFetchFailed': ['無法下載 LuckPerms：{reason}', 'Could not download LuckPerms: {reason}'],
+  'settingsPage.testAdminsGroupRequired': ['請輸入 LuckPerms 群組名稱，或改為授予所有權限。', 'Enter a LuckPerms group name, or grant all permissions instead.'],
 } as const satisfies Record<string, readonly [string, string]>

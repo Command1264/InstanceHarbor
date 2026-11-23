@@ -236,6 +236,7 @@ const lifecycleBusy=computed(()=>new Set([...busyNames.value,
 const catalog = useCoreCatalog()
 const draft = reactive({
   name: '', parent: 'instances', port: 12010, core: '', source: '' as '' | CatalogFamily, version: '',
+  testAdministrators: 'default' as 'default' | 'grant' | 'skip',
 })
 const creationVersions = computed(() => draft.source ? catalog.versions[draft.source] : undefined)
 const creationBuild = computed(() => draft.source && draft.version
@@ -268,6 +269,7 @@ type CreationPreview = {
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
   initializationDefaults?: boolean
+  testAdministrators?: { requested: boolean; configured: number; grant: { count: number; group: string; fileName: string } | null }
   revision: string
 }
 const creationPreview=ref<CreationPreview>()
@@ -316,8 +318,17 @@ function creationInput() {
     parent:draft.parent,
     port:draft.port,
     source: draft.source && build ? { kind: 'official', ...build } : { kind: 'local', path: draft.core },
+    ...(draft.testAdministrators === 'default' ? {} : { testAdministrators: draft.testAdministrators === 'grant' }),
   }
 }
+const creationTestAdmins = computed(() => {
+  const state = creationPreview.value?.testAdministrators
+  if (!state) return undefined
+  if (state.grant) return state.grant.group
+    ? t('app.create.testAdminsGrantedGroup', { count: state.grant.count, group: state.grant.group, file: state.grant.fileName })
+    : t('app.create.testAdminsGranted', { count: state.grant.count, file: state.grant.fileName })
+  return t(state.configured ? 'app.create.testAdminsDeclined' : 'app.create.testAdminsNone')
+})
 function pickerFailed() {
   void showModalError(t('management.pickFailed'))
 }
@@ -605,7 +616,7 @@ function open(next:Mode,item?:{name:string;run?:string}){
   logs.value=undefined
   logsError.value=''
   logsMessage.value=''
-  if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:'instances',port:12010,core:'',source:'',version:''})}
+  if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:'instances',port:12010,core:'',source:'',version:'',testAdministrators:'default'})}
   provisionBaseline.value=JSON.stringify(draft)
   if(next==='remove')removeChoice.value='retain'
   void nextTick(()=>{dialog.value?.showModal();cancelButton.value?.focus()})
@@ -922,6 +933,15 @@ function creationError(error: unknown) {
   if (/AutoJavaUnavailable|GlobalJavaUnavailable/.test(reason)) {
     return t('app.create.javaUnavailable')
   }
+  if (reason.includes('TestPermissionArtifactMissing')) {
+    return t('app.create.testAdminsMissing')
+  }
+  if (reason.includes('TestPermissionArtifactMismatch')) {
+    return t('app.create.testAdminsMismatch')
+  }
+  if (reason.includes('UnsupportedTestPermissionPlatform')) {
+    return t('app.create.testAdminsUnsupported')
+  }
   return errorText(error)
 }
 async function provision(){
@@ -1072,6 +1092,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <dt>{{ t('app.create.coreVersion') }}</dt><dd>{{ creationPreview.core.family }} {{ creationPreview.core.minecraft }}<span v-if="creationPreview.core.build"> · Build {{ creationPreview.core.build }}</span></dd>
           <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>{{ t('app.create.suggestedJava') }}</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
+          <template v-if="creationTestAdmins"><dt>{{ t('app.create.testAdmins') }}</dt><dd>{{ creationTestAdmins }}</dd></template>
           <template v-if="creationPreview.whitelist">
             <dt>{{ t('app.create.allowedFolder') }}</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
           </template>
@@ -1129,6 +1150,13 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
               @picking="createEditingPicker=$event" @failed="pickerFailed" @selected="draft.core=createPath($event)" />
           </div>
         </template>
+        <label class="create-test-admins">{{ t('app.create.testAdmins') }}
+          <select v-model="draft.testAdministrators" name="test-administrators" :disabled="modalBusy || createEditingPicker">
+            <option value="default">{{ t('app.create.testAdminsDefault') }}</option>
+            <option value="grant">{{ t('app.create.testAdminsGrant') }}</option>
+            <option value="skip">{{ t('app.create.testAdminsSkip') }}</option>
+          </select>
+        </label>
         <p v-if="modalMessage" role="status">{{ modalMessage }}</p>
         <p v-if="modalError" class="form-error" role="alert">{{ modalError }}</p>
         <div class="dialog-actions">
@@ -1147,6 +1175,8 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 
 <style scoped>
 .creation-progress { display: grid; gap: .5rem; margin-block: 1rem; }
+.create-test-admins { margin-block-start: 1rem; }
+.create-test-admins select { justify-self: start; }
 .creation-progress p { margin: 0; }
 .creation-progress-heading { display: flex; justify-content: space-between; gap: .5rem; font-variant-numeric: tabular-nums; }
 .creation-progress progress {

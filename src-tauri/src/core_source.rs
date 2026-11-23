@@ -826,6 +826,15 @@ pub(super) fn download_prefetch(url: &str, path: &Path, expected: &str) -> Resul
     download_verified(url, &configured_paper_user_agent()?, path, expected)
 }
 
+/// Downloads a pinned plugin artifact. The caller supplies the policy's
+/// official URL; the file is accepted only with the exact SHA-256.
+pub(super) fn download_pinned(url: &str, path: &Path, expected: &str) -> Result<()> {
+    if !sha256(expected) || !url.starts_with("https://") {
+        return Err("TestPermissionArtifactUnverified".into());
+    }
+    download_verified(url, &configured_paper_user_agent()?, path, expected)
+}
+
 fn artifact_size(metadata: &Value) -> Option<u64> {
     metadata["size"].as_u64().filter(|size| (1..=MAX_ARTIFACT_BYTES).contains(size))
 }
