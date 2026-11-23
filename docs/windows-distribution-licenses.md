@@ -9,16 +9,68 @@ Open `MPL-SOURCES.zip` without a network connection. `SOURCE-INDEX.txt` lists ea
 ## Microsoft runtime
 
 - `conpty.dll` and `OpenConsole.exe` are the original x64 files from Microsoft's signed ConPTY NuGet release `1.25.260930003`. Include the Windows Terminal MIT license and upstream notice. [Windows Terminal v1.25.2733.0](https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0)
-- The ZIP and Setup use the system Microsoft Visual C++ v14 x64 Runtime. Setup checks for version 14.44.35211.0 or newer. Users can install the latest supported version from Microsoft. [Microsoft x64 Runtime](https://aka.ms/vc14/vc_redist.x64.exe)
-- WebView2 is obtained separately from Windows or Microsoft. The release packages contain no WebView2 runtime, Java runtime, Paper or Minecraft server JAR.
+- From 1.0.0, `InstanceHarbor.exe` and `ihctl.exe` link the Microsoft C runtime (the Visual C++ runtime and the Universal C Runtime) statically (`v2/.cargo/config.toml`), so users need no Visual C++ Redistributable. `pack-windows.ps1` refuses a stable version whose executables import `VCRUNTIME` or `MSVCP` DLLs. 1.0.0-rc2 used the system Visual C++ v14 x64 Runtime.
+- WebView2 is obtained separately from Windows or Microsoft. Setup checks for it on every run and InstanceHarbor checks for it on every start; both name Microsoft's Evergreen Standalone Installer for x64 and offer its download. The release packages contain no WebView2 runtime, Java runtime, Paper or Minecraft server JAR.
 
-## Reproduce RC2 notices
+## Console runtime source
 
-Use the release Rust toolchain and the installed dependencies from the two lockfiles. The generator reads the Windows x64 Cargo dependency closure (including build dependencies for coverage), the npm runtime tree, and the original MPL crate archives in Cargo's registry cache. Provide the official NSIS 3.08 `COPYING`, the Windows Terminal 1.25.2733.0 x64 ZIP from the Microsoft release above, and the Rust toolchain's `share/doc/rust` directory.
+`v2/console-runtime.json` is the single record of the console runtime. It pins:
 
-```powershell
-python v2/prepare-windows-notices.py --output $notices --nsis-copying $nsisCopying --terminal-zip $terminalZip --rust-docs $rustDocs
-v2/pack-windows.ps1 -BinaryDirectory $binaries -ConsoleRuntimeDirectory $consoleRuntime -NoticeDirectory $notices -OutputZip $zip -Version 1.0.0-rc2
-```
+| Item | Value |
+| --- | --- |
+| Package | `Microsoft.Windows.Console.ConPTY` `1.25.260930003`, signed by Microsoft Corporation |
+| Download | [nuget.org flat container](https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.25.260930003/microsoft.windows.console.conpty.1.25.260930003.nupkg) |
+| Package size | 1,763,391 bytes |
+| Package SHA-256 | `02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee` |
+| `conpty.dll` | entry `runtimes/win-x64/native/conpty.dll`, SHA-256 `feeef341…ae805a` |
+| `OpenConsole.exe` | entry `build/native/runtimes/x64/OpenConsole.exe`, SHA-256 `3d66b23d…f80586` |
 
-Use the resulting ZIP and its returned SHA-256 with `pack-windows-setup.ps1`. Before distribution, verify the signatures and x64 architecture of the two ConPTY files and compare their hashes to the original payloads. The third-party notice inventory identifies upstream terms separately from InstanceHarbor's MIT license.
+`v2/provision-console-runtime.ps1` never downloads. Given the package, it checks the package size and SHA-256, reads the two x64 entries, and checks each file's SHA-256, x64 header and Microsoft Authenticode signature before it copies them. It refuses to replace a different file at the destination. `native_console.rs`, `pack-windows.ps1` and `install-windows.ps1` pin the same file hashes; `v2/src/console-runtime.test.mjs` and a Rust test keep them equal.
+
+## Build a distribution
+
+A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must contain the console runtime, the license notices and the startup guide, and must not contain app-local Visual C++ DLLs. `pack-windows.ps1` and `pack-windows-setup.ps1` refuse a stable version without the console runtime. Run these steps from the repository root in PowerShell 7. The publisher downloads the two upstream files; no script downloads them.
+
+1. Download the ConPTY package and check its SHA-256. Optionally verify its NuGet signature with the .NET SDK.
+
+   ```powershell
+   $package = "$env:TEMP\microsoft.windows.console.conpty.1.25.260930003.nupkg"
+   Invoke-WebRequest 'https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.25.260930003/microsoft.windows.console.conpty.1.25.260930003.nupkg' -OutFile $package
+   (Get-FileHash -LiteralPath $package).Hash -eq '02B07B349AF66D801159BDF9E440D4A1CE78BB951F37FC8609731665AFDAE7EE'
+   dotnet nuget verify --all $package
+   ```
+
+2. Build the release binaries. The build copies the verified runtime beside them and fails without it.
+
+   ```powershell
+   v2/build-product.ps1 -Release -ConsoleRuntimeSource $package
+   $binaries = 'v2/src-tauri/target/x86_64-pc-windows-msvc/release'
+   ```
+
+3. Prepare the notices. Provide the official NSIS 3.08 `COPYING`, the Windows Terminal 1.25.2733.0 x64 ZIP from the release above, and the Rust toolchain's `share/doc/rust` directory. The generator reads the Windows x64 Cargo dependency closure (including build dependencies for coverage), the npm runtime tree, and the original MPL crate archives in Cargo's registry cache.
+
+   ```powershell
+   python v2/prepare-windows-notices.py --output $notices --nsis-copying $nsisCopying --terminal-zip $terminalZip --rust-docs $rustDocs
+   ```
+
+4. Package the ZIP. The binary folder already holds the verified runtime.
+
+   ```powershell
+   $packed = v2/pack-windows.ps1 -BinaryDirectory $binaries -ConsoleRuntimeDirectory $binaries -NoticeDirectory $notices -OutputZip $zip -Version 1.0.0
+   ```
+
+5. Build Setup from the ZIP and the SHA-256 that step 4 returned, with the NSIS 3.08 compiler. SourceForge refuses scripted downloads; `winget download --id NSIS.NSIS --version 3.08` fetches the official installer and checks its SHA-256 (`bbc76be36ecb2fc00d493c91befdaf71654226ad8a4fc4dc338458916bf224d0`). Install it to a folder of your choice with `/S /D=<folder>`; it needs administrator rights and does not change `PATH`.
+
+   ```powershell
+   v2/pack-windows-setup.ps1 -Package $zip -ExpectedPackageSha256 $packed.sha256 -Compiler $makensis -Output $setup
+   ```
+
+6. Check the Setup's version order and WebView2 detection with the same compiler. The test installers write to a temporary folder and install nothing.
+
+   ```powershell
+   v2/tests/verify-windows-setup-version.ps1 -Compiler $makensis
+   ```
+
+7. Before distribution, check that the ZIP manifest lists `conpty.dll` and `OpenConsole.exe` with the pinned hashes, then install the Setup on a test machine, start a Paper instance and confirm that the instance details show **Console: InstanceHarbor console** (tier 1). Run the Setup again to see the repair prompt, and run an older Setup to see the downgrade prompt.
+
+The version passed to `-Version` is the package version. Release the matching product version (Cargo, Tauri and npm metadata) separately.

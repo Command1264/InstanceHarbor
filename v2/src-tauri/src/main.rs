@@ -8,6 +8,8 @@ mod system_accent;
 #[cfg(windows)]
 mod tray;
 #[cfg(windows)]
+mod webview_runtime;
+#[cfg(windows)]
 use instanceharbor_v2::desktop_channel;
 use instanceharbor_v2::diagnostics;
 use serde_json::json;
@@ -448,6 +450,12 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Before the single-instance lock: a GUI that cannot create its window must
+    // not keep running and block the next launch.
+    #[cfg(windows)]
+    if !webview_runtime::ensure_available() {
+        std::process::exit(1);
+    }
     #[cfg(windows)]
     if let [_, workspace, mode] = std::env::args().collect::<Vec<_>>().as_slice() {
         if mode == "native-console" {

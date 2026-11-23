@@ -1,7 +1,8 @@
 # Copy the pinned tier-1 console runtime (conpty.dll, OpenConsole.exe) next to built binaries.
 # The source is a local directory or a local copy of the Microsoft ConPTY NuGet package named in
-# console-runtime.json. This script never downloads. Each file must match the pinned SHA-256, be
-# x64 and carry a valid Microsoft Authenticode signature before it is copied.
+# console-runtime.json (`source`); a package must match its pinned size and SHA-256. This script
+# never downloads. Each file must match the pinned SHA-256, be x64 and carry a valid Microsoft
+# Authenticode signature before it is copied.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Source,
@@ -49,22 +50,25 @@ if ($sourceItem.PSIsContainer) {
         $payloads[$name] = [IO.File]::ReadAllBytes((Get-PlainItem (Join-Path $sourceItem.FullName $name)).FullName)
     }
 } elseif ($sourceItem.Extension -ceq '.nupkg') {
+    # The whole package must be the pinned NuGet release before any entry is read.
+    # Not $source: PowerShell names are case-insensitive and $Source is a [string] parameter.
+    $pinned = $manifest.source
+    if ($sourceItem.Length -ne $pinned.bytes) { throw "The ConPTY package size does not match $($manifest.version)." }
+    $packageBytes = [IO.File]::ReadAllBytes($sourceItem.FullName)
+    if ((Get-Sha256 $packageBytes) -cne $pinned.sha256) { throw "The ConPTY package SHA-256 does not match $($manifest.version)." }
     Add-Type -AssemblyName System.IO.Compression
-    $archive = [IO.Compression.ZipFile]::OpenRead($sourceItem.FullName)
+    $archive = [IO.Compression.ZipArchive]::new([IO.MemoryStream]::new($packageBytes), [IO.Compression.ZipArchiveMode]::Read)
     try {
         foreach ($name in $names) {
-            # The package carries one build per architecture; the pinned hash selects the x64 one.
-            $expected = $manifest.files.$name.sha256
-            foreach ($entry in @($archive.Entries | Where-Object { $_.Name -ceq $name -and $_.Length -le 64MB })) {
-                $stream = $entry.Open()
-                try {
-                    $buffer = [IO.MemoryStream]::new()
-                    $stream.CopyTo($buffer)
-                    $bytes = $buffer.ToArray()
-                } finally { $stream.Dispose() }
-                if ((Get-Sha256 $bytes) -ceq $expected) { $payloads[$name] = $bytes; break }
-            }
-            if (!$payloads.Contains($name)) { throw "The package has no file matching the pinned $name." }
+            # The package carries one build per architecture; the manifest names the x64 entry.
+            $entry = $archive.GetEntry($manifest.files.$name.entry)
+            if ($null -eq $entry -or $entry.Length -gt 64MB) { throw "The package has no $($manifest.files.$name.entry)." }
+            $stream = $entry.Open()
+            try {
+                $buffer = [IO.MemoryStream]::new()
+                $stream.CopyTo($buffer)
+                $payloads[$name] = $buffer.ToArray()
+            } finally { $stream.Dispose() }
         }
     } finally { $archive.Dispose() }
 } else {

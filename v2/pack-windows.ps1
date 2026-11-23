@@ -12,6 +12,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (!$IsWindows) { throw 'Windows PowerShell 7 is required.' }
+# 1.0.0-rc2 and stable versions are distributions: they ship the license notices and the
+# startup guide, and carry no app-local Visual C++ DLLs. Earlier candidates may omit them.
+$distribution = $Version -ceq '1.0.0-rc2' -or $Version -cmatch '^\d+\.\d+\.\d+$'
 
 function Get-PlainItem([string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
@@ -37,6 +40,52 @@ $gui = Get-PlainItem (Join-Path $binaryRoot.FullName 'InstanceHarbor.exe')
 if ($gui.VersionInfo.ProductName -eq 'InstanceHarbor Dev') {
     throw 'Development binaries cannot be packaged as the stable product.'
 }
+
+# Names of the DLLs in a PE32+ file's import directory.
+function Get-ImportedDll([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+    $optional = $pe + 24
+    if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550 -or [BitConverter]::ToUInt16($bytes, $optional) -ne 0x20B) {
+        throw "Not a PE32+ file: $Path"
+    }
+    $sections = @()
+    $sectionTable = $optional + [BitConverter]::ToUInt16($bytes, $pe + 20)
+    for ($i = 0; $i -lt [BitConverter]::ToUInt16($bytes, $pe + 6); $i++) {
+        $at = $sectionTable + 40 * $i
+        $sections += [pscustomobject]@{
+            address = [BitConverter]::ToUInt32($bytes, $at + 12)
+            size = [Math]::Max([BitConverter]::ToUInt32($bytes, $at + 8), [BitConverter]::ToUInt32($bytes, $at + 16))
+            raw = [BitConverter]::ToUInt32($bytes, $at + 20)
+        }
+    }
+    $offset = {
+        param([uint32]$Rva)
+        $section = $sections | Where-Object { $Rva -ge $_.address -and $Rva -lt $_.address + $_.size } | Select-Object -First 1
+        if (!$section) { throw "Import table outside every section: $Path" }
+        [int]($Rva - $section.address + $section.raw)
+    }
+    $importRva = [BitConverter]::ToUInt32($bytes, $optional + 120)
+    if ($importRva -eq 0) { return @() }
+    for ($descriptor = & $offset $importRva; ; $descriptor += 20) {
+        $nameRva = [BitConverter]::ToUInt32($bytes, $descriptor + 12)
+        if ($nameRva -eq 0) { break }
+        $start = & $offset $nameRva
+        $end = [Array]::IndexOf($bytes, [byte]0, $start)
+        [Text.Encoding]::ASCII.GetString($bytes, $start, $end - $start)
+    }
+}
+
+# Stable versions link the Visual C++ runtime statically (v2/.cargo/config.toml), so a
+# missing or removed Visual C++ Redistributable cannot stop them from starting.
+if ($Version -cmatch '^\d+\.\d+\.\d+$') {
+    foreach ($name in $names) {
+        $crtImports = @(Get-ImportedDll (Join-Path $binaryRoot.FullName $name) | Where-Object { $_ -match '^(vcruntime|msvcp)\d' })
+        if ($crtImports.Count) {
+            throw "$name imports $($crtImports -join ', '). Build it with the static C runtime from v2/.cargo/config.toml."
+        }
+    }
+}
 # Match console-runtime.json and native_console.rs. Release candidates can be packaged without them.
 $consoleHashes = [ordered]@{
     'conpty.dll' = 'feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a'
@@ -60,8 +109,8 @@ $crtHashes = [ordered]@{
     'vcruntime140_1.dll' = '1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f'
 }
 $crtNames = @()
-if ($Version -ceq '1.0.0-rc2' -and $VCRuntimeDirectory) {
-    throw 'RC2 uses the system Visual C++ runtime. Omit VCRuntimeDirectory.'
+if ($distribution -and $VCRuntimeDirectory) {
+    throw 'Distributions carry no app-local Visual C++ DLLs. Omit VCRuntimeDirectory.'
 }
 if ($VCRuntimeDirectory) {
     $crtRoot = Get-PlainItem $VCRuntimeDirectory
@@ -76,11 +125,11 @@ if ($NoticeDirectory) {
     $noticeRoot = Get-PlainItem $NoticeDirectory
     if (!$noticeRoot.PSIsContainer) { throw 'NoticeDirectory must be a directory.' }
     $noticeNames = @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip')
-} elseif ($Version -ceq '1.0.0-rc2') {
-    throw 'The RC2 distribution requires NoticeDirectory.'
+} elseif ($distribution) {
+    throw 'A distribution requires NoticeDirectory.'
 }
 $guideNames = @()
-if ($Version -ceq '1.0.0-rc2') { $guideNames = @('WINDOWS-GETTING-STARTED.txt') }
+if ($distribution) { $guideNames = @('WINDOWS-GETTING-STARTED.txt') }
 $manifest = [ordered]@{ schema = 'instanceharbor-windows-package/v1'; version = $Version; files = @() }
 $stage = Join-Path $parent.FullName ('.instanceharbor-package-' + [guid]::NewGuid().ToString('N') + '.tmp')
 $encoding = [Text.UTF8Encoding]::new($false)

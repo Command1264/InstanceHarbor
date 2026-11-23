@@ -260,20 +260,26 @@ Paper 26.3 的共用插件 JAR 隔離實驗也可使用同一份唯讀 JAR，各
 
 安裝腳本接受有預先核對 SHA-256 的便攜包，可驗證版本切換、
 還原與解除安裝，安裝或解除安裝時須先退出該安裝位置的程序。
-RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。GUI 另使用 Windows WebView2。
-### Windows x64 1.0.0-rc2 封裝
+RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。1.0.0 起執行檔靜態連結 Visual C++ 執行階段（`.cargo/config.toml`），不再需要 Visual C++ 可轉散發套件。GUI 另使用 Windows WebView2。
+### Windows x64 發行版封裝（1.0.0-rc2 與正式版）
 
-從本目錄以 PowerShell 7 執行 `./build-product.ps1 -Release`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
+完整步驟（取得 ConPTY 套件、建置、授權通知、ZIP 與 Setup）見 [docs/windows-distribution-licenses.md](../docs/windows-distribution-licenses.md) 的「Build a distribution」。
+從本目錄以 PowerShell 7 執行 `./build-product.ps1 -Release -ConsoleRuntimeSource <ConPTY .nupkg>`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
 用 `pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
-1.0.0 起（版本號不是 `1.0.0-rc*`）封裝必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
-`build-product.ps1 -Release` 也要求以 `-ConsoleRuntimeSource`（或環境變數 `IH_V2_CONSOLE_RUNTIME_SOURCE`）指定來源，詳見「伺服器後台」。
+`1.0.0-rc2` 與正式版號（例如 `1.0.0`）是發行版：必須附授權通知與啟動說明；正式版另必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
+`build-product.ps1 -Release` 沒有 `-ConsoleRuntimeSource`（或環境變數 `IH_V2_CONSOLE_RUNTIME_SOURCE`）時會失敗，詳見「伺服器後台」。
 接著用 `pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
-Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。Setup 要求系統有 Visual C++ x64 Runtime 14.44.35211.0 或更新版本。
-沒有符合版本時，Setup 會在寫入前提示使用 [Microsoft 官方 x64 Runtime 安裝程式](https://aka.ms/vc14/vc_redist.x64.exe)，
-靜默安裝則回傳退出碼 3。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
-Setup 解除安裝會保留共用的 Runtime。Windows WebView2 與伺服器所需的 Java 由電腦提供。
-若乾淨 Windows 或 Windows Sandbox 提示找不到 WebView2，先安裝
-[Microsoft WebView2 Evergreen Standalone Installer 的 x64 版](https://developer.microsoft.com/microsoft-edge/webview2/#download-section)，再重開 InstanceHarbor。
+Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
+Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本的 `msedgewebview2.exe` 都要存在，與程式啟動時找到的相同）；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」的 x64 版，
+可直接開啟 Microsoft 下載，並在寫入前停止（靜默安裝回傳退出碼 3）。InstanceHarbor 每次啟動也做同樣檢查，
+缺少時提示後結束，不會留下沒有視窗的背景程序。
+這個提示不需 GUI 啟動即可決定語言：先唯讀讀取將使用的工作區 `preferences.json` 的語言設定；
+設為「跟隨系統」或讀不到時，看 Windows 顯示語言，繁體中文（台灣、香港、澳門）顯示繁中，其他一律英文。
+Setup 的對話框用同一條系統語言規則。
+已安裝時，Setup 比較版本：較舊時詢問是否更新，相同時詢問是否修復（重新安裝程式檔案），
+較新時預設拒絕並詢問是否確定退回舊版。工作區資料一律保留；InstanceHarbor 仍在執行時，Setup 不替換檔案。
+使用者取消時退出碼為 4。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
+Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
 Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
 雙擊便攜版或已安裝的 `InstanceHarbor.exe`，預設使用 `%LOCALAPPDATA%/InstanceHarbor/workspaces/default`。
