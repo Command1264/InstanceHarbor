@@ -354,7 +354,8 @@ pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
     if row.core_profile.as_ref().is_some_and(|profile| profile.unverified) {
         core["unverified"] = json!(true);
     }
-    json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core})
+    json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core,
+        "managementDiscovered":row.management_discovered})
 }
 
 /// `nativeConsole` reports whether this installation can show a server console
@@ -366,6 +367,7 @@ pub(super) fn capabilities(_root: &Path) -> Value {
     let system = native_console::system_runtime().err();
     json!({"instanceSettings":true,"javaDiscovery":true,"javaSelection":true,"logs":true,
         "removeManagement":true,"adopt":true,"openLogFolder":true,
+        "deleteServer":true,"removedInstances":true,"openServerFolder":true,
         "coreMaintenance":true,"nativeConsole":bundled.is_none() || system.is_none(),
         "consoleRuntime":{"bundled":bundled.is_none(),"bundledReason":bundled,"system":system.is_none(),"systemReason":system},
         "worldSettings":true,"initialization":true,"scanPaths":true})
@@ -512,7 +514,7 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
     Ok(json!({"preferences":value,"revision":content_revision::revision(&bytes)?}))
 }
 
-fn active_instance(root: &Path, name: &str) -> Result<Instance> {
+pub(super) fn active_instance(root: &Path, name: &str) -> Result<Instance> {
     if !token(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
@@ -523,7 +525,7 @@ fn active_instance(root: &Path, name: &str) -> Result<Instance> {
     Ok(item)
 }
 
-fn stopped(root: &Path, item: &Instance) -> Result<()> {
+pub(super) fn stopped(root: &Path, item: &Instance) -> Result<()> {
     if status(root, item)?["state"] != "Stopped" {
         return Err("InstanceMustBeStopped".into());
     }
@@ -954,7 +956,7 @@ fn open_log_folder(root: &Path, name: &str) -> Result<Value> {
     Ok(json!({"opened":true,"path":path_format::display(&folder)}))
 }
 
-fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
+pub(super) fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
     let mut item = active_instance(root, name)?;
     stopped(root, &item)?;
     let record = record_path(root, name);
