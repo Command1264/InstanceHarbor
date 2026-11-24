@@ -1,5 +1,16 @@
 // Messages for manager.ts, policy-settings.ts, theme.ts. Each entry is [zh-TW, en]; keys start with 'manager.'.
 export const managerMessages = {
+  'manager.error.testAdminNotFound': ['找不到這個名稱的玩家。', 'No player with this name was found.'],
+  'manager.error.testAdminLookupRateLimited': ['Mojang 查詢太頻繁，請稍後再試。', 'Mojang is limiting lookups. Try again later.'],
+  'manager.error.testAdminLookupFailed': ['無法連線到 Mojang 查詢 UUID。請檢查網路後再試，或自行輸入 UUID。', 'Could not reach Mojang to look up the UUID. Check the network and try again, or enter the UUID yourself.'],
+  'manager.error.testAdminInvalidName': ['Minecraft 名稱須為 3 到 16 個英文字母、數字或底線。', 'A Minecraft name has 3 to 16 letters, digits, or underscores.'],
+  'manager.error.testAdminInvalidUuid': ['UUID 格式不正確。', 'The UUID is not valid.'],
+  'manager.error.testAdminDuplicate': ['同一個 UUID 只能出現一次。', 'Each UUID can appear only once.'],
+  'manager.error.testAdminTooMany': ['測試管理員最多 10 位。', 'At most 10 test administrators are allowed.'],
+  'manager.error.testAdminInvalidGroup': ['LuckPerms 群組只能使用小寫英文字母、數字、底線與連字號，且不可為 default。', 'A LuckPerms group uses lowercase letters, digits, underscores, and hyphens, and cannot be default.'],
+  'manager.error.testAdminInvalidPermission': ['權限節點只能使用小寫英文字母、數字與 . _ * -，每行一個，長度不超過 200。', 'Permission nodes use only lowercase letters, digits, and . _ * -, one per line, up to 200 characters.'],
+  'manager.error.testAdminEmptyPermissions': ['請至少輸入一個權限節點，或改為授予所有權限。', 'Enter at least one permission node, or grant all permissions instead.'],
+  'manager.error.testAdminTooManyPermissions': ['權限節點最多 50 個。', 'At most 50 permission nodes are allowed.'],
   'manager.error.registryConflictUnconfirmed': ['有實例登記無法讀取，無法排除名稱、資料夾或 Port 衝突。請修復登記檔後重新核對。', 'Some instance registry records could not be read, so name, folder, or Port conflicts cannot be ruled out. Repair the registry file and check again.'],
   'manager.error.instanceSnapshotChanged': ['實例登記正在變更。請稍候重新核對。', 'The instance registry is changing. Wait a moment and check again.'],
   'manager.error.batchTargetPending': ['此實例已有等待或執行中的操作，請查看操作紀錄。', 'This instance already has a queued or running operation. See the activity log.'],

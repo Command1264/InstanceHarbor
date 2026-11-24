@@ -44,6 +44,12 @@
       "component": "../../components/ManagementPathRows.vue"
     },
     {
+      "icon": "corner-down-left",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/corner-down-left.svg",
+      "adaptation": "16px viewport; currentColor; hidden from assistive technology inside a labeled button",
+      "component": "../../components/TestAdminFields.vue"
+    },
+    {
       "icon": "undo-2",
       "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/undo-2.svg",
       "adaptation": "16px viewport; currentColor; hidden from assistive technology inside a labeled button",

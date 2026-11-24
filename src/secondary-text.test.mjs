@@ -28,6 +28,8 @@ const ALLOWED_ALWAYS_VISIBLE = [
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.jarHelp') }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.source', { source: sourceText(signal.source) }) }}",
   "components/JavaSearchScope.vue: {{ t('management.javaSearchHelp') }}",
+  // Existing instances are never granted automatically; the manual steps must stay visible.
+  "components/TestAdminFields.vue: {{ t('components.testAdmins.existingHelp') }}",
   "components/ManagementFolderDialog.vue: {{ t('management.summary', { selected: selectedCount, excluded: excluded.length, blocked: pendingRows.length, }) }}",
   "components/WorldLiveControls.vue: {{ t('components.worldTime.unsupportedHelp') }} {{ t('components.worldTime.notReadyHelp') }} {{ t('components.worldTime.readyHelp') }}",
 ]
