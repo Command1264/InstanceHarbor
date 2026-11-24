@@ -276,7 +276,8 @@ Spigot 使用 [官方 BuildTools](https://www.spigotmc.org/wiki/buildtools/) 在
 查詢線上 UUID 並填入，同時改用 Mojang 回傳的名稱大小寫。UUID 欄位唯讀但不變暗，只顯示名稱查到的
 UUID；改成另一個名稱（不分大小寫）時清空並重新查詢，已儲存的 UUID 屬於已儲存的名稱。新建實例使用
 `online-mode=true`，所以 Mojang 的 UUID 就是伺服器使用的 UUID。查詢只在名稱符合 3 到 16 個英數字
-或底線時送出，逾時 8 秒；失敗後離開名稱欄會再查一次。管理員動詞為 `test-admin-lookup <名稱>`，
+或底線時送出，逾時 8 秒。在名稱欄按 Enter 或點旁邊的 ↵ 按鈕會立即查詢，離開名稱欄也會查詢；
+UUID 已屬於這個名稱時按鈕停用，查詢失敗後可再按一次重試。管理員動詞為 `test-admin-lookup <名稱>`，
 找不到、網路失敗與被限流各有不同的錯誤訊息。
 
 「LuckPerms 權限」與「OP」是兩個獨立的開關，可任意組合；兩個都關閉，或清單留空，都表示停用，

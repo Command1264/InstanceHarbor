@@ -71,6 +71,11 @@ function nameEntered(row: TestAdministrator) {
   nameChanged(row, true)
   nameLeft(row)
 }
+// The button beside the name shows how a lookup starts. It is off once the UUID belongs to the name.
+function canLookUp(row: TestAdministrator) {
+  return props.connected && looking.value !== row && validMinecraftName(row.name.trim())
+    && !(row.uuid && uuidBelongsTo(owners.get(row), row.name))
+}
 // Leaving a name whose lookup failed tries again, so a network error is not a dead end.
 function nameLeft(row: TestAdministrator) {
   if (!row.uuid && !timers.has(row) && looking.value !== row && validMinecraftName(row.name.trim())) void lookup(row)
@@ -106,7 +111,11 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
       <thead><tr><th scope="col">{{ t('components.testAdmins.name') }}</th><th scope="col">UUID</th><th scope="col"><span class="sr-only">{{ t('components.testAdmins.actions') }}</span></th></tr></thead>
       <tbody>
         <tr v-for="(row, index) in rows" :key="index">
-          <td><input v-model.trim="row.name" :name="`test-admin-name-${index}`" :aria-label="t('components.testAdmins.nameRow', { row: index + 1 })" autocomplete="off" spellcheck="false" maxlength="16" :disabled="busy" @change="nameChanged(row)" @blur="nameLeft(row)" @keydown.enter.prevent="nameEntered(row)"></td>
+          <td><div class="with-lookup"><input v-model.trim="row.name" :name="`test-admin-name-${index}`" :aria-label="t('components.testAdmins.nameRow', { row: index + 1 })" autocomplete="off" spellcheck="false" maxlength="16" :disabled="busy" @change="nameChanged(row)" @blur="nameLeft(row)" @keydown.enter.prevent="nameEntered(row)">
+            <button type="button" class="lookup" :aria-label="t('components.testAdmins.lookupRow', { row: index + 1 })" :title="t('components.testAdmins.lookupHint')" :aria-busy="looking === row" :disabled="busy || !canLookUp(row)" @click="nameEntered(row)">
+              <!-- Lucide Corner Down Left, ISC license. See assets/icons/sources.json. -->
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
+            </button></div></td>
           <td><input :value="row.uuid" class="mono readonly-plain" :name="`test-admin-uuid-${index}`" :aria-label="t('components.testAdmins.uuidRow', { row: index + 1 })" :aria-busy="looking === row" :placeholder="looking === row ? t('components.testAdmins.lookingUp') : '--'" readonly autocomplete="off" spellcheck="false"></td>
           <td><button type="button" :disabled="busy" @click="remove(index)">{{ t('components.testAdmins.remove') }}</button></td>
         </tr>
@@ -162,6 +171,9 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
 .identities td:last-child { width: 1%; white-space: nowrap; }
 .test-admins .actions { margin-block: .5rem; }
 .empty-row { color: var(--muted); }
+.with-lookup { display: flex; gap: .5rem; align-items: center; }
+.test-admins .with-lookup > input { flex: 1; min-width: 0; width: auto; }
+.lookup { flex: none; display: inline-flex; align-items: center; justify-content: center; min-inline-size: 2.375rem; min-block-size: 2.25rem; padding-inline: .5rem; }
 .with-clear { display: flex; gap: .5rem; align-items: flex-start; }
 .with-clear > textarea, .with-clear > input { flex: 1; min-width: 0; width: auto; }
 .with-clear > textarea { resize: vertical; }

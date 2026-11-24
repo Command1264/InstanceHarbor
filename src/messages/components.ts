@@ -149,6 +149,8 @@ export const componentsMessages = {
   'components.testAdmins.clear': ['清除', 'Clear'],
   'components.testAdmins.clearNodes': ['清除權限節點', 'Clear permission nodes'],
   'components.testAdmins.clearGroup': ['清除 LuckPerms 群組', 'Clear LuckPerms group'],
+  'components.testAdmins.lookupRow': ['查詢第 {row} 位的 UUID', 'Look up UUID, row {row}'],
+  'components.testAdmins.lookupHint': ['按 Enter 或點此查詢 UUID', 'Press Enter or click to look up the UUID'],
   'components.testAdmins.lookingUp': ['查詢中', 'Looking up'],
   'components.testAdmins.lookupFailed': ['第 {row} 位：{reason}', 'Row {row}: {reason}'],
   'components.testAdmins.platform': ['平台', 'Platform'],
