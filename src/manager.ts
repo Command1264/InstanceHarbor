@@ -143,6 +143,17 @@ export function canRestart(row?: Instance) { return !row?.outsideManagement && (
 export function rawError(error: unknown) { return error instanceof Error ? error.message : String(error) }
 export function errorText(error: unknown) {
   const raw = rawError(error)
+  if (raw.includes('TestAdministratorNotFound')) return tr('manager.error.testAdminNotFound')
+  if (raw.includes('TestAdministratorLookupRateLimited')) return tr('manager.error.testAdminLookupRateLimited')
+  if (raw.includes('TestAdministratorLookupFailed')) return tr('manager.error.testAdminLookupFailed')
+  if (raw.includes('InvalidTestAdministratorName')) return tr('manager.error.testAdminInvalidName')
+  if (raw.includes('InvalidTestAdministratorUuid')) return tr('manager.error.testAdminInvalidUuid')
+  if (raw.includes('DuplicateTestAdministrator')) return tr('manager.error.testAdminDuplicate')
+  if (raw.includes('TooManyTestAdministratorPermissions')) return tr('manager.error.testAdminTooManyPermissions')
+  if (raw.includes('TooManyTestAdministrators')) return tr('manager.error.testAdminTooMany')
+  if (raw.includes('InvalidTestAdministratorGroup')) return tr('manager.error.testAdminInvalidGroup')
+  if (raw.includes('InvalidTestAdministratorPermission')) return tr('manager.error.testAdminInvalidPermission')
+  if (raw.includes('EmptyTestAdministratorPermissions')) return tr('manager.error.testAdminEmptyPermissions')
   if (raw.includes('RegistryConflictUnconfirmed')) return tr('manager.error.registryConflictUnconfirmed')
   if (raw.includes('InstanceSnapshotChanged')) return tr('manager.error.instanceSnapshotChanged')
   if (raw.startsWith('FileAccess[')) {

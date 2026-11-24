@@ -14,6 +14,7 @@ import OverlayScroll from './components/OverlayScroll.vue'
 import PolicyFields from './components/PolicyFields.vue'
 import RecoveryKeyPanel from './components/RecoveryKeyPanel.vue'
 import WorldLiveControls from './components/WorldLiveControls.vue'
+import { formatNodes, nodeProblem, testAdminPayload, type PermissionKind } from './test-admins'
 import TestAdminFields, { type LuckPermsArtifact, type TestAdministrator } from './components/TestAdminFields.vue'
 import { isWorldRule, policyLabel, validWorldRuleValue, verifiedWorldRuleReceipt, type InitializationSnapshot, type PolicyProfile, type WorldLiveValue, type WorldPreview, type WorldRuleSaveReceipt, type WorldSnapshot } from './policy-settings'
 import { applySelectionOpacity, refreshSelectionColor, refreshSelectionTheme, resolveSelectionColor, resolveSelectionOpacity, resolveTheme } from './theme'
@@ -22,7 +23,7 @@ import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm,
 const props=defineProps<{instance?:string;instanceState?:string;instanceRun?:string;worldCommandReady?:boolean;worldRuleWork?:string;restartStatus?:AutoRestartStatus|null;instanceMeta?:InstanceMeta;preferences:Preferences;preferencesRevision:string;preferencesLoaded:boolean;preferencesReady:boolean;connected:boolean;javaCandidates:JavaCandidate[];javaChecked:boolean;refreshJava:(origin:"manual"|"background",fresh?:boolean)=>Promise<void>;retryPreferences:()=>Promise<void>}>()
 const emit=defineEmits<{(e:"language-preview",v?:LanguagePreference):void;(e:'close'):void;(e:'preferences',snapshot:PreferencesSnapshot):void;(e:'dirty',dirty:boolean):void;(e:'saving',saving:boolean):void;(e:'mutating'):void;(e:'management-changed'):void;(e:'core',name:string):void}>()
 type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'recovery'|'test-admins'
-type TestAdminSnapshot={administrators:TestAdministrator[];group:string;revision:string;artifacts:LuckPermsArtifact[]}
+type TestAdminSnapshot={administrators:TestAdministrator[];luckperms:boolean;op:boolean;permissions:string[]|null;group:string;revision:string;artifacts:LuckPermsArtifact[]}
 type ScanPaths={allowPaths:string[];excludePaths:string[]}
 type ScanSnapshot={policy:ScanPaths & {allow:string[];exclude:string[];managedFolders?:boolean};revision:string;base?:string;path?:string;rows?:ScanRow[]}
 type ScanRow={name:string;path:string;visible:boolean;changed:boolean;active?:boolean;reason:'Excluded'|'Default'|'Allowed'|'NotAllowed'}
@@ -54,14 +55,20 @@ const javaSearchScope=ref<InstanceType<typeof JavaSearchScope>>()
 const javaSearchDirty=ref(false)
 const testAdmins=ref<TestAdminSnapshot>()
 const testAdminRows=ref<TestAdministrator[]>([])
-const testAdminMode=ref<'all'|'group'>('all')
+const testAdminLuckperms=ref(true)
+const testAdminOp=ref(false)
+const testAdminKind=ref<PermissionKind>('all')
+const testAdminNodes=ref('')
 const testAdminGroup=ref('')
 const testAdminFetching=ref(false)
-const testAdminDraft=computed(()=>({administrators:testAdminRows.value.map(row=>({name:row.name.trim(),uuid:row.uuid.trim()})),group:testAdminMode.value==='group'?testAdminGroup.value.trim():''}))
+const testAdminDraft=computed(()=>testAdminPayload({rows:testAdminRows.value,luckperms:testAdminLuckperms.value,op:testAdminOp.value,kind:testAdminKind.value,nodes:testAdminNodes.value,group:testAdminGroup.value}))
 function showTestAdmins(snapshot: TestAdminSnapshot) {
   testAdmins.value=snapshot
   testAdminRows.value=snapshot.administrators.map(row=>({...row}))
-  testAdminMode.value=snapshot.group?'group':'all'
+  testAdminLuckperms.value=snapshot.luckperms
+  testAdminOp.value=snapshot.op
+  testAdminKind.value=snapshot.permissions?'custom':'all'
+  testAdminNodes.value=formatNodes(snapshot.permissions)
   testAdminGroup.value=snapshot.group
 }
 async function fetchLuckPerms(){
@@ -975,8 +982,9 @@ async function save(confirmWorld = false, confirmScope = false){
     if(!scopePlan.value || scopePlan.value.payload!==scanPayload() || !scopePlan.value.preview.previewRevision)return
   }
   if(tab.value==='autorestart' && !autoRestartPayload.value)return
-  if(tab.value==='test-admins' && testAdminMode.value==='group' && !testAdminGroup.value.trim()){
-    error.value=t('settingsPage.testAdminsGroupRequired')
+  const nodeIssue=tab.value==='test-admins' && testAdminLuckperms.value && testAdminKind.value==='custom' ? nodeProblem(testAdminNodes.value) : undefined
+  if(nodeIssue){
+    error.value=t(nodeIssue==='empty'?'settingsPage.testAdminsNodesRequired':nodeIssue==='tooMany'?'settingsPage.testAdminsNodesTooMany':'settingsPage.testAdminsNodesInvalid')
     message.value=failureText.value=t('settings.saveFailed')
     saveSucceeded.value=false
     return
@@ -1403,7 +1411,7 @@ void load()
       </template>
       <template v-else-if="tab==='test-admins'">
         <h2>{{ t('settingsPage.testAdmins') }}</h2>
-        <TestAdminFields v-model:administrators="testAdminRows" v-model:mode="testAdminMode" v-model:group="testAdminGroup"
+        <TestAdminFields v-model:administrators="testAdminRows" v-model:luckperms="testAdminLuckperms" v-model:op="testAdminOp" v-model:kind="testAdminKind" v-model:nodes="testAdminNodes" v-model:group="testAdminGroup"
           :artifacts="testAdmins?.artifacts" :busy="saving || !testAdmins" :fetching="testAdminFetching" :connected="connected" @fetch="fetchLuckPerms" />
       </template>
       <RecoveryKeyPanel v-else-if="tab==='recovery'" :connected="connected" />

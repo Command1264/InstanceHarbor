@@ -272,7 +272,7 @@ type CreationPreview = {
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
   initializationDefaults?: boolean
-  testAdministrators?: { requested: boolean; configured: number; grant: { count: number; group: string; fileName: string } | null }
+  testAdministrators?: { requested: boolean; configured: number; grant: { count: number; group: string; luckperms: boolean; op: boolean; fileName: string | null } | null }
   revision: string
 }
 const creationPreview=ref<CreationPreview>()
@@ -327,9 +327,11 @@ function creationInput() {
 const creationTestAdmins = computed(() => {
   const state = creationPreview.value?.testAdministrators
   if (!state) return undefined
-  if (state.grant) return state.grant.group
-    ? t('app.create.testAdminsGrantedGroup', { count: state.grant.count, group: state.grant.group, file: state.grant.fileName })
-    : t('app.create.testAdminsGranted', { count: state.grant.count, file: state.grant.fileName })
+  if (state.grant) {
+    const { count, group, luckperms, op } = state.grant
+    const what = [luckperms && (group ? t('app.create.testAdminsLuckPermsGroup', { group }) : 'LuckPerms'), op && 'OP'].filter(Boolean).join(' · ')
+    return t('app.create.testAdminsGranted', { count, what })
+  }
   return t(state.configured ? 'app.create.testAdminsDeclined' : 'app.create.testAdminsNone')
 })
 function pickerFailed() {
