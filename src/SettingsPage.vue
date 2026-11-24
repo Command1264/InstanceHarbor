@@ -24,7 +24,7 @@ import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm,
 const props=defineProps<{instance?:string;instanceState?:string;instanceRun?:string;worldCommandReady?:boolean;worldRuleWork?:string;restartStatus?:AutoRestartStatus|null;instanceMeta?:InstanceMeta;preferences:Preferences;preferencesRevision:string;preferencesLoaded:boolean;preferencesReady:boolean;connected:boolean;javaCandidates:JavaCandidate[];javaChecked:boolean;refreshJava:(origin:"manual"|"background",fresh?:boolean)=>Promise<void>;retryPreferences:()=>Promise<void>}>()
 const emit=defineEmits<{(e:"language-preview",v?:LanguagePreference):void;(e:'close'):void;(e:'preferences',snapshot:PreferencesSnapshot):void;(e:'dirty',dirty:boolean):void;(e:'saving',saving:boolean):void;(e:'mutating'):void;(e:'management-changed'):void;(e:'core',name:string):void}>()
 type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'recovery'|'test-admins'|'about'
-type TestAdminSnapshot={administrators:TestAdministrator[];luckperms:boolean;op:boolean;permissions:string[]|null;group:string;revision:string;artifacts:LuckPermsArtifact[]}
+type TestAdminSnapshot={administrators:TestAdministrator[];luckperms:boolean;op:boolean;permissions:string[]|null;keptPermissions?:string[];group:string;revision:string;artifacts:LuckPermsArtifact[]}
 type ScanPaths={allowPaths:string[];excludePaths:string[]}
 type ScanSnapshot={policy:ScanPaths & {allow:string[];exclude:string[];managedFolders?:boolean};revision:string;base?:string;path?:string;rows?:ScanRow[]}
 type ScanRow={name:string;path:string;visible:boolean;changed:boolean;active?:boolean;reason:'Excluded'|'Default'|'Allowed'|'NotAllowed'}
@@ -69,7 +69,7 @@ function showTestAdmins(snapshot: TestAdminSnapshot) {
   testAdminLuckperms.value=snapshot.luckperms
   testAdminOp.value=snapshot.op
   testAdminKind.value=snapshot.permissions?'custom':'all'
-  testAdminNodes.value=formatNodes(snapshot.permissions)
+  testAdminNodes.value=formatNodes(snapshot.permissions??snapshot.keptPermissions)
   testAdminGroup.value=snapshot.group
 }
 async function fetchLuckPerms(){
@@ -983,7 +983,8 @@ async function save(confirmWorld = false, confirmScope = false){
     if(!scopePlan.value || scopePlan.value.payload!==scanPayload() || !scopePlan.value.preview.previewRevision)return
   }
   if(tab.value==='autorestart' && !autoRestartPayload.value)return
-  const nodeIssue=tab.value==='test-admins' && testAdminKind.value==='custom' ? nodeProblem(testAdminNodes.value) : undefined
+  // Nodes kept beside "all" may be empty, but must still be valid to be saved.
+  const nodeIssue=tab.value!=='test-admins' ? undefined : testAdminKind.value==='custom' ? nodeProblem(testAdminNodes.value) : testAdminNodes.value.trim() ? nodeProblem(testAdminNodes.value) : undefined
   if(nodeIssue){
     error.value=t(nodeIssue==='empty'?'settingsPage.testAdminsNodesRequired':nodeIssue==='tooMany'?'settingsPage.testAdminsNodesTooMany':'settingsPage.testAdminsNodesInvalid')
     message.value=failureText.value=t('settings.saveFailed')

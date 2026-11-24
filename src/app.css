@@ -97,6 +97,8 @@ button[aria-pressed=true]:active:not(:disabled){background:var(--selection);colo
 .settings-fields .field:not(:has(~ .field)){border-bottom:0}
 .settings-fields :is(input,select):disabled{opacity:.55;cursor:not-allowed}
 input:disabled,select:disabled,textarea:disabled,input[readonly],textarea[readonly]{opacity:.55;cursor:not-allowed;caret-color:transparent}
+/* Read-only values the app always fills in keep full contrast and stay selectable. */
+.readonly-plain[readonly]{opacity:1;cursor:text}
 
 .pinned-draggable{cursor:grab;user-select:none;touch-action:none}
 .pin-drag-source{background:var(--raised)}

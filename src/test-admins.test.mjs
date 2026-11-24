@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  clearedLuckPerms, formatNodes, nodeProblem, parseNodes, shouldLookup, testAdminPayload, validMinecraftName,
+  formatNodes, nodeProblem, parseNodes, testAdminPayload, uuidBelongsTo, validMinecraftName,
 } from './test-admins.ts'
 
 test('names follow the Minecraft rule before any lookup', () => {
@@ -9,12 +9,11 @@ test('names follow the Minecraft rule before any lookup', () => {
   for (const name of ['', 'ab', 'a'.repeat(17), 'bad-name', 'has space', 'ünï', 'a\n']) assert.equal(validMinecraftName(name), false, name)
 })
 
-test('a lookup never overwrites a UUID the user typed', () => {
-  assert.equal(shouldLookup({ name: 'Fake_Admin', uuid: '' }, false), true)
-  assert.equal(shouldLookup({ name: 'Fake_Admin', uuid: '  ' }, false), true)
-  assert.equal(shouldLookup({ name: 'Fake_Admin', uuid: '00000000-0000-4000-8000-000000000001' }, true), true)
-  assert.equal(shouldLookup({ name: 'Fake_Admin', uuid: '00000000-0000-4000-8000-000000000001' }, false), false)
-  assert.equal(shouldLookup({ name: 'no', uuid: '' }, false), false)
+test('a UUID stays only beside the name it was looked up for', () => {
+  assert.equal(uuidBelongsTo('Fake_Admin', 'Fake_Admin'), true)
+  assert.equal(uuidBelongsTo('Fake_Admin', ' fake_admin '), true)
+  assert.equal(uuidBelongsTo('Fake_Admin', 'Other_Admin'), false)
+  assert.equal(uuidBelongsTo(undefined, 'Fake_Admin'), false)
 })
 
 test('node text splits into lines and keeps the negation sign', () => {
@@ -39,11 +38,11 @@ test('the payload sends custom nodes and the group only while LuckPerms is on', 
   const base = { rows, luckperms: true, op: true, kind: 'custom', nodes: 'a.b\n-c.d', group: ' staff ' }
   assert.deepEqual(testAdminPayload(base), {
     administrators: [{ name: 'Fake_Admin', uuid: '00000000-0000-4000-8000-000000000001' }],
-    luckperms: true, op: true, permissions: ['a.b', '-c.d'], group: 'staff',
+    luckperms: true, op: true, permissions: ['a.b', '-c.d'], keptPermissions: [], group: 'staff',
   })
-  assert.equal(testAdminPayload({ ...base, kind: 'all' }).permissions, null)
-  // Turning LuckPerms off keeps the nodes and group; only the clear button removes them.
+  const all = testAdminPayload({ ...base, kind: 'all' })
+  assert.deepEqual([all.permissions, all.keptPermissions], [null, ['a.b', '-c.d']])
+  // Turning LuckPerms off keeps the nodes and group; only their clear buttons remove them.
   const off = testAdminPayload({ ...base, luckperms: false })
   assert.deepEqual([off.luckperms, off.permissions, off.group, off.op], [false, ['a.b', '-c.d'], 'staff', true])
-  assert.deepEqual(clearedLuckPerms(), { kind: 'all', nodes: '', group: '' })
 })

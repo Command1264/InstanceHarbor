@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useAppLanguage } from '../i18n'
 import { errorText, manage } from '../manager'
-import { clearedLuckPerms, LOOKUP_DEBOUNCE_MS, MAX_TEST_ADMINISTRATORS, shouldLookup, type PermissionKind } from '../test-admins'
+import { LOOKUP_DEBOUNCE_MS, MAX_TEST_ADMINISTRATORS, uuidBelongsTo, validMinecraftName, type PermissionKind } from '../test-admins'
 import OperationButton from './OperationButton.vue'
 
 export type TestAdministrator = { name: string; uuid: string }
@@ -30,20 +30,17 @@ const stateNames = {
 } as const
 const allReady = computed(() => !!props.artifacts?.length && props.artifacts.every(row => row.state === 'Ready'))
 const luckpermsOff = computed(() => props.busy || !luckperms.value)
-// The nodes and group stay when LuckPerms is turned off; only this button removes them.
-const hasLuckPermsContent = computed(() => kind.value !== 'all' || nodes.value !== '' || group.value !== '')
-function clearLuckPerms() {
-  const cleared = clearedLuckPerms()
-  kind.value = cleared.kind
-  nodes.value = cleared.nodes
-  group.value = cleared.group
-}
+// The nodes and group stay when LuckPerms is off or "all" is chosen; only their clear buttons remove them.
 
-// Rows whose UUID came from a lookup may be looked up again; a hand-typed or saved UUID never is.
-const autoFilled = new WeakMap<TestAdministrator, string>()
+// The UUID is read-only: it is always the one looked up for the name beside it.
+// `owners` remembers that name; a saved row's UUID belongs to its saved name.
+const owners = new WeakMap<TestAdministrator, string>()
 const timers = new Map<TestAdministrator, ReturnType<typeof setTimeout>>()
 const looking = ref<TestAdministrator>()
 const lookupError = ref('')
+watch(rows, list => {
+  for (const row of list) if (row.uuid && !owners.has(row)) owners.set(row, row.name)
+}, { immediate: true })
 
 function add() {
   if (rows.value.length < MAX_TEST_ADMINISTRATORS) rows.value = [...rows.value, { name: '', uuid: '' }]
@@ -57,32 +54,31 @@ function remove(index: number) {
 }
 function nameChanged(row: TestAdministrator) {
   clearTimeout(timers.get(row))
+  timers.delete(row)
   lookupError.value = ''
-  // A UUID filled in for another name must not stay beside a different name.
-  const filled = autoFilled.get(row)
-  if (filled !== undefined && filled.toLowerCase() !== row.name.trim().toLowerCase()) {
-    row.uuid = ''
-    autoFilled.delete(row)
-  }
-  if (!shouldLookup(row, autoFilled.has(row))) return
-  timers.set(row, setTimeout(() => void lookup(row), LOOKUP_DEBOUNCE_MS))
+  if (uuidBelongsTo(owners.get(row), row.name)) return
+  // A UUID found for another name must not stay beside a different name.
+  row.uuid = ''
+  owners.delete(row)
+  if (validMinecraftName(row.name.trim())) timers.set(row, setTimeout(() => void lookup(row), LOOKUP_DEBOUNCE_MS))
 }
-function uuidEdited(row: TestAdministrator) {
-  autoFilled.delete(row)
+// Leaving a name whose lookup failed tries again, so a network error is not a dead end.
+function nameLeft(row: TestAdministrator) {
+  if (!row.uuid && !timers.has(row) && looking.value !== row && validMinecraftName(row.name.trim())) void lookup(row)
 }
 async function lookup(row: TestAdministrator) {
   timers.delete(row)
   const requested = row.name.trim()
-  if (!props.connected || !rows.value.includes(row) || !shouldLookup(row, autoFilled.has(row))) return
+  if (!props.connected || !rows.value.includes(row) || row.uuid) return
   looking.value = row
   lookupError.value = ''
   try {
     const found = await manage<{ name: string; uuid: string }>(['test-admin-lookup', requested], 'background')
-    // A newer edit wins: apply the answer only to the name and UUID state it was asked for.
-    if (!rows.value.includes(row) || row.name.trim() !== requested || !shouldLookup(row, autoFilled.has(row))) return
+    // A newer edit wins: apply the answer only to the name it was asked for.
+    if (!rows.value.includes(row) || row.name.trim() !== requested || row.uuid) return
     row.name = found.name
     row.uuid = found.uuid
-    autoFilled.set(row, found.name)
+    owners.set(row, found.name)
   } catch (error) {
     if (rows.value.includes(row) && row.name.trim() === requested) {
       lookupError.value = t('components.testAdmins.lookupFailed', { row: rows.value.indexOf(row) + 1, reason: errorText(error) })
@@ -101,8 +97,8 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
       <thead><tr><th scope="col">{{ t('components.testAdmins.name') }}</th><th scope="col">UUID</th><th scope="col"><span class="sr-only">{{ t('components.testAdmins.actions') }}</span></th></tr></thead>
       <tbody>
         <tr v-for="(row, index) in rows" :key="index">
-          <td><input v-model.trim="row.name" :name="`test-admin-name-${index}`" :aria-label="t('components.testAdmins.nameRow', { row: index + 1 })" autocomplete="off" spellcheck="false" maxlength="16" :disabled="busy" @change="nameChanged(row)"></td>
-          <td><input v-model.trim="row.uuid" class="mono" :name="`test-admin-uuid-${index}`" :aria-label="t('components.testAdmins.uuidRow', { row: index + 1 })" :aria-busy="looking === row" :placeholder="looking === row ? t('components.testAdmins.lookingUp') : ''" autocomplete="off" spellcheck="false" maxlength="36" :disabled="busy" @input="uuidEdited(row)"></td>
+          <td><input v-model.trim="row.name" :name="`test-admin-name-${index}`" :aria-label="t('components.testAdmins.nameRow', { row: index + 1 })" autocomplete="off" spellcheck="false" maxlength="16" :disabled="busy" @change="nameChanged(row)" @blur="nameLeft(row)"></td>
+          <td><input :value="row.uuid" class="mono readonly-plain" :name="`test-admin-uuid-${index}`" :aria-label="t('components.testAdmins.uuidRow', { row: index + 1 })" :aria-busy="looking === row" :placeholder="looking === row ? t('components.testAdmins.lookingUp') : '--'" readonly autocomplete="off" spellcheck="false"></td>
           <td><button type="button" :disabled="busy" @click="remove(index)">{{ t('components.testAdmins.remove') }}</button></td>
         </tr>
         <tr v-if="!rows.length"><td colspan="3" class="empty-row">{{ t('components.testAdmins.none') }}</td></tr>
@@ -120,13 +116,14 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
     </div>
     <div class="field">
       <label for="test-admin-nodes">{{ t('components.testAdmins.nodes') }}</label>
-      <div class="editor"><textarea id="test-admin-nodes" v-model="nodes" name="test-admin-nodes" rows="4" autocomplete="off" spellcheck="false" :placeholder="t('components.testAdmins.nodesPlaceholder')" :disabled="luckpermsOff || kind !== 'custom'"></textarea></div>
+      <div class="editor with-clear"><textarea id="test-admin-nodes" v-model="nodes" name="test-admin-nodes" rows="4" autocomplete="off" spellcheck="false" :placeholder="t('components.testAdmins.nodesPlaceholder')" :disabled="luckpermsOff || kind !== 'custom'"></textarea>
+        <button type="button" :aria-label="t('components.testAdmins.clearNodes')" :disabled="busy || !nodes" @click="nodes = ''">{{ t('components.testAdmins.clear') }}</button></div>
     </div>
     <div class="field">
       <label for="test-admin-group">{{ t('components.testAdmins.group') }}</label>
-      <div class="editor"><input id="test-admin-group" v-model.trim="group" name="test-admin-group" autocomplete="off" spellcheck="false" maxlength="36" :disabled="luckpermsOff"></div>
+      <div class="editor with-clear"><input id="test-admin-group" v-model.trim="group" name="test-admin-group" autocomplete="off" spellcheck="false" maxlength="36" :disabled="luckpermsOff">
+        <button type="button" :aria-label="t('components.testAdmins.clearGroup')" :disabled="busy || !group" @click="group = ''">{{ t('components.testAdmins.clear') }}</button></div>
     </div>
-    <div class="actions"><button type="button" :disabled="busy || !hasLuckPermsContent" @click="clearLuckPerms">{{ t('components.testAdmins.clearLuckPerms') }}</button></div>
   </section>
   <section class="test-admins" aria-labelledby="test-admins-luckperms">
     <h3 id="test-admins-luckperms">LuckPerms</h3>
@@ -155,5 +152,8 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
 .identities td:last-child { width: 1%; white-space: nowrap; }
 .test-admins .actions { margin-block: .5rem; }
 .empty-row { color: var(--muted); }
+.with-clear { display: flex; gap: .5rem; align-items: flex-start; }
+.with-clear > textarea, .with-clear > input { flex: 1; min-width: 0; }
+.with-clear > button { flex: none; }
 .toggles { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; margin-block: .5rem; }
 </style>

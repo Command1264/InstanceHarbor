@@ -11,9 +11,9 @@ export function validMinecraftName(name: string) {
   return /^[A-Za-z0-9_]{3,16}$/.test(name)
 }
 
-/** Look a name up only while the UUID is empty or was filled in by an earlier lookup. */
-export function shouldLookup(row: { name: string; uuid: string }, autoFilled: boolean) {
-  return validMinecraftName(row.name.trim()) && (row.uuid.trim() === '' || autoFilled)
+/** The UUID field only ever holds the UUID looked up for this name; Minecraft names ignore case. */
+export function uuidBelongsTo(owner: string | undefined, name: string) {
+  return owner !== undefined && owner.trim().toLowerCase() === name.trim().toLowerCase()
 }
 
 /** One node per line; blank lines are ignored. */
@@ -48,8 +48,8 @@ export type TestAdminDraftInput = {
 }
 
 /**
- * The settings payload. Custom nodes are sent only when that choice is made.
- * Turning LuckPerms off keeps the nodes and group; only {@link clearedLuckPerms} removes them.
+ * The settings payload. Nodes typed while "all" is chosen are kept, not granted.
+ * Turning LuckPerms off keeps the nodes and group; only their clear buttons remove them.
  */
 export function testAdminPayload(input: TestAdminDraftInput) {
   return {
@@ -57,11 +57,7 @@ export function testAdminPayload(input: TestAdminDraftInput) {
     luckperms: input.luckperms,
     op: input.op,
     permissions: input.kind === 'custom' ? parseNodes(input.nodes) : null,
+    keptPermissions: input.kind === 'custom' ? [] : parseNodes(input.nodes),
     group: input.group.trim(),
   }
-}
-
-/** What the clear button resets the LuckPerms grant content to. */
-export function clearedLuckPerms(): Pick<TestAdminDraftInput, 'kind' | 'nodes' | 'group'> {
-  return { kind: 'all', nodes: '', group: '' }
 }

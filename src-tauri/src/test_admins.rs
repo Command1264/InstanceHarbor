@@ -37,6 +37,9 @@ pub(super) struct Settings {
     /// `None` grants `*`. Otherwise one node per entry; a leading `-` sets false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     permissions: Option<Vec<String>>,
+    /// Custom nodes kept while `*` is chosen, so switching back restores them. Never granted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    kept_permissions: Vec<String>,
     /// Empty puts the nodes on the user; otherwise members join this group.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     group: String,
@@ -48,7 +51,14 @@ fn enabled_by_default() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { administrators: Vec::new(), luckperms: true, op: false, permissions: None, group: String::new() }
+        Self {
+            administrators: Vec::new(),
+            luckperms: true,
+            op: false,
+            permissions: None,
+            kept_permissions: Vec::new(),
+            group: String::new(),
+        }
     }
 }
 
@@ -69,6 +79,8 @@ struct Edit {
     op: bool,
     #[serde(default)]
     permissions: Option<Vec<String>>,
+    #[serde(default)]
+    kept_permissions: Vec<String>,
     #[serde(default)]
     group: String,
     revision: String,
@@ -135,19 +147,27 @@ impl Settings {
             return Err("InvalidTestAdministratorGroup".into());
         }
         let permissions = self.permissions.map(Self::normalized_nodes).transpose()?;
-        Ok(Self { administrators: checked, luckperms: self.luckperms, op: self.op, permissions, group })
+        // Kept nodes only exist beside `*`; choosing custom nodes takes their place.
+        let kept_permissions =
+            if permissions.is_some() { Vec::new() } else { Self::unique_nodes(&self.kept_permissions)? };
+        Ok(Self { administrators: checked, luckperms: self.luckperms, op: self.op, permissions, kept_permissions, group })
     }
 
     fn normalized_nodes(raw: Vec<String>) -> Result<Vec<String>> {
+        let nodes = Self::unique_nodes(&raw)?;
+        if nodes.is_empty() {
+            return Err("EmptyTestAdministratorPermissions".into());
+        }
+        Ok(nodes)
+    }
+
+    fn unique_nodes(raw: &[String]) -> Result<Vec<String>> {
         let mut nodes: Vec<String> = Vec::with_capacity(raw.len());
         for item in raw.iter().filter(|item| !item.trim().is_empty()) {
             let node = normalized_node(item).ok_or("InvalidTestAdministratorPermission")?;
             if !nodes.contains(&node) {
                 nodes.push(node);
             }
-        }
-        if nodes.is_empty() {
-            return Err("EmptyTestAdministratorPermissions".into());
         }
         if nodes.len() > MAX_PERMISSION_NODES {
             return Err("TooManyTestAdministratorPermissions".into());
@@ -218,7 +238,8 @@ pub(super) fn load(root: &Path) -> Result<(Settings, String, bool)> {
 fn response(root: &Path, settings: &Settings, revision: String) -> Result<Value> {
     Ok(json!({
         "administrators":settings.administrators, "luckperms":settings.luckperms, "op":settings.op,
-        "permissions":settings.permissions, "group":settings.group, "revision":revision,
+        "permissions":settings.permissions, "keptPermissions":settings.kept_permissions,
+        "group":settings.group, "revision":revision,
         "artifacts":artifacts(root)?,
     }))
 }
@@ -233,6 +254,7 @@ fn store(root: &Path, raw: &str) -> Result<Value> {
         luckperms: edit.luckperms,
         op: edit.op,
         permissions: edit.permissions,
+        kept_permissions: edit.kept_permissions,
         group: edit.group,
     }
     .normalized()?;
@@ -738,6 +760,18 @@ pub(super) mod tests {
         let kept = off(" staff ", Some(vec!["essentials.fly".into()])).unwrap();
         assert_eq!((kept.group.as_str(), kept.permissions), ("staff", Some(vec!["essentials.fly".into()])));
         assert_eq!(off("default", None).unwrap_err(), "InvalidTestAdministratorGroup");
+        // Nodes kept beside `*` survive a save but are never granted.
+        let all = Settings { kept_permissions: vec!["a.b".into(), "a.b".into(), " ".into()], ..Settings::default() }
+            .normalized()
+            .unwrap();
+        assert_eq!((all.permissions.clone(), all.kept_permissions.clone()), (None, vec!["a.b".to_owned()]));
+        assert_eq!(all.permission_entries(), vec![json!({"permission":"*","value":true})]);
+        let custom = Settings { permissions: Some(vec!["c.d".into()]), kept_permissions: vec!["a.b".into()], ..all }
+            .normalized()
+            .unwrap();
+        assert!(custom.kept_permissions.is_empty());
+        let bad = Settings { kept_permissions: vec!["Bad".into()], ..Settings::default() }.normalized();
+        assert_eq!(bad.unwrap_err(), "InvalidTestAdministratorPermission");
         assert_eq!(off("", Some(vec![])).unwrap_err(), "EmptyTestAdministratorPermissions");
     }
 

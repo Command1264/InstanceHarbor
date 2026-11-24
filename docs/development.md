@@ -273,9 +273,11 @@ Spigot 使用 [官方 BuildTools](https://www.spigotmc.org/wiki/buildtools/) 在
 
 「應用程式設定 → 測試管理員」可設定最多 10 位測試管理員（Minecraft 名稱與 UUID）。設定只存在
 工作區的 `test-administrators.json`，不進 repository。輸入 Minecraft 名稱後，應用程式會向 Mojang
-查詢線上 UUID 並填入，同時改用 Mojang 回傳的名稱大小寫；UUID 欄位仍可自行編輯，手動輸入或已儲存的
-UUID 不會被覆寫。查詢只在名稱符合 3 到 16 個英數字或底線時送出一次，逾時 8 秒，不重試；管理員動詞為
-`test-admin-lookup <名稱>`，找不到、網路失敗與被限流各有不同的錯誤訊息。
+查詢線上 UUID 並填入，同時改用 Mojang 回傳的名稱大小寫。UUID 欄位唯讀但不變暗，只顯示名稱查到的
+UUID；改成另一個名稱（不分大小寫）時清空並重新查詢，已儲存的 UUID 屬於已儲存的名稱。新建實例使用
+`online-mode=true`，所以 Mojang 的 UUID 就是伺服器使用的 UUID。查詢只在名稱符合 3 到 16 個英數字
+或底線時送出，逾時 8 秒；失敗後離開名稱欄會再查一次。管理員動詞為 `test-admin-lookup <名稱>`，
+找不到、網路失敗與被限流各有不同的錯誤訊息。
 
 「LuckPerms 權限」與「OP」是兩個獨立的開關，可任意組合；兩個都關閉，或清單留空，都表示停用，
 新建實例不授權也不安裝 LuckPerms。舊的設定檔只有 `administrators` 與 `group`，載入時視為
@@ -285,6 +287,8 @@ LuckPerms 開、授予所有權限、OP 關。
   `a-z`、`0-9` 與 `._*-`，開頭的 `-` 表示該節點設為 `false`，每個節點最長 200 字元、最多 50 個，
   選自訂卻沒有節點會被拒絕。群組名稱選填：留空時節點直接寫在使用者上；填寫時節點寫在該群組，
   成員加入 `group.<名稱>`。群組不可為 `default`，避免所有玩家都得到全部權限。
+  關閉「LuckPerms 權限」或改選「所有權限」時，節點與群組會保留但不套用；只有按各欄旁的「清除」
+  才會清空（欄位有內容時才能按）。
 - **OP**：建立實例時寫入 `ops.json`（`uuid`、`name`、`level` 為 4、`bypassesPlayerLimit` 為 `false`），
   使用同一份管理員清單。關閉時不寫 `ops.json`，由伺服器自行建立空的清單。OP 與 LuckPerms
   無關，只開 OP 時不需要也不會安裝 LuckPerms。Velocity 代理沒有 OP，只開 OP 會停止建立並說明原因。
