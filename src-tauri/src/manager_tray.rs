@@ -32,8 +32,9 @@ const REFRESH: Duration = Duration::from_secs(5);
 pub(super) enum ExitCheck {
     /// Batch or core-update work would be cut off: refuse.
     Busy,
-    /// This many running servers rely on the Manager for automatic restart: ask first.
-    AutoRestart(u32),
+    /// Servers not known to be stopped, and how many of them rely on the Manager for
+    /// automatic restart: ask first. `None` means their states could not be read.
+    Confirm(Option<(u32, u32)>),
     Clear,
 }
 
@@ -109,22 +110,41 @@ pub(super) fn active_work_message(chinese: bool) -> &'static str {
     }
 }
 
-/// Asked before Quit while servers that restart automatically are running: the Manager
-/// performs those restarts, so they pause until it starts again.
-pub(super) fn exit_confirmation(count: u32, chinese: bool) -> String {
+/// Asked before Quit while any server is not known to be stopped (starting, running or
+/// undecided). Automatic restart is performed by the Manager, so it pauses until the
+/// Manager starts again. `None`: the states could not be read, so ask as well.
+pub(super) fn exit_confirmation(servers: Option<(u32, u32)>, chinese: bool) -> String {
+    let body = match (servers, chinese) {
+        (None, true) => "無法確認伺服器狀態，可能還有伺服器在執行。".to_string(),
+        (None, false) => "Server states could not be checked, so some may still be running.".to_string(),
+        (Some((count, guarded)), true) => {
+            let mut text = format!("還有 {count} 台伺服器沒有停止（包含啟動中或狀態未定）。");
+            if guarded > 0 {
+                text.push_str(&format!(
+                    "\n\n其中 {guarded} 台開啟了自動重啟：當機或意外結束時不會自動重啟，要等下次開啟 InstanceHarbor 才會恢復。"
+                ));
+            }
+            text
+        }
+        (Some((count, guarded)), false) => {
+            let mut text = if count == 1 {
+                "1 server is not stopped (including starting or undecided).".to_string()
+            } else {
+                format!("{count} servers are not stopped (including starting or undecided).")
+            };
+            if guarded > 0 {
+                let has = if guarded == 1 { "has" } else { "have" };
+                text.push_str(&format!(
+                    "\n\n{guarded} of them {has} automatic restart on: a crash or unexpected exit will not restart them until InstanceHarbor opens again."
+                ));
+            }
+            text
+        }
+    };
     if chinese {
-        format!(
-            "有 {count} 台開啟自動重啟的伺服器正在執行。\n\n結束後伺服器會繼續執行，但當機或意外結束時不會自動重啟，要等下次開啟 InstanceHarbor 才會恢復。\n\n仍要結束嗎？"
-        )
+        format!("{body}\n\n結束後伺服器會繼續執行，只會關閉 GUI 與系統匣圖示。\n\n仍要結束嗎？")
     } else {
-        let servers = if count == 1 {
-            "1 running server has".to_string()
-        } else {
-            format!("{count} running servers have")
-        };
-        format!(
-            "{servers} automatic restart turned on.\n\nServers keep running after you quit, but a crash or unexpected exit will not restart them until InstanceHarbor opens again.\n\nQuit anyway?"
-        )
+        format!("{body}\n\nServers keep running after you quit; only the GUI and the tray icon close.\n\nQuit anyway?")
     }
 }
 
@@ -132,7 +152,7 @@ pub(super) fn exit_confirmation(count: u32, chinese: bool) -> String {
 fn handle_quit(hooks: &Hooks, chinese: bool) {
     let confirmed = match (hooks.check_exit)() {
         Ok(ExitCheck::Busy) => return message_box(active_work_message(chinese), false),
-        Ok(ExitCheck::AutoRestart(count)) => confirm(&exit_confirmation(count, chinese)),
+        Ok(ExitCheck::Confirm(servers)) => confirm(&exit_confirmation(servers, chinese)),
         Ok(ExitCheck::Clear) => true,
         Err(error) => return message_box(&error, true),
     };
@@ -354,12 +374,20 @@ mod tests {
     }
 
     #[test]
-    fn quit_confirmation_names_the_auto_restart_servers_it_affects() {
-        let chinese = exit_confirmation(2, true);
-        assert!(chinese.contains("2 台") && chinese.contains("自動重啟") && chinese.contains("仍要結束"));
-        assert!(exit_confirmation(1, false).contains("1 running server has"));
-        let english = exit_confirmation(3, false);
-        assert!(english.contains("3 running servers have") && english.contains("Quit anyway?"));
+    fn quit_confirmation_counts_servers_not_stopped_and_explains_auto_restart() {
+        let plain = exit_confirmation(Some((2, 0)), true);
+        assert!(plain.contains("2 台伺服器沒有停止") && plain.contains("仍要結束") && !plain.contains("自動重啟"));
+        let guarded = exit_confirmation(Some((3, 1)), true);
+        assert!(guarded.contains("3 台") && guarded.contains("其中 1 台開啟了自動重啟"));
+        assert!(exit_confirmation(Some((1, 0)), false).starts_with("1 server is not stopped"));
+        let english = exit_confirmation(Some((3, 2)), false);
+        assert!(english.contains("3 servers are not stopped") && english.contains("2 of them") && english.contains("Quit anyway?"));
+    }
+
+    #[test]
+    fn quit_confirmation_when_server_states_cannot_be_read() {
+        assert!(exit_confirmation(None, true).contains("無法確認伺服器狀態"));
+        assert!(exit_confirmation(None, false).contains("could not be checked"));
     }
 
     #[test]

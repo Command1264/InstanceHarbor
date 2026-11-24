@@ -38,7 +38,8 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗。伺服器與 Host 是獨立程序，會繼續執行。
   還有批次工作或核心更新在進行時，Manager 不結束，改為跳出說明，請等工作完成後再結束；這與 `manager-exit` 回報
   `ManagerHasActiveWork` 的條件相同。
-  有開啟自動重啟的伺服器正在執行時，會先跳出確認（預設為「否」）：自動重啟由 Manager 執行，
+  只要有伺服器不是「已停止」（包含啟動中、工作階段未定，或狀態讀不到），會先跳出確認（預設為「否」）。
+  其中開啟自動重啟的伺服器會另外說明：自動重啟由 Manager 執行，
   結束後這些伺服器當機或意外結束不會自動重啟，要等 Manager 下次啟動才恢復。按「是」後會再核對一次批次工作。
   CLI 的 `manager-exit` 不詢問，只套用批次工作的條件。
 - 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。

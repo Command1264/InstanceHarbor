@@ -276,23 +276,25 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
     Err("ManagerUnavailable".into())
 }
 
-/// Rows the list shows as running: the same rule as the GUI's `canStop`.
-fn running_rows(snapshot: &Value) -> impl Iterator<Item = &Value> {
-    snapshot["rows"].as_array().into_iter().flatten()
-        .filter(|row| !row["run"].is_null() && matches!(row["state"].as_str(), Some("Listening" | "Starting")))
-}
-
+/// Servers the list shows as running: the same rule as the GUI's `canStop`.
 fn running_servers(snapshot: &Value) -> u32 {
-    running_rows(snapshot).count() as u32
+    snapshot["rows"].as_array().map_or(0, |rows| {
+        rows.iter()
+            .filter(|row| !row["run"].is_null() && matches!(row["state"].as_str(), Some("Listening" | "Starting")))
+            .count() as u32
+    })
 }
 
-/// Running servers whose automatic restart the Manager performs. `auto_restart` says
-/// whether the named instance has a usable, enabled policy.
-fn auto_restart_servers(snapshot: &Value, auto_restart: impl Fn(&str) -> bool) -> u32 {
-    running_rows(snapshot)
-        .filter_map(|row| row["name"].as_str())
-        .filter(|name| auto_restart(name))
-        .count() as u32
+/// What tray Quit asks about: every server not confirmed `Stopped` (starting, running,
+/// undecided or unreadable), and how many of those rely on the Manager's automatic restart.
+fn servers_not_stopped(snapshot: &Value, auto_restart: impl Fn(&str) -> bool) -> (u32, u32) {
+    let rows = snapshot["rows"].as_array().map(Vec::as_slice).unwrap_or_default();
+    rows.iter()
+        .filter(|row| row["state"].as_str() != Some("Stopped"))
+        .fold((0, 0), |(count, guarded), row| {
+            let restarts = row["name"].as_str().is_some_and(&auto_restart);
+            (count + 1, guarded + u32::from(restarts))
+        })
 }
 
 #[cfg_attr(test, allow(dead_code))]
@@ -1390,10 +1392,13 @@ pub(super) fn run(root: &Path) -> Result<Value> {
                     if active_work(&*check_state.lock().map_err(fail)?) {
                         return Ok(manager_tray::ExitCheck::Busy);
                     }
-                    let snapshot = instance_snapshot::read(&check_root, false)?;
-                    Ok(match auto_restart_servers(&snapshot, |name| restarts_automatically(&check_root, name)) {
-                        0 => manager_tray::ExitCheck::Clear,
-                        count => manager_tray::ExitCheck::AutoRestart(count),
+                    // Unreadable states are treated as possibly running: ask instead of quitting.
+                    let Ok(snapshot) = instance_snapshot::read(&check_root, false) else {
+                        return Ok(manager_tray::ExitCheck::Confirm(None));
+                    };
+                    Ok(match servers_not_stopped(&snapshot, |name| restarts_automatically(&check_root, name)) {
+                        (0, _) => manager_tray::ExitCheck::Clear,
+                        servers => manager_tray::ExitCheck::Confirm(Some(servers)),
                     })
                 }),
                 request_exit: Box::new(move || {
@@ -1543,7 +1548,7 @@ mod start_rejection_tests {
 
 #[cfg(test)]
 mod tray_count_tests {
-    use super::{auto_restart_servers, running_servers};
+    use super::{running_servers, servers_not_stopped};
     use serde_json::json;
 
     #[test]
@@ -1559,15 +1564,19 @@ mod tray_count_tests {
     }
 
     #[test]
-    fn quit_confirms_only_for_running_servers_with_auto_restart() {
+    fn quit_counts_every_server_not_known_to_be_stopped() {
+        // Anything short of a confirmed stop counts, including a run still being decided.
         let snapshot = json!({"rows":[
             {"name":"guarded","state":"Listening","run":{"id":"a"}},
-            {"name":"plain","state":"Listening","run":{"id":"b"}},
-            {"name":"starting","state":"Starting","run":{"id":"c"}},
+            {"name":"launching","state":"Starting","run":null},
+            {"name":"undecided","state":"RunUnconfirmed","run":null},
+            {"name":"occupied","state":"PortOccupied","run":null},
+            {"name":"unreadable"},
             {"name":"stopped","state":"Stopped","run":{"id":"d"}},
         ]});
-        let policy = |name: &str| name != "plain";
-        assert_eq!(auto_restart_servers(&snapshot, policy), 2);
-        assert_eq!(auto_restart_servers(&snapshot, |_| false), 0);
+        let policy = |name: &str| matches!(name, "guarded" | "undecided" | "stopped");
+        assert_eq!(servers_not_stopped(&snapshot, policy), (5, 2));
+        assert_eq!(servers_not_stopped(&json!({"rows":[{"state":"Stopped"}]}), |_| true), (0, 0));
+        assert_eq!(servers_not_stopped(&json!({}), |_| true), (0, 0));
     }
 }
