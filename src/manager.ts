@@ -23,7 +23,7 @@ export interface Instance {
 }
 export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean }
 export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity; managementDiscovered?: boolean }
-export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean; closeToTray?: boolean }
+export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }
 export interface RegistryIssue { file: string; reason: 'FileInUse' | 'AccessDenied' | 'InvalidRecord' | 'Unconfirmed' | 'ObservationUnconfirmed'; osError: number | null }
 export interface InstanceSnapshot extends Omit<Presentation, 'preferences'> { rows: Instance[]; issues: RegistryIssue[] }

@@ -69,6 +69,8 @@ mod presentation;
 mod recovery_keys;
 #[path = "resident_manager.rs"]
 mod resident_manager;
+#[path = "manager_tray.rs"]
+mod manager_tray;
 #[path = "server_removal.rs"]
 mod server_removal;
 #[path = "scan_policy.rs"]
@@ -2584,11 +2586,6 @@ pub fn dispatch(arguments: &[String]) -> Result<Value> {
     dispatch_with_creation_progress(arguments, &|_| {})
 }
 
-/// Whether closing the main window should keep the GUI in the notification area.
-pub fn close_to_tray(workspace: &Path) -> Result<bool> {
-    crate::desktop_channel::validate_workspace(workspace, false)?;
-    presentation::close_to_tray_enabled(workspace)
-}
 
 pub fn dispatch_with_creation_progress(
     arguments: &[String],
@@ -2774,6 +2771,7 @@ pub fn dispatch_with_creation_progress(
             | "manager-exit"
             | "console-open"
             | "host-recover"
+            | "gui-attach"
     ) {
         return resident_manager::client(&root, verb, args);
     }

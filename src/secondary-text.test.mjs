@@ -7,7 +7,6 @@ import { test } from 'node:test'
 // Always-visible hint and notice lines must be listed below on purpose.
 const ALLOWED_ALWAYS_VISIBLE = [
   "InstancesPage.vue: {{ t('instances.selectHint') }}",
-  "SettingsPage.vue: {{ t('appearance.closeToTrayHelp') }}",
   "SettingsPage.vue: {{ t('settings.javaCheckHelp') }}",
   "SettingsPage.vue: {{ t('settings.restartScheduleHelp') }}",
   "SettingsPage.vue: {{ t('settingsPage.jvmFlagsHelp') }}",
