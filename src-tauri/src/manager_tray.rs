@@ -27,9 +27,20 @@ const ICON_RESOURCE: u16 = 32512;
 #[cfg(not(test))]
 const REFRESH: Duration = Duration::from_secs(5);
 
+/// Whether Quit may end the Manager right away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExitCheck {
+    /// Batch or core-update work would be cut off: refuse.
+    Busy,
+    /// This many running servers rely on the Manager for automatic restart: ask first.
+    AutoRestart(u32),
+    Clear,
+}
+
 /// What the tray asks of the Manager it belongs to.
 pub(super) struct Hooks {
     pub running: Box<dyn Fn() -> Result<u32> + Send>,
+    pub check_exit: Box<dyn Fn() -> Result<ExitCheck> + Send>,
     /// `Ok(true)` once the Manager will exit; `Ok(false)` while work blocks it.
     pub request_exit: Box<dyn Fn() -> Result<bool> + Send>,
     pub exiting: Box<dyn Fn() -> bool + Send>,
@@ -98,6 +109,44 @@ pub(super) fn active_work_message(chinese: bool) -> &'static str {
     }
 }
 
+/// Asked before Quit while servers that restart automatically are running: the Manager
+/// performs those restarts, so they pause until it starts again.
+pub(super) fn exit_confirmation(count: u32, chinese: bool) -> String {
+    if chinese {
+        format!(
+            "有 {count} 台開啟自動重啟的伺服器正在執行。\n\n結束後伺服器會繼續執行，但當機或意外結束時不會自動重啟，要等下次開啟 InstanceHarbor 才會恢復。\n\n仍要結束嗎？"
+        )
+    } else {
+        let servers = if count == 1 {
+            "1 running server has".to_string()
+        } else {
+            format!("{count} running servers have")
+        };
+        format!(
+            "{servers} automatic restart turned on.\n\nServers keep running after you quit, but a crash or unexpected exit will not restart them until InstanceHarbor opens again.\n\nQuit anyway?"
+        )
+    }
+}
+
+#[cfg(not(test))]
+fn handle_quit(hooks: &Hooks, chinese: bool) {
+    let confirmed = match (hooks.check_exit)() {
+        Ok(ExitCheck::Busy) => return message_box(active_work_message(chinese), false),
+        Ok(ExitCheck::AutoRestart(count)) => confirm(&exit_confirmation(count, chinese)),
+        Ok(ExitCheck::Clear) => true,
+        Err(error) => return message_box(&error, true),
+    };
+    if !confirmed {
+        return;
+    }
+    // Checked again: work may have started while the question was open.
+    match (hooks.request_exit)() {
+        Ok(true) => {}
+        Ok(false) => message_box(active_work_message(chinese), false),
+        Err(error) => message_box(&error, true),
+    }
+}
+
 #[cfg(not(test))]
 fn workspace_label(root: &Path) -> Option<String> {
     // The development channel uses many workspaces; name each one.
@@ -157,11 +206,7 @@ fn run(root: &Path, gui: &Path, hooks: &Hooks, stop: &AtomicBool) -> Result<()> 
         while let Ok(event) = menus.try_recv() {
             match event.id().as_ref() {
                 OPEN_ID => open_gui(root, gui, chinese),
-                QUIT_ID => match (hooks.request_exit)() {
-                    Ok(true) => {}
-                    Ok(false) => message_box(active_work_message(chinese), false),
-                    Err(error) => message_box(&error, true),
-                },
+                QUIT_ID => handle_quit(hooks, presentation::chinese_ui(root)),
                 _ => {}
             }
         }
@@ -216,6 +261,17 @@ fn message_box(text: &str, error: bool) {
     unsafe {
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), flags);
     }
+}
+
+#[cfg(not(test))]
+/// A Yes/No warning whose default answer is No.
+fn confirm(text: &str) -> bool {
+    let text: Vec<u16> = text.encode_utf16().chain([0]).collect();
+    let caption: Vec<u16> = crate::desktop_channel::TITLE.encode_utf16().chain([0]).collect();
+    // MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST
+    let flags = 0x0004 | 0x0030 | 0x0100 | 0x0001_0000 | 0x0004_0000;
+    // IDYES
+    unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), flags) == 6 }
 }
 
 #[cfg(not(test))]
@@ -295,6 +351,15 @@ mod tests {
         assert_eq!(labels(false).quit, "Quit");
         assert!(active_work_message(true).contains("繼續執行"));
         assert!(active_work_message(false).contains("keep running"));
+    }
+
+    #[test]
+    fn quit_confirmation_names_the_auto_restart_servers_it_affects() {
+        let chinese = exit_confirmation(2, true);
+        assert!(chinese.contains("2 台") && chinese.contains("自動重啟") && chinese.contains("仍要結束"));
+        assert!(exit_confirmation(1, false).contains("1 running server has"));
+        let english = exit_confirmation(3, false);
+        assert!(english.contains("3 running servers have") && english.contains("Quit anyway?"));
     }
 
     #[test]

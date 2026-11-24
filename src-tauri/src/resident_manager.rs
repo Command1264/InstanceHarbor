@@ -276,13 +276,31 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
     Err("ManagerUnavailable".into())
 }
 
-/// Servers the list shows as running: the same rule as the GUI's `canStop`.
+/// Rows the list shows as running: the same rule as the GUI's `canStop`.
+fn running_rows(snapshot: &Value) -> impl Iterator<Item = &Value> {
+    snapshot["rows"].as_array().into_iter().flatten()
+        .filter(|row| !row["run"].is_null() && matches!(row["state"].as_str(), Some("Listening" | "Starting")))
+}
+
 fn running_servers(snapshot: &Value) -> u32 {
-    snapshot["rows"].as_array().map_or(0, |rows| {
-        rows.iter()
-            .filter(|row| !row["run"].is_null() && matches!(row["state"].as_str(), Some("Listening" | "Starting")))
-            .count() as u32
-    })
+    running_rows(snapshot).count() as u32
+}
+
+/// Running servers whose automatic restart the Manager performs. `auto_restart` says
+/// whether the named instance has a usable, enabled policy.
+fn auto_restart_servers(snapshot: &Value, auto_restart: impl Fn(&str) -> bool) -> u32 {
+    running_rows(snapshot)
+        .filter_map(|row| row["name"].as_str())
+        .filter(|name| auto_restart(name))
+        .count() as u32
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn restarts_automatically(root: &Path, name: &str) -> bool {
+    token(name)
+        && instance(root, name).is_ok_and(|config| {
+            !config.removed && config.auto_restart.as_ref().is_some_and(|policy| policy.valid() && policy.enabled())
+        })
 }
 
 fn batch_path(directory: &Path, id: &str) -> PathBuf {
@@ -1358,7 +1376,8 @@ pub(super) fn run(root: &Path) -> Result<Value> {
     // Dropped on every return below, which removes the icon before the process ends.
     #[cfg(not(test))]
     let _tray = {
-        let (count_root, exit_state, exiting_state) = (root.to_path_buf(), Arc::clone(&state), Arc::clone(&state));
+        let (count_root, check_root) = (root.to_path_buf(), root.to_path_buf());
+        let (check_state, exit_state, exiting_state) = (Arc::clone(&state), Arc::clone(&state), Arc::clone(&state));
         manager_tray::start(
             root,
             exe.with_file_name(crate::desktop_channel::GUI_EXECUTABLE),
@@ -1366,6 +1385,16 @@ pub(super) fn run(root: &Path) -> Result<Value> {
                 running: Box::new(move || {
                     let snapshot = instance_snapshot::read(&count_root, false)?;
                     Ok(running_servers(&snapshot))
+                }),
+                check_exit: Box::new(move || {
+                    if active_work(&*check_state.lock().map_err(fail)?) {
+                        return Ok(manager_tray::ExitCheck::Busy);
+                    }
+                    let snapshot = instance_snapshot::read(&check_root, false)?;
+                    Ok(match auto_restart_servers(&snapshot, |name| restarts_automatically(&check_root, name)) {
+                        0 => manager_tray::ExitCheck::Clear,
+                        count => manager_tray::ExitCheck::AutoRestart(count),
+                    })
                 }),
                 request_exit: Box::new(move || {
                     let mut state = exit_state.lock().map_err(fail)?;
@@ -1514,7 +1543,7 @@ mod start_rejection_tests {
 
 #[cfg(test)]
 mod tray_count_tests {
-    use super::running_servers;
+    use super::{auto_restart_servers, running_servers};
     use serde_json::json;
 
     #[test]
@@ -1527,5 +1556,18 @@ mod tray_count_tests {
         ]});
         assert_eq!(running_servers(&snapshot), 2);
         assert_eq!(running_servers(&json!({})), 0);
+    }
+
+    #[test]
+    fn quit_confirms_only_for_running_servers_with_auto_restart() {
+        let snapshot = json!({"rows":[
+            {"name":"guarded","state":"Listening","run":{"id":"a"}},
+            {"name":"plain","state":"Listening","run":{"id":"b"}},
+            {"name":"starting","state":"Starting","run":{"id":"c"}},
+            {"name":"stopped","state":"Stopped","run":{"id":"d"}},
+        ]});
+        let policy = |name: &str| name != "plain";
+        assert_eq!(auto_restart_servers(&snapshot, policy), 2);
+        assert_eq!(auto_restart_servers(&snapshot, |_| false), 0);
     }
 }
