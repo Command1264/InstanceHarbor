@@ -11,6 +11,8 @@ mod system_accent;
 mod webview_runtime;
 mod startup_prefetch;
 mod startup_timing;
+#[cfg(windows)]
+mod exit_watchdog;
 mod window_placement;
 #[cfg(windows)]
 use instanceharbor::desktop_channel;
@@ -506,6 +508,11 @@ fn attach_to_manager() {
     let pid = std::process::id().to_string();
     let mut last_error: Option<String> = None;
     loop {
+        // A closing GUI must not start the Manager again: the user may have just quit it.
+        if exit_watchdog::closing() {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            continue;
+        }
         match instanceharbor::dispatch(&[root.clone(), "gui-attach".into(), pid.clone()]) {
             Ok(_) => last_error = None,
             // A Manager that is quitting is about to close this GUI.
@@ -677,6 +684,15 @@ fn main() {
                 if let Err(error) = window_placement::fit_window(&window, size, min_size) {
                     eprintln!("Could not fit the main window to the work area: {error}");
                 }
+                match window.hwnd() {
+                    Ok(handle) => exit_watchdog::watch(handle.0 as isize),
+                    Err(error) => eprintln!("GUI exit watchdog cannot see the main window: {error}"),
+                }
+                window.on_window_event(|event| {
+                    if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                        exit_watchdog::arm();
+                    }
+                });
             }
             // The Manager owns the notification-area icon; attaching starts it if needed.
             #[cfg(windows)]
@@ -691,11 +707,23 @@ fn main() {
     startup_timing::mark("app-built");
     match application {
         Ok(app) => app.run(|_, event| {
+            #[cfg(windows)]
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                exit_watchdog::arm();
+            }
             // Tauri exits the process after this callback; code after run is not
             // a reliable place to record a normal Windows GUI shutdown.
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Ok(log) = diagnostics::global() {
                     diagnostic_write(log.runtime_result(&Ok(())));
+                }
+                // Development builds only: stay alive with no window, as the stuck GUI
+                // did, so the exit watchdog can be verified.
+                #[cfg(feature = "development-channel")]
+                if std::env::var_os("IH_DEV_HANG_ON_EXIT").is_some() {
+                    loop {
+                        std::thread::park();
+                    }
                 }
             }
         }),
