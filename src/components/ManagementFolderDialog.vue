@@ -281,7 +281,7 @@ defineExpose({ open })
 .management-folder-dialog { width: min(760px, calc(100vw - 36px)); overflow: hidden; }
 .management-folder-dialog[open] { display: flex; flex-direction: column; }
 .management-folder-scroll { min-height: 0; }
-.management-folder-scroll :deep(.overlay-viewport) { padding: 4px 14px 8px 4px; }
+.management-folder-scroll :deep(.overlay-viewport) { padding: calc(4px + var(--focus-ring-extent)) 14px 8px calc(4px + var(--focus-ring-extent)); }
 .management-folder-source { margin: 0; }
 .management-folder-source dd { margin: 0; overflow-wrap: anywhere; }
 label { display: grid; gap: 4px; min-width: 0; font-size: .875rem; }

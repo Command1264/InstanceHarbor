@@ -45,6 +45,13 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - `src/hardcoded-text.test.mjs` 會在 `.vue`、`.ts` 出現寫死的中文時失敗。資料用途的中文（語言名稱、後端送來的分類 ID）列在測試的允許清單。開發者用的 `console` 訊息使用英文。
 - 「初始化預設」與世界設定的欄位資料由後端 `policy_catalog.rs` 提供。後端回傳的中文 `label`、`reason`、`source` 保持不變，另附 `reasonCode`、`sourceKind`、`sourceKey`；前端依欄位 key 與這些代碼翻譯（`src/messages/policy.ts`）。新增欄位或原因時，`policy-catalog.test.mjs` 會要求補上翻譯，且中文必須與後端一致。
 
+## 焦點框與捲動區
+
+- 焦點框的寬度與外擴距離由 `src/app.css` 的 `--focus-ring-width`、`--focus-ring-offset` 定義，合計為 `--focus-ring-extent`。
+- 對話框裡的 `OverlayScroll` 捲動區在上緣與左緣保留 `--focus-ring-extent` 的內距，並以相同的負外距抵銷，內容位置與寬度不變；右緣與下緣原本的內距已大於焦點框外擴量。
+- 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。
+- `OverlayScroll` 的捲動區只在內容需要捲動時才能用 Tab 選到，讓鍵盤可以捲動；不需要捲動時，Tab 直接跳到裡面的控制項，不會停在整個容器上。
+
 ## Windows 檔案存取與部分清單
 
 - `ihctl WORKSPACE list` 保留 JSON 陣列，個別登記無法讀取時會把原因寫到標準錯誤。
