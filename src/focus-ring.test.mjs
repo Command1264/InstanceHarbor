@@ -118,3 +118,11 @@ test('no overlay viewport override shrinks an edge below the focus ring extent',
   }
   assert.ok(checked > 0, 'expected overlay viewport padding rules to check')
 })
+
+test('scroll viewport is a tab stop only while it can scroll', () => {
+  const viewport = overlay.match(/<div[^>]*class="overlay-viewport"[^>]*>/)
+  assert.ok(viewport, 'OverlayScroll must render an overlay-viewport')
+  assert.doesNotMatch(viewport[0], /\stabindex="0"/, 'a fixed tabindex makes every non-scrolling area a tab stop')
+  assert.match(viewport[0], /:tabindex="scrollable \? 0 : undefined"/)
+  assert.match(overlay, /const scrollable = computed\(\(\) => needed\.value \|\| maximumX\.value > 1\)/)
+})

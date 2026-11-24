@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
 import { useAppLanguage } from '../i18n'
 
 const props = defineProps<{ label: string }>()
@@ -18,6 +18,8 @@ const maximumX = ref(0)
 const currentX = ref(0)
 const thumbWidth = ref(28)
 const thumbLeft = ref(0)
+// Keyboard users need a tab stop only when there is something to scroll.
+const scrollable = computed(() => needed.value || maximumX.value > 1)
 let observer: ResizeObserver | undefined
 // Lets a parent keep a live view pinned to its end across content updates.
 defineExpose({ viewport })
@@ -110,7 +112,7 @@ onUnmounted(() => {
 
 <template>
   <div class="scroll-shell">
-    <div :id="viewportId" ref="viewport" class="overlay-viewport" tabindex="0" :aria-label="props.label" @scroll.passive="update">
+    <div :id="viewportId" ref="viewport" class="overlay-viewport" :tabindex="scrollable ? 0 : undefined" :aria-label="props.label" @scroll.passive="update">
       <div ref="inner" class="overlay-inner"><slot /></div>
     </div>
     <div v-if="maximumX > 1" ref="horizontalTrack" class="overlay-track horizontal-track" role="scrollbar" tabindex="0"
