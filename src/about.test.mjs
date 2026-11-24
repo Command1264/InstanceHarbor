@@ -38,3 +38,10 @@ test('ihctl --version keeps the prefix launch-development.ps1 matches', () => {
   assert.match(read('../launch-development.ps1'), /-notlike 'InstanceHarbor Dev CLI \*'/)
   assert.match(read('../src-tauri/src/about.rs'), /format!\("\{title\} CLI \{VERSION\} \(\{COMMIT\}\)"\)/)
 })
+
+test('the About tab has no save or restore buttons', () => {
+  const page = read('./SettingsPage.vue')
+  const footer = page.match(/<div[^>]*class="settings-footer"[^>]*>/)
+  assert.ok(footer, 'SettingsPage must render the settings footer')
+  assert.match(footer[0], /v-if="tab!=='about'"/)
+})
