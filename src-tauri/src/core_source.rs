@@ -144,11 +144,28 @@ fn system_curl() -> Result<PathBuf> {
 }
 
 fn fetch_json(url: &str, user_agent: &str) -> Result<Value> {
-    let mut child = Command::new(system_curl()?)
-        // --disable has to be first to prevent loading a user's curl config.
+    let (code, body) = fetch_status(url, user_agent, true)?;
+    if code != 200 {
+        return Err("CoreSourceHttpError".into());
+    }
+    serde_json::from_slice(&body).map_err(|_| "CoreSourceInvalidJson".into())
+}
+
+/// One public JSON lookup that reports the HTTP status instead of failing on
+/// it, so the caller can tell "not found" from "rate limited". No retries.
+pub(super) fn fetch_profile(url: &str) -> Result<(u16, Vec<u8>)> {
+    fetch_status(url, &configured_paper_user_agent()?, false)
+}
+
+fn fetch_status(url: &str, user_agent: &str, fail_on_http: bool) -> Result<(u16, Vec<u8>)> {
+    let mut command = Command::new(system_curl()?);
+    // --disable has to be first to prevent loading a user's curl config.
+    command.arg("--disable");
+    if fail_on_http {
+        command.arg("--fail");
+    }
+    let mut child = command
         .args([
-            "--disable",
-            "--fail",
             "--silent",
             "--globoff",
             "--proto",
@@ -205,8 +222,13 @@ fn fetch_json(url: &str, user_agent: &str) -> Result<Value> {
         }
         .into());
     }
-    let body = body.strip_suffix(b"\n200").ok_or("CoreSourceHttpError")?;
-    serde_json::from_slice(body).map_err(|_| "CoreSourceInvalidJson".into())
+    let split = body.iter().rposition(|&byte| byte == b'\n').ok_or("CoreSourceHttpError")?;
+    let code = std::str::from_utf8(&body[split + 1..])
+        .ok()
+        .and_then(|text| text.parse::<u16>().ok())
+        .ok_or("CoreSourceHttpError")?;
+    body.truncate(split);
+    Ok((code, body))
 }
 
 fn sha256(text: &str) -> bool {

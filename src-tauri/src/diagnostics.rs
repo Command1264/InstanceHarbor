@@ -379,6 +379,7 @@ pub fn safe_action(action: &str) -> &str {
         | "test-admin-settings"
         | "save-test-admin-settings"
         | "test-admin-fetch-luckperms"
+        | "test-admin-lookup"
         | "validate-scan-policy"
         | "preview-management-scope"
         | "save-management-scope"

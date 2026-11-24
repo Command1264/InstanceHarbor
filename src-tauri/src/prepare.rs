@@ -198,7 +198,7 @@ impl Request {
         test_permissions::stage(stage, &assets.permission)?;
         if let Some(administrators) = &assets.administrators {
             // Every permission JAR this path accepts is a Bukkit build.
-            test_admins::seed(stage, test_admins::Platform::Bukkit, administrators)?;
+            test_admins::seed_prepared(stage, administrators)?;
         }
         if let Some((source, expected)) = &assets.plugin {
             let path = stage.join("plugins").join("project-plugin.jar");

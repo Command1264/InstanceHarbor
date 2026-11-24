@@ -4,28 +4,52 @@
 //! The identities live only in the workspace's `test-administrators.json`.
 //! Creation reads the cache and never downloads; only the explicit fetch
 //! action downloads, and only the pinned files from the policy's sources.
+//! The one other network call is the Mojang profile lookup that turns a typed
+//! name into its online UUID.
 use super::*;
 
 const SETTINGS_FILE: &str = "test-administrators.json";
 const MAX_SETTINGS_BYTES: usize = 8192;
 pub(super) const MAX_ADMINISTRATORS: usize = 10;
+const MAX_PERMISSION_NODES: usize = 50;
+const MAX_PERMISSION_NODE_LENGTH: usize = 200;
 const POLICY: &str = include_str!("../../config/test-admin-permissions.json");
 const OFFICIAL_SOURCES: [&str; 3] = [
     "https://download.luckperms.net/",
     "https://ci.lucko.me/job/LuckPerms/",
     "https://cdn.modrinth.com/data/Vebnzrzj/",
 ];
+const PROFILE_LOOKUP: &str = "https://api.minecraftservices.com/minecraft/profile/lookup/name/";
 const SEEDED_CONFIG: &str = "# Written by InstanceHarbor when this instance was created.\n\
 # LuckPerms uses its defaults for every setting not listed here.\n\
 storage-method: json\n";
 
-#[derive(Clone, Default, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Settings {
     administrators: Vec<Administrator>,
-    /// Empty grants `* = true` directly; otherwise members join this group.
+    /// Files written before OP existed have only LuckPerms data.
+    #[serde(default = "enabled_by_default")]
+    luckperms: bool,
+    /// Writes `ops.json` (level 4) when an instance is created.
+    #[serde(default)]
+    op: bool,
+    /// `None` grants `*`. Otherwise one node per entry; a leading `-` sets false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    permissions: Option<Vec<String>>,
+    /// Empty puts the nodes on the user; otherwise members join this group.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     group: String,
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { administrators: Vec::new(), luckperms: true, op: false, permissions: None, group: String::new() }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -39,6 +63,12 @@ struct Administrator {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Edit {
     administrators: Vec<Administrator>,
+    #[serde(default = "enabled_by_default")]
+    luckperms: bool,
+    #[serde(default)]
+    op: bool,
+    #[serde(default)]
+    permissions: Option<Vec<String>>,
     #[serde(default)]
     group: String,
     revision: String,
@@ -69,14 +99,25 @@ fn valid_group(group: &str) -> bool {
             && group.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'))
 }
 
+/// One LuckPerms node as typed: lowercase letters, digits and `._*-`; a
+/// single leading `-` means the node is set to false.
+fn normalized_node(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let name = raw.strip_prefix('-').unwrap_or(raw);
+    let valid = (1..=MAX_PERMISSION_NODE_LENGTH).contains(&name.len())
+        && !name.starts_with('-')
+        && name.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._*-".contains(&b));
+    valid.then(|| raw.to_owned())
+}
+
 impl Settings {
-    fn normalized(administrators: Vec<Administrator>, group: String) -> Result<Self> {
-        if administrators.len() > MAX_ADMINISTRATORS {
+    fn normalized(self) -> Result<Self> {
+        if self.administrators.len() > MAX_ADMINISTRATORS {
             return Err("TooManyTestAdministrators".into());
         }
-        let mut seen = Vec::with_capacity(administrators.len());
-        let mut checked = Vec::with_capacity(administrators.len());
-        for item in administrators {
+        let mut seen = Vec::with_capacity(self.administrators.len());
+        let mut checked = Vec::with_capacity(self.administrators.len());
+        for item in self.administrators {
             let name = item.name.trim().to_owned();
             if !valid_name(&name) {
                 return Err("InvalidTestAdministratorName".into());
@@ -88,28 +129,65 @@ impl Settings {
             seen.push(uuid.clone());
             checked.push(Administrator { name, uuid });
         }
-        let group = group.trim().to_owned();
-        if !valid_group(&group) {
-            return Err("InvalidTestAdministratorGroup".into());
-        }
-        Ok(Self { administrators: checked, group })
+        // The grant content only exists while LuckPerms is on.
+        let (permissions, group) = if self.luckperms {
+            let group = self.group.trim().to_owned();
+            if !valid_group(&group) {
+                return Err("InvalidTestAdministratorGroup".into());
+            }
+            (self.permissions.map(Self::normalized_nodes).transpose()?, group)
+        } else {
+            (None, String::new())
+        };
+        Ok(Self { administrators: checked, luckperms: self.luckperms, op: self.op, permissions, group })
     }
 
+    fn normalized_nodes(raw: Vec<String>) -> Result<Vec<String>> {
+        let mut nodes: Vec<String> = Vec::with_capacity(raw.len());
+        for item in raw.iter().filter(|item| !item.trim().is_empty()) {
+            let node = normalized_node(item).ok_or("InvalidTestAdministratorPermission")?;
+            if !nodes.contains(&node) {
+                nodes.push(node);
+            }
+        }
+        if nodes.is_empty() {
+            return Err("EmptyTestAdministratorPermissions".into());
+        }
+        if nodes.len() > MAX_PERMISSION_NODES {
+            return Err("TooManyTestAdministratorPermissions".into());
+        }
+        Ok(nodes)
+    }
+
+    /// The feature is on when there is someone to grant and something to grant.
     pub(super) fn enabled(&self) -> bool {
-        !self.administrators.is_empty()
+        !self.administrators.is_empty() && (self.luckperms || self.op)
     }
 
     pub(super) fn count(&self) -> usize {
         self.administrators.len()
     }
 
+    fn permission_entries(&self) -> Vec<Value> {
+        match &self.permissions {
+            None => vec![json!({"permission":"*","value":true})],
+            Some(nodes) => nodes
+                .iter()
+                .map(|node| match node.strip_prefix('-') {
+                    Some(name) => json!({"permission":name,"value":false}),
+                    None => json!({"permission":node,"value":true}),
+                })
+                .collect(),
+        }
+    }
+
     fn user_file(&self, administrator: &Administrator) -> Result<Vec<u8>> {
         let mut permissions = vec![json!({"permission":"group.default","value":true})];
-        permissions.push(if self.group.is_empty() {
-            json!({"permission":"*","value":true})
+        if self.group.is_empty() {
+            permissions.extend(self.permission_entries());
         } else {
-            json!({"permission":format!("group.{}", self.group),"value":true})
-        });
+            permissions.push(json!({"permission":format!("group.{}", self.group),"value":true}));
+        }
         serde_json::to_vec_pretty(&json!({
             "uuid":administrator.uuid, "name":administrator.name,
             "primaryGroup":"default", "permissions":permissions,
@@ -138,13 +216,13 @@ pub(super) fn load(root: &Path) -> Result<(Settings, String, bool)> {
     }
     let stored: Settings = serde_json::from_slice(&bytes)
         .map_err(|_| "InvalidTestAdministratorSettings: test-administrators.json")?;
-    let settings = Settings::normalized(stored.administrators, stored.group)?;
-    Ok((settings, content_revision::revision(&bytes)?, true))
+    Ok((stored.normalized()?, content_revision::revision(&bytes)?, true))
 }
 
 fn response(root: &Path, settings: &Settings, revision: String) -> Result<Value> {
     Ok(json!({
-        "administrators":settings.administrators, "group":settings.group, "revision":revision,
+        "administrators":settings.administrators, "luckperms":settings.luckperms, "op":settings.op,
+        "permissions":settings.permissions, "group":settings.group, "revision":revision,
         "artifacts":artifacts(root)?,
     }))
 }
@@ -154,7 +232,14 @@ fn store(root: &Path, raw: &str) -> Result<Value> {
         return Err("InvalidTestAdministratorSettings".into());
     }
     let edit: Edit = serde_json::from_str(raw).map_err(|_| "InvalidTestAdministratorSettings")?;
-    let next = Settings::normalized(edit.administrators, edit.group)?;
+    let next = Settings {
+        administrators: edit.administrators,
+        luckperms: edit.luckperms,
+        op: edit.op,
+        permissions: edit.permissions,
+        group: edit.group,
+    }
+    .normalized()?;
     let _lock = command_lock(root, "test-administrators.lock", false)?;
     let (current, revision, exists) = load(root)?;
     if edit.revision != revision {
@@ -172,6 +257,35 @@ fn store(root: &Path, raw: &str) -> Result<Value> {
         Ok(())
     })?;
     response(root, &next, content_revision::revision(&bytes)?)
+}
+
+/// Turns the typed name into the canonical name and online UUID. One request,
+/// short timeouts, no retries; the name is validated before anything is sent.
+fn lookup(name: &str) -> Result<Value> {
+    let name = name.trim();
+    if !valid_name(name) {
+        return Err("InvalidTestAdministratorName".into());
+    }
+    let (status, body) = core_source::fetch_profile(&format!("{PROFILE_LOOKUP}{name}"))
+        .map_err(|_| "TestAdministratorLookupFailed")?;
+    let (canonical, uuid) = parse_lookup(name, status, &body)?;
+    Ok(json!({"name":canonical,"uuid":uuid}))
+}
+
+fn parse_lookup(requested: &str, status: u16, body: &[u8]) -> Result<(String, String)> {
+    match status {
+        200 => {}
+        204 | 400 | 404 => return Err("TestAdministratorNotFound".into()),
+        429 => return Err("TestAdministratorLookupRateLimited".into()),
+        _ => return Err("TestAdministratorLookupFailed".into()),
+    }
+    let profile: Value = serde_json::from_slice(body).map_err(|_| "TestAdministratorLookupFailed")?;
+    let name = profile["name"].as_str().filter(|name| valid_name(name) && name.eq_ignore_ascii_case(requested));
+    let uuid = profile["id"].as_str().and_then(normalized_uuid);
+    match (name, uuid) {
+        (Some(name), Some(uuid)) => Ok((name.to_owned(), uuid)),
+        _ => Err("TestAdministratorLookupFailed".into()),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,20 +437,30 @@ fn fetch(root: &Path) -> Result<Value> {
     Ok(json!({"artifacts":artifacts(root)?}))
 }
 
-/// A verified plan to give one new instance its test administrators.
-pub(super) struct Grant {
+/// The verified LuckPerms plugin a grant installs.
+struct LuckPermsPlan {
     platform: Platform,
     source: PathBuf,
     pin: Pin,
+}
+
+/// A verified plan to give one new instance its test administrators.
+pub(super) struct Grant {
+    luckperms: Option<LuckPermsPlan>,
+    op: bool,
     settings: Settings,
     revision: String,
 }
 
 impl Grant {
     pub(super) fn summary(&self) -> Value {
+        let pin = self.luckperms.as_ref().map(|plan| &plan.pin);
         json!({
             "count":self.settings.administrators.len(), "group":self.settings.group,
-            "fileName":self.pin.file_name, "version":self.pin.version, "sha256":self.pin.sha256,
+            "luckperms":self.luckperms.is_some(), "op":self.op,
+            "customPermissions":self.settings.permissions.as_ref().map(Vec::len),
+            "fileName":pin.map(|pin| pin.file_name.as_str()), "version":pin.map(|pin| pin.version.as_str()),
+            "sha256":pin.map(|pin| pin.sha256.as_str()),
             "settingsRevision":self.revision,
         })
     }
@@ -347,35 +471,64 @@ pub(super) fn agent_path(root: &Path, target: &Path) -> bool {
     target.starts_with(root.join("instances").join("Agent"))
 }
 
-/// Returns the number of configured administrators and, when requested and
-/// configured, the grant. A missing or mismatched cache stops creation.
+/// Returns the number of administrators that would be granted and, when
+/// requested and configured, the grant. LuckPerms artifacts are only required
+/// while the LuckPerms toggle is on; a missing or mismatched cache stops
+/// creation then. A proxy has no `ops.json`, so OP alone cannot apply there.
 pub(super) fn plan(root: &Path, profile: &CoreProfile, requested: bool) -> Result<(usize, Option<Grant>)> {
     let (settings, revision, _) = load(root)?;
-    let configured = settings.administrators.len();
+    let configured = if settings.enabled() { settings.administrators.len() } else { 0 };
     if !requested || !settings.enabled() {
         return Ok((configured, None));
     }
-    let platform = Platform::for_core(profile)?;
-    let pin = pin(platform)?;
-    let source = match cache_state(root, &pin)? {
-        CacheState::Ready(path) => path,
-        CacheState::Missing => return Err("TestPermissionArtifactMissing".into()),
-        CacheState::Mismatch => return Err("TestPermissionArtifactMismatch".into()),
+    let luckperms = if settings.luckperms {
+        let platform = Platform::for_core(profile)?;
+        let pin = pin(platform)?;
+        let source = match cache_state(root, &pin)? {
+            CacheState::Ready(path) => path,
+            CacheState::Missing => return Err("TestPermissionArtifactMissing".into()),
+            CacheState::Mismatch => return Err("TestPermissionArtifactMismatch".into()),
+        };
+        Some(LuckPermsPlan { platform, source, pin })
+    } else {
+        None
     };
-    Ok((configured, Some(Grant { platform, source, pin, settings, revision })))
+    let op = settings.op && profile.family != "VELOCITY";
+    if luckperms.is_none() && !op {
+        return Err("UnsupportedTestPermissionPlatform".into());
+    }
+    Ok((configured, Some(Grant { luckperms, op, settings, revision })))
 }
 
 /// Copies the verified plugin into a new instance and seeds its data.
 pub(super) fn install(directory: &Path, grant: &Grant) -> Result<()> {
-    let plugins = directory.join("plugins");
-    match fs::create_dir(&plugins) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(file_error("create", &plugins, error)),
+    if let Some(plan) = &grant.luckperms {
+        let plugins = directory.join("plugins");
+        match fs::create_dir(&plugins) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(file_error("create", &plugins, error)),
+        }
+        let plugins = child_directory(directory, "plugins")?;
+        core_maintenance::copy_verified(&plan.source, &plugins.join(&plan.pin.file_name), &plan.pin.sha256)?;
+        seed(directory, plan.platform, &grant.settings)?;
     }
-    let plugins = child_directory(directory, "plugins")?;
-    core_maintenance::copy_verified(&grant.source, &plugins.join(&grant.pin.file_name), &grant.pin.sha256)?;
-    seed(directory, grant.platform, &grant.settings)
+    if grant.op {
+        seed_ops(directory, &grant.settings)?;
+    }
+    Ok(())
+}
+
+/// Seeds what the settings ask for into a staged Bukkit instance whose
+/// LuckPerms JAR is already in place (the `prepare` path).
+pub(super) fn seed_prepared(directory: &Path, settings: &Settings) -> Result<()> {
+    if settings.luckperms {
+        seed(directory, Platform::Bukkit, settings)?;
+    }
+    if settings.op {
+        seed_ops(directory, settings)?;
+    }
+    Ok(())
 }
 
 /// Writes LuckPerms JSON storage for the configured administrators. Existing
@@ -389,35 +542,50 @@ pub(super) fn seed(directory: &Path, platform: Platform, settings: &Settings) ->
         Ok(_) => return Err("TestPermissionDataExists".into()),
     }
     let create = |path: &Path| fs::create_dir(path).map_err(|error| file_error("create", path, error));
-    let write = |path: &Path, bytes: &[u8]| -> Result<()> {
-        let mut file = File::create_new(path).map_err(|error| file_error("create", path, error))?;
-        file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|error| file_error("write", path, error))
-    };
     let storage = data.join("json-storage");
     let users = storage.join("users");
     for folder in [&data, &storage, &users] {
         create(folder)?;
     }
-    write(&data.join("config.yml"), SEEDED_CONFIG.as_bytes())?;
+    write_new(&data.join("config.yml"), SEEDED_CONFIG.as_bytes())?;
     // LuckPerms resolves `lp user <name>` through this cache before a first login.
-    let mut lookup = String::from("# LuckPerms UUID lookup cache
-");
+    let mut lookup = String::from("# LuckPerms UUID lookup cache\n");
     for administrator in &settings.administrators {
-        write(&users.join(format!("{}.json", administrator.uuid)), &settings.user_file(administrator)?)?;
-        lookup.push_str(&format!("{}:{}
-", administrator.uuid, administrator.name));
+        write_new(&users.join(format!("{}.json", administrator.uuid)), &settings.user_file(administrator)?)?;
+        lookup.push_str(&format!("{}:{}\n", administrator.uuid, administrator.name));
     }
-    write(&storage.join("uuidcache.txt"), lookup.as_bytes())?;
+    write_new(&storage.join("uuidcache.txt"), lookup.as_bytes())?;
     if !settings.group.is_empty() {
         let groups = storage.join("groups");
         create(&groups)?;
         let group = serde_json::to_vec_pretty(&json!({
-            "name":settings.group, "permissions":[{"permission":"*","value":true}],
+            "name":settings.group, "permissions":settings.permission_entries(),
         }))
         .map_err(fail)?;
-        write(&groups.join(format!("{}.json", settings.group)), &group)?;
+        write_new(&groups.join(format!("{}.json", settings.group)), &group)?;
     }
     Ok(())
+}
+
+/// Writes `ops.json` for a new instance. An existing file is never replaced.
+pub(super) fn seed_ops(directory: &Path, settings: &Settings) -> Result<()> {
+    let path = directory.join("ops.json");
+    if fs::symlink_metadata(&path).is_ok() {
+        return Err("TestOpDataExists".into());
+    }
+    let entries: Vec<Value> = settings
+        .administrators
+        .iter()
+        .map(|administrator| {
+            json!({"uuid":administrator.uuid,"name":administrator.name,"level":4,"bypassesPlayerLimit":false})
+        })
+        .collect();
+    write_new(&path, &serde_json::to_vec_pretty(&entries).map_err(fail)?)
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut file = File::create_new(path).map_err(|error| file_error("create", path, error))?;
+    file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|error| file_error("write", path, error))
 }
 
 pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Result<Value>> {
@@ -425,7 +593,8 @@ pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Resul
         ("test-admin-settings", []) => load(root).and_then(|(settings, revision, _)| response(root, &settings, revision)),
         ("save-test-admin-settings", [raw]) => store(root, raw),
         ("test-admin-fetch-luckperms", []) => fetch(root),
-        ("test-admin-settings" | "save-test-admin-settings" | "test-admin-fetch-luckperms", _) => {
+        ("test-admin-lookup", [name]) => lookup(name),
+        ("test-admin-settings" | "save-test-admin-settings" | "test-admin-fetch-luckperms" | "test-admin-lookup", _) => {
             Err("InvalidTestAdministratorArguments".into())
         }
         _ => return None,
@@ -464,6 +633,10 @@ pub(super) mod tests {
         Administrator { name: name.into(), uuid: uuid.into() }
     }
 
+    fn settings(administrators: Vec<Administrator>, group: &str) -> Settings {
+        Settings { administrators, group: group.into(), ..Settings::default() }
+    }
+
     fn profile(family: &str, minecraft: &str) -> CoreProfile {
         CoreProfile {
             unverified: false, java: None, family: family.into(), minecraft: minecraft.into(),
@@ -472,11 +645,19 @@ pub(super) mod tests {
     }
 
     pub(in super::super) fn save_fake_administrators(root: &Path, group: &str) {
+        save_fake(root, json!({"group":group}));
+    }
+
+    /// Saves the two fake administrators with extra fields merged in.
+    fn save_fake(root: &Path, extra: Value) {
         let (_, revision, _) = load(root).unwrap();
-        let raw = json!({
+        let mut raw = json!({
             "administrators":[{"name":"Fake_Admin","uuid":FAKE_UUID},{"name":"OtherFake","uuid":OTHER_UUID}],
-            "group":group, "revision":revision,
+            "revision":revision,
         });
+        for (key, value) in extra.as_object().unwrap() {
+            raw[key] = value.clone();
+        }
         store(root, &raw.to_string()).unwrap();
     }
 
@@ -494,18 +675,26 @@ pub(super) mod tests {
         let mut pin = pin(platform).unwrap();
         pin.sha256 = content_revision::file_revision(&source).unwrap();
         let (settings, revision, _) = load(root).unwrap();
-        Grant { platform, source, pin, settings, revision }
+        Grant { luckperms: Some(LuckPermsPlan { platform, source, pin }), op: false, settings, revision }
+    }
+
+    /// The same grant with OP switched on as well.
+    pub(in super::super) fn with_op(mut grant: Grant) -> Grant {
+        grant.op = true;
+        grant.settings.op = true;
+        grant
     }
 
     #[test]
     fn settings_normalize_identities_and_reject_unsafe_values() {
-        let settings = Settings::normalized(
+        let normalized = settings(
             vec![admin(" Fake_Admin ", &FAKE_UUID.to_uppercase()), admin("OtherFake", OTHER_UUID)],
-            String::new(),
+            "",
         )
+        .normalized()
         .unwrap();
-        assert_eq!(settings.administrators[0], admin("Fake_Admin", FAKE_UUID));
-        assert_eq!(settings.administrators[1].uuid, "00000000-0000-4000-8000-000000000002");
+        assert_eq!(normalized.administrators[0], admin("Fake_Admin", FAKE_UUID));
+        assert_eq!(normalized.administrators[1].uuid, "00000000-0000-4000-8000-000000000002");
         for (items, group, error) in [
             (vec![admin("no", FAKE_UUID)], "", "InvalidTestAdministratorName"),
             (vec![admin("bad-name", FAKE_UUID)], "", "InvalidTestAdministratorName"),
@@ -515,8 +704,58 @@ pub(super) mod tests {
             (vec![], "Admins", "InvalidTestAdministratorGroup"),
             (vec![admin("Fake_Admin", FAKE_UUID); MAX_ADMINISTRATORS + 1], "", "TooManyTestAdministrators"),
         ] {
-            assert_eq!(Settings::normalized(items, group.into()).unwrap_err(), error);
+            assert_eq!(settings(items, group).normalized().unwrap_err(), error);
         }
+    }
+
+    #[test]
+    fn custom_permission_nodes_are_validated_and_negation_is_kept() {
+        let nodes = |lines: &[&str]| lines.iter().map(|line| line.to_string()).collect::<Vec<_>>();
+        let custom = |lines: &[&str]| Settings { permissions: Some(nodes(lines)), ..Settings::default() }.normalized();
+        let ok = custom(&[" essentials.fly ", "", "-worldedit.*", "essentials.fly"]).unwrap();
+        assert_eq!(ok.permissions, Some(nodes(&["essentials.fly", "-worldedit.*"])));
+        for (lines, error) in [
+            (vec![], "EmptyTestAdministratorPermissions"),
+            (vec!["", "  "], "EmptyTestAdministratorPermissions"),
+            (vec!["Essentials.Fly"], "InvalidTestAdministratorPermission"),
+            (vec!["has space"], "InvalidTestAdministratorPermission"),
+            (vec!["--double"], "InvalidTestAdministratorPermission"),
+            (vec!["-"], "InvalidTestAdministratorPermission"),
+            (vec!["semi;colon"], "InvalidTestAdministratorPermission"),
+        ] {
+            assert_eq!(custom(&lines).unwrap_err(), error, "{lines:?}");
+        }
+        let long = "a".repeat(MAX_PERMISSION_NODE_LENGTH + 1);
+        assert_eq!(custom(&[&long]).unwrap_err(), "InvalidTestAdministratorPermission");
+        let many: Vec<String> = (0..=MAX_PERMISSION_NODES).map(|index| format!("plugin.node{index}")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert_eq!(custom(&refs).unwrap_err(), "TooManyTestAdministratorPermissions");
+    }
+
+    #[test]
+    fn luckperms_content_is_dropped_while_luckperms_is_off() {
+        let off = Settings {
+            luckperms: false,
+            group: "ignored".into(),
+            permissions: Some(vec![]),
+            ..Settings::default()
+        }
+        .normalized()
+        .unwrap();
+        assert_eq!((off.group.as_str(), off.permissions), ("", None));
+    }
+
+    #[test]
+    fn old_settings_files_load_as_luckperms_all_permissions_without_op() {
+        let workspace = Workspace::new();
+        let root = &workspace.0;
+        let old = json!({"administrators":[{"name":"Fake_Admin","uuid":FAKE_UUID}],"group":"test-admin"});
+        fs::write(root.join(SETTINGS_FILE), old.to_string()).unwrap();
+        let (loaded, _, exists) = load(root).unwrap();
+        assert!(exists && loaded.luckperms && !loaded.op && loaded.permissions.is_none());
+        assert_eq!(loaded.group, "test-admin");
+        let (empty, _, _) = load(&Workspace::new().0).unwrap();
+        assert!(empty.luckperms && !empty.op && !empty.enabled());
     }
 
     #[test]
@@ -527,15 +766,30 @@ pub(super) mod tests {
         assert!(!empty.enabled() && !exists);
         let saved = store(root, &json!({"administrators":[{"name":"Fake_Admin","uuid":FAKE_UUID}],"revision":first}).to_string()).unwrap();
         assert_eq!(saved["administrators"][0]["uuid"], FAKE_UUID);
+        assert_eq!((&saved["luckperms"], &saved["op"], &saved["permissions"]), (&json!(true), &json!(false), &Value::Null));
         assert_eq!(saved["artifacts"].as_array().unwrap().len(), 3);
         assert!(saved["artifacts"].as_array().unwrap().iter().all(|row| row["state"] == "Missing"));
         assert_eq!(
             store(root, &json!({"administrators":[],"revision":first}).to_string()).unwrap_err(),
             "TestAdministratorSettingsConflict"
         );
-        let cleared = store(root, &json!({"administrators":[],"revision":saved["revision"]}).to_string()).unwrap();
+        let both = store(root, &json!({
+            "administrators":[{"name":"Fake_Admin","uuid":FAKE_UUID}], "luckperms":true, "op":true,
+            "permissions":["essentials.fly","-worldedit.*"], "group":"test-admin", "revision":saved["revision"],
+        }).to_string()).unwrap();
+        assert_eq!(both["permissions"], json!(["essentials.fly","-worldedit.*"]));
+        assert_eq!((&both["op"], &both["group"]), (&json!(true), &json!("test-admin")));
+        let cleared = store(root, &json!({"administrators":[],"revision":both["revision"]}).to_string()).unwrap();
         assert_eq!(cleared["administrators"], json!([]));
         assert!(!load(root).unwrap().0.enabled());
+    }
+
+    #[test]
+    fn the_feature_needs_an_administrator_and_a_toggle() {
+        let on = |luckperms, op| Settings { luckperms, op, ..settings(vec![admin("Fake_Admin", FAKE_UUID)], "") };
+        assert!(on(true, false).enabled() && on(false, true).enabled() && on(true, true).enabled());
+        assert!(!on(false, false).enabled());
+        assert!(!Settings { op: true, ..Settings::default() }.enabled(), "nobody to grant");
     }
 
     #[test]
@@ -574,15 +828,34 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn op_only_needs_no_luckperms_artifact_and_neither_toggle_grants_nothing() {
+        let workspace = Workspace::new();
+        let root = &workspace.0;
+        let paper = profile("PAPER", "26.3");
+        save_fake(root, json!({"luckperms":false,"op":true}));
+        let (count, grant) = plan(root, &paper, true).unwrap();
+        let grant = grant.expect("OP alone is a grant without any LuckPerms file");
+        assert_eq!(count, 2);
+        assert!(grant.luckperms.is_none() && grant.op);
+        let summary = grant.summary();
+        assert_eq!((&summary["luckperms"], &summary["op"], &summary["fileName"]), (&json!(false), &json!(true), &Value::Null));
+        assert_eq!(plan(root, &profile("FORGE", "1.20.1"), true).unwrap().1.unwrap().op, true);
+        assert_eq!(plan(root, &profile("VELOCITY", "3.4.0"), true).err().unwrap(), "UnsupportedTestPermissionPlatform");
+        save_fake(root, json!({"luckperms":false,"op":false}));
+        assert_eq!(plan(root, &paper, true).unwrap().0, 0);
+        assert!(plan(root, &paper, true).unwrap().1.is_none());
+        save_fake(root, json!({"luckperms":true,"op":true}));
+        assert_eq!(plan(root, &paper, true).err().unwrap(), "TestPermissionArtifactMissing");
+    }
+
+    #[test]
     fn seeding_writes_json_storage_and_never_replaces_existing_data() {
         let workspace = Workspace::new();
         let directory = workspace.0.join("instances").join("seeded");
         fs::create_dir_all(directory.join("plugins")).unwrap();
-        let settings = Settings::normalized(
-            vec![admin("Fake_Admin", FAKE_UUID), admin("OtherFake", OTHER_UUID)],
-            String::new(),
-        )
-        .unwrap();
+        let settings = settings(vec![admin("Fake_Admin", FAKE_UUID), admin("OtherFake", OTHER_UUID)], "")
+            .normalized()
+            .unwrap();
         seed(&directory, Platform::Bukkit, &settings).unwrap();
         let data = directory.join("plugins").join("LuckPerms");
         assert!(fs::read_to_string(data.join("config.yml")).unwrap().contains("\nstorage-method: json\n"));
@@ -595,10 +868,7 @@ pub(super) mod tests {
         assert!(user["permissions"].as_array().unwrap().contains(&json!({"permission":"*","value":true})));
         assert_eq!(
             fs::read_to_string(data.join("json-storage").join("uuidcache.txt")).unwrap(),
-            format!("# LuckPerms UUID lookup cache
-{FAKE_UUID}:Fake_Admin
-00000000-0000-4000-8000-000000000002:OtherFake
-")
+            format!("# LuckPerms UUID lookup cache\n{FAKE_UUID}:Fake_Admin\n00000000-0000-4000-8000-000000000002:OtherFake\n")
         );
         assert!(!data.join("json-storage").join("groups").exists());
         assert!(!directory.join("ops.json").exists(), "LuckPerms grants never add OP");
@@ -610,13 +880,128 @@ pub(super) mod tests {
         let workspace = Workspace::new();
         let directory = workspace.0.join("instances").join("proxy");
         fs::create_dir_all(directory.join("plugins")).unwrap();
-        let settings = Settings::normalized(vec![admin("Fake_Admin", FAKE_UUID)], "test-admin".into()).unwrap();
+        let settings = settings(vec![admin("Fake_Admin", FAKE_UUID)], "test-admin").normalized().unwrap();
         seed(&directory, Platform::Velocity, &settings).unwrap();
         let storage = directory.join("plugins").join("luckperms").join("json-storage");
         let user = fs::read_to_string(storage.join("users").join(format!("{FAKE_UUID}.json"))).unwrap();
         assert!(user.contains("group.test-admin") && !user.contains("\"*\""));
         let group: Value = serde_json::from_slice(&fs::read(storage.join("groups").join("test-admin.json")).unwrap()).unwrap();
         assert_eq!(group["permissions"], json!([{"permission":"*","value":true}]));
+    }
+
+    #[test]
+    fn custom_nodes_go_on_the_user_or_on_the_group() {
+        let workspace = Workspace::new();
+        let nodes = Some(vec!["essentials.fly".to_owned(), "-worldedit.*".to_owned()]);
+        let expected = json!([
+            {"permission":"essentials.fly","value":true},
+            {"permission":"worldedit.*","value":false},
+        ]);
+        let direct = workspace.0.join("instances").join("direct");
+        fs::create_dir_all(direct.join("plugins")).unwrap();
+        let direct_settings = Settings { permissions: nodes.clone(), ..settings(vec![admin("Fake_Admin", FAKE_UUID)], "") };
+        seed(&direct, Platform::Bukkit, &direct_settings).unwrap();
+        let storage = direct.join("plugins").join("LuckPerms").join("json-storage");
+        let user: Value = serde_json::from_slice(&fs::read(storage.join("users").join(format!("{FAKE_UUID}.json"))).unwrap()).unwrap();
+        let permissions = user["permissions"].as_array().unwrap();
+        assert_eq!(permissions[0], json!({"permission":"group.default","value":true}));
+        assert_eq!(json!(permissions[1..].to_vec()), expected);
+        assert!(!storage.join("groups").exists());
+
+        let grouped = workspace.0.join("instances").join("grouped");
+        fs::create_dir_all(grouped.join("plugins")).unwrap();
+        let grouped_settings = Settings { permissions: nodes, ..settings(vec![admin("Fake_Admin", FAKE_UUID)], "test-admin") };
+        seed(&grouped, Platform::Bukkit, &grouped_settings).unwrap();
+        let storage = grouped.join("plugins").join("LuckPerms").join("json-storage");
+        let user: Value = serde_json::from_slice(&fs::read(storage.join("users").join(format!("{FAKE_UUID}.json"))).unwrap()).unwrap();
+        assert_eq!(user["permissions"][1], json!({"permission":"group.test-admin","value":true}));
+        assert_eq!(user["permissions"].as_array().unwrap().len(), 2);
+        let group: Value = serde_json::from_slice(&fs::read(storage.join("groups").join("test-admin.json")).unwrap()).unwrap();
+        assert_eq!(group["permissions"], expected);
+    }
+
+    #[test]
+    fn ops_json_lists_each_administrator_at_level_four_and_is_never_replaced() {
+        let workspace = Workspace::new();
+        let directory = workspace.0.join("instances").join("ops");
+        fs::create_dir_all(&directory).unwrap();
+        let settings = Settings { op: true, ..settings(vec![admin("Fake_Admin", FAKE_UUID), admin("OtherFake", OTHER_UUID)], "") }
+            .normalized()
+            .unwrap();
+        seed_ops(&directory, &settings).unwrap();
+        let ops: Value = serde_json::from_slice(&fs::read(directory.join("ops.json")).unwrap()).unwrap();
+        assert_eq!(ops, json!([
+            {"uuid":FAKE_UUID,"name":"Fake_Admin","level":4,"bypassesPlayerLimit":false},
+            {"uuid":"00000000-0000-4000-8000-000000000002","name":"OtherFake","level":4,"bypassesPlayerLimit":false},
+        ]));
+        assert_eq!(seed_ops(&directory, &settings).unwrap_err(), "TestOpDataExists");
+        assert!(!directory.join("plugins").exists(), "OP never installs LuckPerms");
+    }
+
+    #[test]
+    fn prepared_seeding_follows_the_toggles() {
+        let workspace = Workspace::new();
+        let make = |name: &str, luckperms, op| {
+            let directory = workspace.0.join("instances").join(name);
+            fs::create_dir_all(directory.join("plugins")).unwrap();
+            let settings = Settings { luckperms, op, ..settings(vec![admin("Fake_Admin", FAKE_UUID)], "") };
+            seed_prepared(&directory, &settings).unwrap();
+            directory
+        };
+        let lp_only = make("lp", true, false);
+        assert!(lp_only.join("plugins").join("LuckPerms").exists() && !lp_only.join("ops.json").exists());
+        let op_only = make("op", false, true);
+        assert!(!op_only.join("plugins").join("LuckPerms").exists() && op_only.join("ops.json").exists());
+        let both = make("both", true, true);
+        assert!(both.join("plugins").join("LuckPerms").exists() && both.join("ops.json").exists());
+    }
+
+    #[test]
+    fn profile_lookup_parses_canonical_name_and_dashes_the_uuid() {
+        let body = br#"{"id":"00000000000040008000000000000001","name":"Fake_Admin"}"#;
+        assert_eq!(
+            parse_lookup("fake_admin", 200, body).unwrap(),
+            ("Fake_Admin".to_owned(), FAKE_UUID.to_owned())
+        );
+        for (status, error) in [
+            (404, "TestAdministratorNotFound"),
+            (204, "TestAdministratorNotFound"),
+            (400, "TestAdministratorNotFound"),
+            (429, "TestAdministratorLookupRateLimited"),
+            (500, "TestAdministratorLookupFailed"),
+            (503, "TestAdministratorLookupFailed"),
+        ] {
+            assert_eq!(parse_lookup("Fake_Admin", status, b"{}").unwrap_err(), error, "{status}");
+        }
+        for bad in [
+            &b"not json"[..],
+            br#"{"id":"short","name":"Fake_Admin"}"#,
+            br#"{"id":"00000000000040008000000000000001","name":"Someone_Else"}"#,
+            br#"{"id":"00000000000040008000000000000001"}"#,
+        ] {
+            assert_eq!(parse_lookup("Fake_Admin", 200, bad).unwrap_err(), "TestAdministratorLookupFailed");
+        }
+    }
+
+    /// Needs the network: `cargo test -- --ignored live_mojang_lookup`.
+    #[test]
+    #[ignore]
+    fn live_mojang_lookup() {
+        let found = lookup("jeb_").unwrap();
+        assert_eq!(found["name"], "jeb_");
+        assert!(normalized_uuid(found["uuid"].as_str().unwrap()).is_some());
+        assert_eq!(lookup("zz_no_such_nm_1").unwrap_err(), "TestAdministratorNotFound");
+    }
+
+    #[test]
+    fn lookup_rejects_invalid_names_before_any_request() {
+        for name in ["", "ab", "has space", "bad-name", "../x", "a_name_that_is_too_long"] {
+            assert_eq!(lookup(name).unwrap_err(), "InvalidTestAdministratorName", "{name:?}");
+        }
+        let workspace = Workspace::new();
+        let args = vec!["x y".to_owned()];
+        assert_eq!(dispatch(&workspace.0, "test-admin-lookup", &args).unwrap().unwrap_err(), "InvalidTestAdministratorName");
+        assert_eq!(dispatch(&workspace.0, "test-admin-lookup", &[]).unwrap().unwrap_err(), "InvalidTestAdministratorArguments");
     }
 
     #[test]

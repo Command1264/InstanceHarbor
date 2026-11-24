@@ -271,10 +271,22 @@ Spigot 使用 [官方 BuildTools](https://www.spigotmc.org/wiki/buildtools/) 在
 ## 測試管理員權限
 
 「應用程式設定 → 測試管理員」可設定最多 10 位測試管理員（Minecraft 名稱與 UUID）。設定只存在
-工作區的 `test-administrators.json`，不進 repository。清單留空表示停用：新建實例不安裝 LuckPerms，
-也不授權。授權方式預設為直接授予 `* = true`；改為「加入 LuckPerms 群組」時，建立時另寫入該群組並
-授予群組 `* = true`。群組不可為 `default`，避免所有玩家都得到全部權限。授予 LuckPerms 權限不會
-加入 OP，OP 仍依實例預設處理。
+工作區的 `test-administrators.json`，不進 repository。輸入 Minecraft 名稱後，應用程式會向 Mojang
+查詢線上 UUID 並填入，同時改用 Mojang 回傳的名稱大小寫；UUID 欄位仍可自行編輯，手動輸入或已儲存的
+UUID 不會被覆寫。查詢只在名稱符合 3 到 16 個英數字或底線時送出一次，逾時 8 秒，不重試；管理員動詞為
+`test-admin-lookup <名稱>`，找不到、網路失敗與被限流各有不同的錯誤訊息。
+
+「LuckPerms 權限」與「OP」是兩個獨立的開關，可任意組合；兩個都關閉，或清單留空，都表示停用，
+新建實例不授權也不安裝 LuckPerms。舊的設定檔只有 `administrators` 與 `group`，載入時視為
+LuckPerms 開、授予所有權限、OP 關。
+
+- **LuckPerms 權限**：授權內容可選「所有權限（`*`）」或「自訂權限節點」。自訂節點每行一個，只能使用
+  `a-z`、`0-9` 與 `._*-`，開頭的 `-` 表示該節點設為 `false`，每個節點最長 200 字元、最多 50 個，
+  選自訂卻沒有節點會被拒絕。群組名稱選填：留空時節點直接寫在使用者上；填寫時節點寫在該群組，
+  成員加入 `group.<名稱>`。群組不可為 `default`，避免所有玩家都得到全部權限。
+- **OP**：建立實例時寫入 `ops.json`（`uuid`、`name`、`level` 為 4、`bypassesPlayerLimit` 為 `false`），
+  使用同一份管理員清單。關閉時不寫 `ops.json`，由伺服器自行建立空的清單。OP 與 LuckPerms
+  無關，只開 OP 時不需要也不會安裝 LuckPerms。Velocity 代理沒有 OP，只開 OP 會停止建立並說明原因。
 
 LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方來源與 SHA-256：
 
@@ -289,7 +301,8 @@ LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方�
 不會下載；快取缺少或雜湊不符時停止建立並說明原因，不改用其他版本。
 
 建立實例的「測試管理員權限」預設依位置決定：`instances/Agent/` 底下的 Agent 隔離實例不授權，
-其他位置授權。可在建立時改為「授權」或「不授權」。授權時，新實例的 `plugins/` 會有核對過的
+其他位置授權。可在建立時改為「授權」或「不授權」，兩個開關都適用；確認畫面列出將套用的內容，
+例如「授權 1 位 · LuckPerms · OP」。LuckPerms 開啟時，新實例的 `plugins/` 會有核對過的
 LuckPerms JAR，`plugins/LuckPerms/`（Velocity 為 `plugins/luckperms/`）寫入 `storage-method: json` 的
 `config.yml`、每位管理員的 `json-storage/users/<uuid>.json`，以及讓 `lp user <名稱>` 在首次登入前
 就能查到的 `json-storage/uuidcache.txt`。每台實例的權限資料各自獨立。確認畫面會列出授權人數與檔案。
@@ -360,7 +373,7 @@ Manager 重開時先核對已進入替換交易的原請求，已取消的項目
 Human 新建核對已登記的名稱及連接埠，並保存在 `instances/Human/<project>/<instance>`。
 Agent 建立要求獨立指定用途及空閒連接埠，使用 `instances/Agent/<project>/<instance>`。
 `testAdministrators` 可選 `true` 或 `false`：省略時 Human 授予已設定的測試管理員，Agent 不授權。
-授權時寫入的資料與 GUI 建立相同，`prepare.json` 另記錄 `testAdministrators` 人數。
+授權時依設定的開關寫入 LuckPerms 資料與 `ops.json`，內容與 GUI 建立相同，`prepare.json` 另記錄 `testAdministrators` 人數。
 既有 `create` 及一般匯入保留原入口。
 
 使用同一個 `managed-id`、Agent 專案、實例名稱和連接埠，並在 `prepare` 請求加入

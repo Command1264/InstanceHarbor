@@ -2819,6 +2819,7 @@ pub fn dispatch_with_creation_progress(
             | "discover-java"
             | "logs"
             | "removed-instances"
+            | "test-admin-lookup"
             | "world-settings"
             | "get-initialization"
             | "console-plan"

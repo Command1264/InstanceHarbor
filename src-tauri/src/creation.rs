@@ -747,6 +747,30 @@ mod tests {
     }
 
     #[test]
+    fn staged_creation_with_op_writes_ops_json_beside_the_luckperms_data() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("downloaded.jar");
+        let mojang = root.join("mojang.jar");
+        fs::write(&core, b"official download fixture").unwrap();
+        fs::write(&mojang, b"launcher artifact fixture").unwrap();
+        let mojang_hash = content_revision::file_revision(&mojang).unwrap();
+        let draft = draft(Source::Official {
+            family: "FOLIA".into(), minecraft: "26.3".into(), build: "26".into(),
+            sha256: content_revision::file_revision(&core).unwrap(),
+        });
+        let mut inspected = inspect_source(root, &draft, false).unwrap();
+        let grant = test_admins::tests::with_op(test_admins::tests::stand_in_grant(root, test_admins::Platform::Bukkit));
+        inspected.test_admins.grant = Some(grant);
+        let (stage, publication) = stage(root, &inspected, &draft, "seeded-op", Some((core, Some((mojang, mojang_hash))))).unwrap();
+        let ops: Value = serde_json::from_slice(&fs::read(stage.path.join("ops.json")).unwrap()).unwrap();
+        assert_eq!(ops.as_array().unwrap().len(), 2);
+        assert_eq!(ops[0]["level"], 4);
+        assert!(publication.hashes.contains_key("ops.json"));
+        verified_publication(&stage.path, &inspected.core, &publication.hashes).unwrap();
+    }
+
+    #[test]
     fn retry_completes_interrupted_creation_without_duplicate_registry_or_scope() {
         let fixture = Fixture::new();
         let root = &fixture.0;
