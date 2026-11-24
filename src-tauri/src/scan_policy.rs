@@ -233,6 +233,14 @@ pub(super) fn managed_path(root: &Path, value: &str) -> Result<PathBuf> {
 }
 
 impl Policy {
+    /// Keep only the management paths `keep` accepts. Returns whether any
+    /// path was dropped. Removing paths needs no revalidation.
+    pub(super) fn retain_allow_paths(&mut self, keep: impl Fn(&str) -> bool) -> bool {
+        let before = self.allow_paths.len();
+        self.allow_paths.retain(|rule| keep(rule));
+        self.allow_paths.len() != before
+    }
+
     pub(super) fn management_roots(&self) -> &[String] {
         if self.managed_folders {
             &self.allow_paths

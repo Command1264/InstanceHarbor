@@ -164,6 +164,7 @@ export function errorText(error: unknown) {
   if (raw.includes('ManagerBusy')) return tr('manager.error.managerBusy')
   if (raw.includes('StopTimeout') || raw.includes('HostUnavailable')) return tr('manager.error.stopTimeout')
   if (raw.includes('DeleteServerRecycledButRegistered')) return tr('manager.error.deleteServerRecycledButRegistered')
+  if (raw.includes('DeleteServerRecycledButPathListed')) return tr('manager.error.deleteServerRecycledButPathListed')
   if (raw.includes('DeleteServerNameMismatch')) return tr('manager.error.deleteServerNameMismatch')
   if (raw.includes('DeleteServerProtectedFolder')) return tr('manager.error.deleteServerProtectedFolder')
   if (raw.includes('DeleteServerNetworkPath')) return tr('manager.error.deleteServerNetworkPath')

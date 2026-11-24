@@ -73,6 +73,19 @@ pub(super) fn check_target(
     Ok(())
 }
 
+/// Drop the management paths that name exactly `folder`.
+fn forget_folder(root: &Path, folder: &Path) -> Result<()> {
+    let (mut policy, revision) = scan_policy::load(root)?;
+    let target = key(folder);
+    let changed = policy.retain_allow_paths(|rule| {
+        scan_policy::rule_path(root, rule).map_or(true, |path| key(&path) != target)
+    });
+    if changed {
+        scan_policy::persist(root, &policy, &revision)?;
+    }
+    Ok(())
+}
+
 /// A direct child folder holds a server marker file, as a management folder
 /// scan would find it.
 fn holds_server_folder(folder: &Path) -> Result<bool> {
@@ -169,6 +182,9 @@ fn delete_server(root: &Path, name: &str, confirmation: &str) -> Result<Value> {
     // server found by a management folder scan.
     presentation::remove_management(root, name, "delete")
         .map_err(|error| format!("DeleteServerRecycledButRegistered:{error}"))?;
+    // Creating or adopting the instance listed its folder as a management
+    // path. The folder is gone, so drop that path too.
+    forget_folder(root, &folder).map_err(|error| format!("DeleteServerRecycledButPathListed:{error}"))?;
     Ok(json!({"name":name,"recycled":true,"path":path_format::display(&folder)}))
 }
 
@@ -299,6 +315,30 @@ mod tests {
             assert_eq!(delete_server(&root, "alpha", typed).unwrap_err(), "DeleteServerNameMismatch");
         }
         assert!(root.join("instances/alpha").is_dir());
+    }
+
+    #[test]
+    fn deleted_folder_leaves_the_management_paths() {
+        // A stale path to a folder in the Recycle Bin would make every later
+        // management path update fail with ScanDirectoryUnavailable.
+        let (_guard, base) = fixture("forget");
+        let root = base.join("workspace");
+        let alpha = root.join("instances/alpha");
+        let keep = base.join("servers");
+        fs::create_dir_all(&keep).unwrap();
+        let policy = json!({
+            "allow": [], "exclude": [], "excludePaths": [], "managedFolders": true,
+            "allowPaths": [path_format::display(&alpha).to_uppercase(), path_format::display(&keep)],
+        });
+        fs::write(root.join("scan-policy.json"), serde_json::to_vec(&policy).unwrap()).unwrap();
+        fs::remove_dir_all(&alpha).unwrap();
+        forget_folder(&root, &alpha).unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(root.join("scan-policy.json")).unwrap()).unwrap();
+        assert_eq!(saved["allowPaths"], json!([path_format::display(&keep)]));
+        // Nothing to forget: the file stays as it is.
+        let before = fs::read(root.join("scan-policy.json")).unwrap();
+        forget_folder(&root, &alpha).unwrap();
+        assert_eq!(fs::read(root.join("scan-policy.json")).unwrap(), before);
     }
 
     #[test]
