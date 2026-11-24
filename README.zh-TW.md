@@ -85,7 +85,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ## 文件
 
 - [開發指南](docs/development.md)：功能細節、建置、測試、隔離驗收、儲存位置與回退。
-- [1.0.0 發行說明](docs/windows-1.0.0.md)。先前的 [1.0.0-rc2 預發行說明](docs/windows-rc2.md) 保留供參考。
+- [1.0.1 發行說明](docs/windows-1.0.1.md)。先前的 [1.0.0 發行說明](docs/windows-1.0.0.md) 與 [1.0.0-rc2 預發行說明](docs/windows-rc2.md) 保留供參考。
 - [Windows 發行與授權](docs/windows-distribution-licenses.md)（英文）：如何建置發行版，以及第三方授權通知與對應的 MPL 原始碼。
 
 問題回報與建議請到 [GitHub Issues](https://github.com/Command1264/InstanceHarbor/issues)。
