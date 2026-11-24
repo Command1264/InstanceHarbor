@@ -8,6 +8,18 @@
   "library": "Lucide",
   "additionalIcons": [
     {
+      "icon": "copy",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/copy.svg",
+      "adaptation": "16px viewport; currentColor; hidden from assistive technology inside a labeled button",
+      "component": "../../components/CopyButton.vue"
+    },
+    {
+      "icon": "check",
+      "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/check.svg",
+      "adaptation": "16px viewport; currentColor; shown after copying, inside a labeled button",
+      "component": "../../components/CopyButton.vue"
+    },
+    {
       "icon": "folder-open",
       "source": "https://raw.githubusercontent.com/lucide-icons/lucide/220abb1510f4d5f27a4c94accf3831f4efc32252/icons/folder-open.svg",
       "adaptation": "16px viewport; currentColor; decorative in a labeled button",

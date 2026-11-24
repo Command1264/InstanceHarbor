@@ -67,6 +67,8 @@ mod presentation;
 mod recovery_keys;
 #[path = "resident_manager.rs"]
 mod resident_manager;
+#[path = "server_removal.rs"]
+mod server_removal;
 #[path = "scan_policy.rs"]
 mod scan_policy;
 #[path = "global_java.rs"]
@@ -2811,6 +2813,7 @@ pub fn dispatch_with_creation_progress(
             | "instance-settings"
             | "discover-java"
             | "logs"
+            | "removed-instances"
             | "world-settings"
             | "get-initialization"
             | "console-plan"
@@ -2827,6 +2830,7 @@ pub fn dispatch_with_creation_progress(
             | "restart"
             | "detach"
             | "remove-management"
+            | "delete-server"
             | "adopt"
             | "save-instance-settings"
             | "save-world-settings"
@@ -2856,12 +2860,15 @@ pub fn dispatch_with_creation_progress(
             agent_rebuild::assert_idle(&root, name)?;
         }
     }
-    if matches!(verb.as_str(), "save-instance-settings" | "save-world-settings" | "remove-management" | "adopt") {
+    if matches!(verb.as_str(), "save-instance-settings" | "save-world-settings" | "remove-management" | "delete-server" | "adopt") {
         if let Some(name) = args.first().filter(|name| token(name) && record_path(&root, name).exists()) {
             core_maintenance::assert_start_allowed(&instance_path(&root, name)?)?;
         }
     }
     if let Some(result) = core_maintenance::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = server_removal::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = presentation::dispatch(&root, verb, args) {
