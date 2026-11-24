@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #[cfg(windows)]
+mod about_links;
+#[cfg(windows)]
 mod folder_picker;
 #[cfg(windows)]
 mod workspace_binding;
@@ -26,6 +28,30 @@ fn diagnostic_status() -> serde_json::Value {
     match diagnostics::global() {
         Ok(log) => log.status(),
         Err(error) => json!({"available":false,"error":error}),
+    }
+}
+#[tauri::command]
+fn about_info() -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        Ok(about_links::info())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("AboutUnavailable".into())
+    }
+}
+/// Opens one of the About section's fixed links; `link` is a name, never a URL.
+#[tauri::command]
+fn open_about_link(link: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        about_links::open(&link)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = link;
+        Err("AboutUnavailable".into())
     }
 }
 #[tauri::command]
@@ -527,7 +553,7 @@ fn main() {
         }
     }
     match diagnostics::global(){
-        Ok(log)=>diagnostic_write(log.record(json!({"type":"gui-start","pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"executableFingerprint":std::env::current_exe().ok().map(|p|diagnostics::path_fingerprint(&p)),"workspaceFingerprint":std::env::var("IH_WORKSPACE").ok().map(|p|diagnostics::path_fingerprint(std::path::Path::new(&p)))}))),
+        Ok(log)=>diagnostic_write(log.record(json!({"type":"gui-start","pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"commit":instanceharbor::about::COMMIT,"executableFingerprint":std::env::current_exe().ok().map(|p|diagnostics::path_fingerprint(&p)),"workspaceFingerprint":std::env::var("IH_WORKSPACE").ok().map(|p|diagnostics::path_fingerprint(std::path::Path::new(&p)))}))),
         Err(error)=>eprintln!("GUI diagnostics unavailable: {error}"),
     }
     let mut context = tauri::generate_context!();
@@ -559,7 +585,9 @@ fn main() {
             pick_file,
             diagnostic_status,
             report_gui_event,
-            tray_status
+            tray_status,
+            about_info,
+            open_about_link
         ])
         .setup(move |app| {
             #[cfg(windows)]

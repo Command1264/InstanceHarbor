@@ -434,6 +434,24 @@ $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-fe
 開發版 CLI 也要求明確傳入同範圍的工作區。正式版拒絕開發資料目錄，Manager 仍按工作區路徑區分。
 兩版同時啟動伺服器時，請為各工作區使用獨立副本，並為每台伺服器指派不同的系統連接埠。
 
+### 版本與 commit
+
+建置時把 Git commit 前七碼寫進 `InstanceHarbor.exe`（開發版為 `InstanceHarborDev.exe`）與 `ihctl.exe`。
+工作目錄有未提交的變更（包括未追蹤的檔案）時加上 `-dirty`，例如 `33dfd35-dirty`。
+沒有 Git 或不在 Git checkout 時，值為 `unknown`，建置不會失敗。
+
+- `build-product.ps1` 讀取 `git rev-parse HEAD` 與 `git status --porcelain`，把結果放進 `IH_BUILD_COMMIT` 傳給 Rust 建置，
+  建置後確認 `ihctl --version` 報告同一個值，並寫入 `build-manifest.json` 的 `commit`。
+- 直接執行 `cargo build` 時，`src-tauri/build.rs` 自己向 Git 查詢。它在 commit、切換分支或暫存變更後重新查詢，
+  但只修改檔案、沒有暫存時不會重新查詢，所以 `-dirty` 可能沒有更新。需要準確的值時使用 `build-product.ps1`。
+- 手動設定 `IH_BUILD_COMMIT` 時，值必須是七位小寫十六進位（可加 `-dirty`）或 `unknown`，否則 Rust 建置失敗。
+
+`ihctl --version` 輸出 `InstanceHarbor CLI 1.0.0 (33dfd35)`，開發版為 `InstanceHarbor Dev CLI 1.0.0 (33dfd35)`。
+「應用程式設定」→「關於」顯示版本、Git commit、作者、GitHub 儲存庫與回報問題的按鈕，以及授權條款與第三方授權通知的按鈕。這一頁沒有可儲存的設定，所以不顯示「儲存設定」與「還原變更」。
+GitHub 按鈕用預設瀏覽器開啟固定的 `https://github.com/Command1264/InstanceHarbor` 與其 `/issues`，頁面只傳送連結名稱，不傳送網址。
+授權按鈕用記事本開啟執行檔旁的 `LICENSE` 與 `THIRD-PARTY-NOTICES.txt`。開發版與本機建置沒有這兩個檔案，按鈕會停用。
+GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
+
 ### 儲存位置
 
 `%LOCALAPPDATA%` 下，正式版使用 `InstanceHarbor`，開發版使用 `InstanceHarbor Dev`（下表以 `<應用程式資料夾>` 表示）。
