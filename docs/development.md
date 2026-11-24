@@ -47,6 +47,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 
 ## 焦點框與捲動區
 
+- 停用（`disabled`）或暫時唯讀（`readonly`）的輸入欄位一律變淡、顯示禁止游標，並隱藏輸入游標，避免看起來仍可輸入。規則在 `src/app.css`。
 - 焦點框的寬度與外擴距離由 `src/app.css` 的 `--focus-ring-width`、`--focus-ring-offset` 定義，合計為 `--focus-ring-extent`。
 - 對話框裡的 `OverlayScroll` 捲動區在上緣與左緣保留 `--focus-ring-extent` 的內距，並以相同的負外距抵銷，內容位置與寬度不變；右緣與下緣原本的內距已大於焦點框外擴量。
 - 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。

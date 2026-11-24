@@ -839,7 +839,7 @@ pub(super) mod tests {
         assert!(grant.luckperms.is_none() && grant.op);
         let summary = grant.summary();
         assert_eq!((&summary["luckperms"], &summary["op"], &summary["fileName"]), (&json!(false), &json!(true), &Value::Null));
-        assert_eq!(plan(root, &profile("FORGE", "1.20.1"), true).unwrap().1.unwrap().op, true);
+        assert!(plan(root, &profile("FORGE", "1.20.1"), true).unwrap().1.unwrap().op);
         assert_eq!(plan(root, &profile("VELOCITY", "3.4.0"), true).err().unwrap(), "UnsupportedTestPermissionPlatform");
         save_fake(root, json!({"luckperms":false,"op":false}));
         assert_eq!(plan(root, &paper, true).unwrap().0, 0);
