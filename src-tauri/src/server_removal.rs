@@ -61,13 +61,35 @@ pub(super) fn check_target(
     if within(&workspace, &target) && (target == instances || !within(&instances, &target)) {
         return Err("DeleteServerProtectedFolder".into());
     }
-    if management_roots.iter().any(|path| resolved(path) == target) {
+    // Creating or adopting an instance lists its own folder as a management
+    // path, so equality alone does not mean "folder of many servers". Refuse
+    // only when a direct child also looks like a server folder.
+    if management_roots.iter().any(|path| resolved(path) == target) && holds_server_folder(folder)? {
         return Err("DeleteServerProtectedFolder".into());
     }
     if others.iter().any(|path| within(&target, &resolved(path))) {
         return Err("DeleteServerContainsOtherInstance".into());
     }
     Ok(())
+}
+
+/// A direct child folder holds a server marker file, as a management folder
+/// scan would find it.
+fn holds_server_folder(folder: &Path) -> Result<bool> {
+    let entries = match fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(fail(error)),
+    };
+    for entry in entries {
+        let child = entry.map_err(fail)?.path();
+        if child.is_dir()
+            && ["server.properties", "server.jar", "velocity.toml"].iter().any(|marker| child.join(marker).is_file())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Refuse a folder whose path or contents include a link (reparse point),
@@ -313,9 +335,24 @@ mod tests {
         );
         let managed = base.join("servers");
         fs::create_dir_all(managed.join("one")).unwrap();
+        fs::write(managed.join("one/server.properties"), b"").unwrap();
         let roots = [PathBuf::from(path_format::display(&managed))];
         assert_eq!(check_target(&root, &managed, &roots, &[]).unwrap_err(), "DeleteServerProtectedFolder");
         assert!(check_target(&root, &managed.join("one"), &roots, &[]).is_ok());
+    }
+
+    #[test]
+    fn server_folder_listed_as_its_own_management_path_may_be_deleted() {
+        // Creating or adopting an instance adds its own folder to the
+        // management paths; that alone must not protect it.
+        let (_guard, base) = fixture("own-root");
+        let root = base.join("workspace");
+        for folder in [root.join("instances/alpha"), base.join("elsewhere")] {
+            fs::create_dir_all(folder.join("world")).unwrap();
+            fs::write(folder.join("server.properties"), b"").unwrap();
+            let roots = [PathBuf::from(path_format::display(&folder))];
+            assert!(check_target(&root, &folder, &roots, &[]).is_ok());
+        }
     }
 
     #[test]
