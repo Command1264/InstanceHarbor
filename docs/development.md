@@ -27,14 +27,26 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 
 ## 系統匣
 
-- 主程式在 Windows 通知區域（右下角）顯示圖示。滑鼠停在圖示上會顯示執行中的伺服器台數。
-- 左鍵點圖示，或右鍵選「顯示應用程式」，可叫回主視窗。再次執行 `InstanceHarbor.exe` 也會叫回隱藏的視窗。
-- 「語言與外觀」的「關閉視窗時縮到系統匣」預設開啟：按 X 只隱藏視窗。關閉此設定後，按 X 會結束介面。
-- 右鍵選「結束」才會結束 GUI 程序。伺服器、Host 與 Manager 在任何情況下都不隨 GUI 結束。
-- 診斷：按 X、從圖示叫回視窗或選「結束」時，GUI 診斷紀錄（`%LOCALAPPDATA%\<應用程式資料夾>\logs\gui-*.jsonl`）會記下
-  `window-close`、`tray-show` 或 `tray-quit` 事件。`window-close` 包含是否縮到系統匣、隱藏前後視窗是否可見，以及錯誤種類。
-  視窗關不掉時，先找這些事件。
-- 回退相容：此設定維持預設時不寫入 `preferences.json`。若已關閉此設定，回退到 `1.0.0-rc2` 前請先重新開啟並儲存，否則舊版無法讀取外觀設定。
+- 系統匣圖示屬於常駐 Manager（`ihctl.exe WORKSPACE manager-serve`），不屬於 GUI：Manager 在，圖示就在；Manager 結束，圖示跟著消失。
+  GUI、CLI 或 Agent 啟動 Manager 時都會出現圖示，但不會開啟 GUI 視窗。
+- GUI 啟動後每 5 秒向自己工作區的 Manager 登記（`gui-attach`，只接受同一安裝的 GUI 程序），Manager 不在時會先啟動它。
+  所以 GUI 開著時一定有圖示；Manager 中途被結束，下一次登記會再啟動它。
+- 一個工作區最多一個圖示。開發版的提示文字會帶工作區資料夾名稱，同時有多個工作區時可以分辨。
+- 滑鼠停在圖示上會顯示執行中的伺服器台數，右鍵選單第一行也會顯示（每 5 秒更新，算法與清單的「可停止」相同）。
+  選單文字依「語言與外觀」的語言設定。
+- 左鍵點圖示，或右鍵選「開啟 InstanceHarbor」，會以這個工作區開啟 GUI；GUI 已在執行時則叫回它的視窗。
+- 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗。伺服器與 Host 是獨立程序，會繼續執行。
+  還有批次工作或核心更新在進行時，Manager 不結束，改為跳出說明，請等工作完成後再結束；這與 `manager-exit` 回報
+  `ManagerHasActiveWork` 的條件相同。
+  只要有伺服器不是「已停止」（包含啟動中、工作階段未定，或狀態讀不到），會先跳出確認（預設為「否」）。
+  其中開啟自動重啟的伺服器會另外說明：自動重啟由 Manager 執行，
+  結束後這些伺服器當機或意外結束不會自動重啟，要等 Manager 下次啟動才恢復。按「是」後會再核對一次批次工作。
+  CLI 的 `manager-exit` 不詢問，只套用批次工作的條件。
+- 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。
+- 回退相容：`preferences.json` 仍保留舊的 `closeToTray` 值但不再使用。值為預設時不寫入檔案；若曾在 1.0.0 關閉此設定，
+  回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
+- 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512）。`muda` 需要 comctl32 第 6 版，
+  執行檔已帶對應 manifest；程式庫的單元測試執行檔沒有，所以系統匣程式碼不編進測試建置。
 
 ## 視窗開啟大小
 
@@ -468,7 +480,8 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 以腳本直接啟動時，`IH_WORKSPACE` 可指定已初始化的工作區。Setup 建立的「開始」捷徑固定使用正式預設工作區。
 需要隔離多個候選時，請明確指定各自的工作區。這個版本第一次啟動會建立預設工作區，不會自動遷移舊版資料。
 
-解除安裝前先從 GUI 正常停止各台伺服器並關閉 GUI，再以該安裝的 `ihctl.exe WORKSPACE manager-exit` 關閉該工作區的 Manager。
+解除安裝前先從 GUI 正常停止各台伺服器，再從系統匣選「結束」，一併關閉 GUI 與該工作區的 Manager。
+也可以改用該安裝的 `ihctl.exe WORKSPACE manager-exit`。
 卸載會保留工作區與日誌。要測試回退可先備份工作區，解除安裝 Setup，再用已驗證的舊 ZIP 開啟同一工作區。
 便攜安裝可用 `install-windows.ps1 -Action Rollback` 切回已安裝的前一版，包含 GUI 檔名仍為 `instanceharbor-v2.exe` 的候選。保留工作區中的新舊設定，重開後先核對再啟動伺服器。
 

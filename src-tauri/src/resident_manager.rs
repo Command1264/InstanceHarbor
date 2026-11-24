@@ -120,6 +120,15 @@ struct State {
     core_in_flight: bool,
     exiting: bool,
     fault: bool,
+    /// GUI processes that asked to close with the Manager (tray Quit).
+    gui: Vec<u32>,
+}
+
+/// Work the Manager must finish before it may exit; servers themselves never count.
+fn active_work(state: &State) -> bool {
+    state.batches.iter().any(|batch| batch.items.iter().any(|item| item.phase.pending()))
+        || state.core_in_flight
+        || state.core_batches.as_ref().is_ok_and(core_batch::Journal::active)
 }
 
 fn now() -> u64 {
@@ -242,6 +251,7 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
                         | "console-open"
                         | "host-control"
                         | "host-recover"
+                        | "gui-attach"
                 ) =>
         {
             launch_detached(&executable()?, root, "manager-serve")?;
@@ -264,6 +274,35 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
         }
     }
     Err("ManagerUnavailable".into())
+}
+
+/// Servers the list shows as running: the same rule as the GUI's `canStop`.
+fn running_servers(snapshot: &Value) -> u32 {
+    snapshot["rows"].as_array().map_or(0, |rows| {
+        rows.iter()
+            .filter(|row| !row["run"].is_null() && matches!(row["state"].as_str(), Some("Listening" | "Starting")))
+            .count() as u32
+    })
+}
+
+/// What tray Quit asks about: every server not confirmed `Stopped` (starting, running,
+/// undecided or unreadable), and how many of those rely on the Manager's automatic restart.
+fn servers_not_stopped(snapshot: &Value, auto_restart: impl Fn(&str) -> bool) -> (u32, u32) {
+    let rows = snapshot["rows"].as_array().map(Vec::as_slice).unwrap_or_default();
+    rows.iter()
+        .filter(|row| row["state"].as_str() != Some("Stopped"))
+        .fold((0, 0), |(count, guarded), row| {
+            let restarts = row["name"].as_str().is_some_and(&auto_restart);
+            (count + 1, guarded + u32::from(restarts))
+        })
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn restarts_automatically(root: &Path, name: &str) -> bool {
+    token(name)
+        && instance(root, name).is_ok_and(|config| {
+            !config.removed && config.auto_restart.as_ref().is_some_and(|policy| policy.valid() && policy.enabled())
+        })
 }
 
 fn batch_path(directory: &Path, id: &str) -> PathBuf {
@@ -553,17 +592,28 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
             Ok(view(batch))
         }
         ("manager-exit", []) => {
-            if state
-                .batches
-                .iter()
-                .any(|batch| batch.items.iter().any(|item| item.phase.pending()))
-                || state.core_in_flight
-                || state.core_batches.as_ref().is_ok_and(core_batch::Journal::active)
-            {
+            if active_work(&state) {
                 return Err("ManagerHasActiveWork".into());
             }
             state.exiting = true;
             Ok(json!({"exiting":true}))
+        }
+        ("gui-attach", [pid]) => {
+            let pid: u32 = pid.parse().map_err(|_| "InvalidManagerRequest")?;
+            let image = process_image(pid).and_then(|image| image.canonicalize().ok());
+            let exe = executable()?;
+            let accepted = [crate::desktop_channel::GUI_EXECUTABLE, "instanceharbor-acceptance.exe"]
+                .iter()
+                .filter_map(|name| exe.with_file_name(name).canonicalize().ok())
+                .any(|gui| image.as_ref() == Some(&gui));
+            if !accepted {
+                return Err("PeerMismatch".into());
+            }
+            state.gui.retain(|known| process_image(*known).is_some());
+            if !state.gui.contains(&pid) {
+                state.gui.push(pid);
+            }
+            Ok(json!({"attached":true}))
         }
         _ => Err("InvalidManagerRequest".into()),
     }
@@ -1283,6 +1333,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
         core_in_flight: false,
         exiting: false,
         fault: false,
+        gui: Vec::new(),
     }));
     let identity = identity(std::process::id())
         .map_err(fail)?
@@ -1324,6 +1375,47 @@ pub(super) fn run(root: &Path) -> Result<Value> {
     if ready_receive.recv_timeout(Duration::from_secs(3)).is_err() {
         return Err("ManagerPipeUnavailable".into());
     }
+    // Dropped on every return below, which removes the icon before the process ends.
+    #[cfg(not(test))]
+    let _tray = {
+        let (count_root, check_root) = (root.to_path_buf(), root.to_path_buf());
+        let (check_state, exit_state, exiting_state) = (Arc::clone(&state), Arc::clone(&state), Arc::clone(&state));
+        manager_tray::start(
+            root,
+            exe.with_file_name(crate::desktop_channel::GUI_EXECUTABLE),
+            manager_tray::Hooks {
+                running: Box::new(move || {
+                    let snapshot = instance_snapshot::read(&count_root, false)?;
+                    Ok(running_servers(&snapshot))
+                }),
+                check_exit: Box::new(move || {
+                    if active_work(&*check_state.lock().map_err(fail)?) {
+                        return Ok(manager_tray::ExitCheck::Busy);
+                    }
+                    // Unreadable states are treated as possibly running: ask instead of quitting.
+                    let Ok(snapshot) = instance_snapshot::read(&check_root, false) else {
+                        return Ok(manager_tray::ExitCheck::Confirm(None));
+                    };
+                    Ok(match servers_not_stopped(&snapshot, |name| restarts_automatically(&check_root, name)) {
+                        (0, _) => manager_tray::ExitCheck::Clear,
+                        servers => manager_tray::ExitCheck::Confirm(Some(servers)),
+                    })
+                }),
+                request_exit: Box::new(move || {
+                    let mut state = exit_state.lock().map_err(fail)?;
+                    if active_work(&state) {
+                        return Ok(false);
+                    }
+                    state.exiting = true;
+                    let gui = std::mem::take(&mut state.gui);
+                    drop(state);
+                    manager_tray::close_gui_windows(&gui);
+                    Ok(true)
+                }),
+                exiting: Box::new(move || exiting_state.lock().map_or(true, |state| state.exiting)),
+            },
+        )
+    };
     let prefetch_root = root.to_path_buf();
     thread::spawn(move || core_prefetch::supervise(&prefetch_root));
     let management_root = root.to_path_buf();
@@ -1451,5 +1543,40 @@ mod start_rejection_tests {
         // An empty path means the instance inherits Java; that is checked at dispatch.
         assert_eq!(queued_start_problem(std::path::Path::new("")), None);
         std::fs::remove_dir_all(&parent).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tray_count_tests {
+    use super::{running_servers, servers_not_stopped};
+    use serde_json::json;
+
+    #[test]
+    fn tray_counts_only_servers_the_list_can_stop() {
+        let snapshot = json!({"rows":[
+            {"state":"Listening","run":{"id":"a"}},
+            {"state":"Starting","run":{"id":"b"}},
+            {"state":"Listening","run":null},
+            {"state":"Stopped","run":{"id":"c"}},
+        ]});
+        assert_eq!(running_servers(&snapshot), 2);
+        assert_eq!(running_servers(&json!({})), 0);
+    }
+
+    #[test]
+    fn quit_counts_every_server_not_known_to_be_stopped() {
+        // Anything short of a confirmed stop counts, including a run still being decided.
+        let snapshot = json!({"rows":[
+            {"name":"guarded","state":"Listening","run":{"id":"a"}},
+            {"name":"launching","state":"Starting","run":null},
+            {"name":"undecided","state":"RunUnconfirmed","run":null},
+            {"name":"occupied","state":"PortOccupied","run":null},
+            {"name":"unreadable"},
+            {"name":"stopped","state":"Stopped","run":{"id":"d"}},
+        ]});
+        let policy = |name: &str| matches!(name, "guarded" | "undecided" | "stopped");
+        assert_eq!(servers_not_stopped(&snapshot, policy), (5, 2));
+        assert_eq!(servers_not_stopped(&json!({"rows":[{"state":"Stopped"}]}), |_| true), (0, 0));
+        assert_eq!(servers_not_stopped(&json!({}), |_| true), (0, 0));
     }
 }

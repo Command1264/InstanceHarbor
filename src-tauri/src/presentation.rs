@@ -31,6 +31,8 @@ struct Preferences {
     console_title_overrides: BTreeMap<String, String>,
     #[serde(default, rename = "corePrefetch")]
     core_prefetch: bool,
+    // No longer used: the Manager owns the tray and closing the window ends the GUI.
+    // Kept so files from 1.0.0 still load and a rollback keeps the user's choice.
     // Omit the default so 1.0.0-rc2, which rejects unknown fields, can still read the file.
     #[serde(default = "default_close_to_tray", rename = "closeToTray", skip_serializing_if = "is_default_close_to_tray")]
     close_to_tray: bool,
@@ -119,10 +121,10 @@ pub(super) fn core_prefetch_enabled(root: &Path) -> Result<bool> {
     Ok(load_preferences(root)?.core_prefetch)
 }
 
-/// Accepts the workspace as configured; resolves it the same way `dispatch` does.
-pub(super) fn close_to_tray_enabled(workspace: &Path) -> Result<bool> {
-    let root = safe_directory(workspace)?;
-    Ok(load_preferences(&root)?.close_to_tray)
+/// Whether Manager-owned text such as the tray menu uses Traditional Chinese.
+#[cfg_attr(test, allow(dead_code))]
+pub(super) fn chinese_ui(root: &Path) -> bool {
+    chinese_interface(load_preferences(root).map(|preferences| preferences.language).unwrap_or_default())
 }
 
 fn load_preferences(root: &Path) -> Result<Preferences> {
@@ -1548,30 +1550,21 @@ mod tests {
     }
 
     #[test]
-    fn close_to_tray_defaults_on_and_is_only_written_when_off() {
+    fn retired_close_to_tray_is_kept_for_rollback_and_only_written_when_off() {
         let fixture = std::env::temp_dir().join(format!("ih-tray-pref-{}-{}", std::process::id(), clock()));
         fs::create_dir(&fixture).unwrap();
         let root = fs::canonicalize(&fixture).unwrap();
-        assert!(close_to_tray_enabled(&root).unwrap());
+        let stored = |root: &Path| load_preferences(root).unwrap().close_to_tray;
+        assert!(stored(&root));
 
         // The default stays out of the file so rc2 can still read it after a rollback.
         save_preferences(&root, r#"{"theme":"dark","pins":[]}"#, None).unwrap();
-        let saved = fs::read_to_string(preferences_path(&root)).unwrap();
-        assert!(!saved.contains("closeToTray"));
-        assert!(close_to_tray_enabled(&root).unwrap());
-
-        save_preferences(&root, r#"{"theme":"dark","pins":[],"closeToTray":false}"#, None).unwrap();
-        assert!(!close_to_tray_enabled(&root).unwrap());
-        // The GUI passes IH_WORKSPACE as given, without the extended-length prefix.
-        assert!(!fixture.to_string_lossy().starts_with(r"\\?\"));
-        assert!(!close_to_tray_enabled(&fixture).unwrap());
-        // Saves from other settings tabs omit the field and keep the stored choice.
-        save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
-        assert!(!close_to_tray_enabled(&root).unwrap());
-
-        save_preferences(&root, r#"{"theme":"light","pins":[],"closeToTray":true}"#, None).unwrap();
-        assert!(close_to_tray_enabled(&root).unwrap());
         assert!(!fs::read_to_string(preferences_path(&root)).unwrap().contains("closeToTray"));
+
+        // A 1.0.0 file that turned it off still loads, and later saves keep that choice.
+        save_preferences(&root, r#"{"theme":"dark","pins":[],"closeToTray":false}"#, None).unwrap();
+        save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
+        assert!(!stored(&root));
         fs::remove_file(preferences_path(&root)).unwrap();
         fs::remove_dir(&fixture).unwrap();
     }
