@@ -16,7 +16,7 @@ InstanceHarbor is a Windows desktop app and command-line tool for running Minecr
 - **Settings and game rules.** Edit `server.properties` and game rules. Changes apply live through the console, or are written into the world after a normal stop.
 - **Core updates.** Check for newer builds of the same version line, optionally download them in advance, and update one server or many. Each update keeps a backup you can restore.
 - **Verified cores, offline friendly.** Cores are checked by SHA-256 against the official PaperMC list. Without a network connection, or for cores PaperMC does not publish, the server still works and InstanceHarbor shows a warning.
-- **Desktop integration.** A system tray icon, and an English or Traditional Chinese interface that follows your Windows language.
+- **Desktop integration.** A notification-area icon that shows while the background Manager runs and can quit it, and an English or Traditional Chinese interface that follows your Windows language.
 
 ## Requirements
 

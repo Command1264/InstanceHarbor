@@ -8,8 +8,6 @@ mod workspace_binding;
 #[cfg(windows)]
 mod system_accent;
 #[cfg(windows)]
-mod tray;
-#[cfg(windows)]
 mod webview_runtime;
 mod window_placement;
 #[cfg(windows)]
@@ -64,21 +62,6 @@ fn system_accent_color() -> Result<String, String> {
     #[cfg(not(windows))]
     {
         Err("SystemAccentUnavailable".into())
-    }
-}
-#[tauri::command]
-fn tray_status(app: tauri::AppHandle, running: u32, language: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        use tauri::Manager;
-        let language = tray::Language::parse(&language)?;
-        let tray = app.try_state::<tray::Tray>().ok_or("TrayUnavailable")?;
-        tray.update(running, language).map_err(|error| error.to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, running, language);
-        Err("TrayUnavailable".into())
     }
 }
 #[tauri::command]
@@ -282,7 +265,7 @@ async fn manage_inner(
     if arguments.first().is_some_and(|verb| {
         matches!(
             verb.as_str(),
-            "host" | "init" | "manager-serve" | "manager-exit"
+            "host" | "init" | "manager-serve" | "manager-exit" | "gui-attach"
         )
     }) {
         return Err("不允許從 GUI 啟動 Host 或變更工作區。".into());
@@ -488,6 +471,35 @@ fn run_console(workspace: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps this GUI registered with its workspace's Manager, so the Manager's tray
+/// icon shows while the GUI runs and its Quit closes this GUI too. Repeats in case
+/// the Manager is restarted while the window stays open.
+#[cfg(windows)]
+fn attach_to_manager() {
+    let Some(root) = std::env::var_os("IH_WORKSPACE").and_then(|root| root.into_string().ok()) else {
+        return;
+    };
+    let pid = std::process::id().to_string();
+    let mut last_error: Option<String> = None;
+    loop {
+        match instanceharbor::dispatch(&[root.clone(), "gui-attach".into(), pid.clone()]) {
+            Ok(_) => last_error = None,
+            // A Manager that is quitting is about to close this GUI.
+            Err(error) if error == "ManagerExiting" => {}
+            Err(error) => {
+                if last_error.as_deref() != Some(error.as_str()) {
+                    eprintln!("Could not attach to the Manager: {error}");
+                    if let Ok(log) = diagnostics::global() {
+                        diagnostic_write(log.record(json!({"type":"gui-attach","error":diagnostics::safe_error(&error)})));
+                    }
+                    last_error = Some(error);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+}
+
 fn main() {
     #[cfg(windows)]
     let _installation = match instanceharbor::installation::acquire() {
@@ -602,7 +614,6 @@ fn main() {
             pick_file,
             diagnostic_status,
             report_gui_event,
-            tray_status,
             about_info,
             open_about_link
         ])
@@ -627,17 +638,12 @@ fn main() {
                     eprintln!("Could not fit the main window to the work area: {error}");
                 }
             }
+            // The Manager owns the notification-area icon; attaching starts it if needed.
             #[cfg(windows)]
-            tray::install(app.handle())?;
+            std::thread::spawn(attach_to_manager);
             #[cfg(not(windows))]
             let _ = app;
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            #[cfg(windows)]
-            tray::window_event(window, event);
-            #[cfg(not(windows))]
-            let _ = (window, event);
         })
         .build(context)
         .map_err(|error| error.to_string());
