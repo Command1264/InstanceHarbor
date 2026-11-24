@@ -390,6 +390,9 @@ pub fn safe_action(action: &str) -> &str {
         | "preview-scan-policy"
         | "save-scan-policy"
         | "remove-management"
+        | "delete-server"
+        | "removed-instances"
+        | "open-server-folder"
         | "open-log-folder" => action,
         "present-window" => action,
         _ => "unrecognized",

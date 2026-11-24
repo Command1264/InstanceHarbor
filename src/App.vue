@@ -8,7 +8,9 @@ import ActivityPage from './ActivityPage.vue'
 import CoreMaintenanceDialog from './components/CoreMaintenanceDialog.vue'
 import BatchCoreDialog from './components/BatchCoreDialog.vue'
 import ManagementFolderDialog from './components/ManagementFolderDialog.vue'
+import RemovedInstancesDialog from './components/RemovedInstancesDialog.vue'
 import PathPickerButton from './components/PathPickerButton.vue'
+import CopyButton from './components/CopyButton.vue'
 import { displayPath } from './path-display'
 import OverlayScroll from './components/OverlayScroll.vue'
 import OperationButton from './components/OperationButton.vue'
@@ -28,6 +30,7 @@ type Mode='create'|'force'|'remove'|'logs'|'batch'|'console-window'|null
 const coreDialog = ref<InstanceType<typeof CoreMaintenanceDialog>>()
 const coreTarget = ref<string>()
 const managementFolderDialog = ref<InstanceType<typeof ManagementFolderDialog>>()
+const removedInstancesDialog = ref<InstanceType<typeof RemovedInstancesDialog>>()
 const batchCoreDialog = ref<InstanceType<typeof BatchCoreDialog>>()
 async function openCore(name: string) {
   if (coreTarget.value) return
@@ -340,7 +343,10 @@ function cancelCreationPreview() {
   modalMessage.value=''
 }
 watch(draft,cancelCreationPreview,{flush:'sync'})
-const removeChoice=ref<'retain'|'delete'>('retain')
+const removeChoice=ref<'retain'|'delete'|'recycle'>('retain')
+const removeConfirmName=ref('')
+const removeMeta=computed(()=>presentation.value.instances.find(item=>item.name===target.value?.name))
+const removeReady=computed(()=>removeChoice.value!=='recycle'||(!!target.value&&removeConfirmName.value===target.value.name))
 const pendingBatch=ref<{action:'start'|'stop'|'restart';targets:Instance[]}>()
 const javaCandidates=ref<JavaCandidate[]>([])
 const javaChecked=ref(false)
@@ -618,7 +624,7 @@ function open(next:Mode,item?:{name:string;run?:string}){
   logsMessage.value=''
   if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:'instances',port:12010,core:'',source:'',version:'',testAdministrators:'default'})}
   provisionBaseline.value=JSON.stringify(draft)
-  if(next==='remove')removeChoice.value='retain'
+  if(next==='remove'){removeChoice.value='retain';removeConfirmName.value=''}
   void nextTick(()=>{dialog.value?.showModal();cancelButton.value?.focus()})
   if(next==='logs'&&item){
     logSource.value='terminal'
@@ -1011,21 +1017,29 @@ function movePin(name:string,direction:number){
 }
 async function removeManagement(){
   const item=target.value
-  if(!item)return
+  if(!item||!removeReady.value)return
+  const recycle=removeChoice.value==='recycle'
   invalidateRefresh()
   modalBusy.value=true
   modalError.value=''
-  modalMessage.value=t('app.remove.removing')
+  modalMessage.value=t(recycle?'app.remove.recycling':'app.remove.removing')
   try{
-    await manage(['remove-management',item.name,removeChoice.value])
-    feedback.value=t('app.remove.done',{name:item.name})
+    if(recycle)await manage(['delete-server',item.name,removeConfirmName.value])
+    else await manage(['remove-management',item.name,removeChoice.value])
+    feedback.value=t(recycle?'app.remove.recycled':'app.remove.done',{name:item.name})
     dialog.value?.close()
     modal.value=null
     await refresh()
   }catch(e){
-    await showModalError(t('app.remove.error',{error:errorText(e)}))
+    modalMessage.value=''
+    await showModalError(t(recycle?'app.remove.recycleError':'app.remove.error',{error:errorText(e)}))
+    if(recycle)void refresh()
   }
   finally{modalBusy.value=false}
+}
+async function openServerFolder(name:string){
+  try{await manage(['open-server-folder',name])}
+  catch(e){feedback.value=t('instances.openServerFolderError',{error:errorText(e)})}
 }
 let catalogTimer:ReturnType<typeof setInterval> | undefined
 onMounted(() => {
@@ -1059,12 +1073,14 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="issue in registryIssues" :key="issue.file">{{ issue.file }} · {{ registryIssueLabels[issue.reason] }}</li></ul></OverlayScroll>
         </template>
       </aside>
-      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :console-available="presentation.capabilities?.nativeConsole===true" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @create="open('create')" @refresh="refresh(true)"/>
+      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :console-available="presentation.capabilities?.nativeConsole===true" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @open-folder="openServerFolder" @removed="removedInstancesDialog?.open()" @create="open('create')" @refresh="refresh(true)"/>
       <ActivityPage v-else-if="route==='activity'" :jobs="projectedJobs" :initial-loading="jobsReading && !jobsLoaded && !jobsError && !residentError" :loaded="jobsLoaded" :time-format="visiblePreferences.timeFormat" :error="jobsError" :batch-error="residentError" :cancelling-batch="cancellingBatch" :cancelling-core-batch="cancellingCoreBatch" :core-cancel-failure="coreCancelFailure" :feedback="activityFeedback" @refresh="refreshJobs(true)" @cancel-batch="cancelResidentBatch" @cancel-core-batch="cancelCoreBatch"/>
       <SettingsPage v-else :instance="settingsName" :instance-state="currentSettingsState" :instance-run="currentSettingsRow?.run?.id" :world-command-ready="worldCommandReady" :world-rule-work="worldRuleWork" :restart-status="currentSettingsRow?.autoRestartStatus" :instance-meta="currentSettingsMeta" :preferences="presentation.preferences" :preferences-revision="preferencesRevision" :preferences-loaded="preferencesLoaded" :preferences-ready="preferencesLoaded && !preferencesUnavailable" :connected="connected" :java-candidates="javaCandidates" :java-checked="javaChecked" :refresh-java="discoverJava" :retry-preferences="retryPreferences" @close="navigate('instances')" @core="openCore" @language-preview="languagePreview=$event" @dirty="settingsDirty=$event" @saving="settingsSaving=$event" @mutating="invalidateRefresh" @management-changed="invalidateRefresh(); refresh(); refreshJobs(false,true)" @preferences="next=>{invalidateRefresh();applyPreferences(next)}"/>
     </main></div>
   <footer class="statusbar" :class="{disconnected:connection==='disconnected'||connection==='browser'}" role="status"><span class="connection-dot" aria-hidden="true"></span>{{ t(connection==='connected'?'connection.connected':connection==='browser'?'connection.browser':connection==='unknown'?'connection.unknown':'connection.disconnected') }}<span v-if="preferencesUnavailable"> · {{ t(preferencesLoaded ? 'connection.preferencesStale' : 'connection.preferencesMissing') }}</span></footer>
   <CoreMaintenanceDialog v-if="coreTarget" ref="coreDialog" :name="coreTarget" :cached-source="coreCheckRows[coreTarget]" :query="manuallyCheckCore" :time-format="visiblePreferences.timeFormat" @close="coreTarget=undefined" @changed="refreshAfterCoreChange" />
+  <RemovedInstancesDialog ref="removedInstancesDialog" :connected="connected" :java-candidates="javaCandidates" :java-checked="javaChecked" :refresh-java="discoverJava" :path-separator="visiblePreferences.pathSeparator"
+    @changed="invalidateRefresh(); refresh()" />
   <ManagementFolderDialog ref="managementFolderDialog" :connected="connected" :path-separator="visiblePreferences.pathSeparator"
     @changed="invalidateRefresh(); refresh(); refreshJobs(false,true)" />
   <BatchCoreDialog ref="batchCoreDialog" :instances="rows" :meta="presentation.instances" :source-rows="coreCheckRows" :query="manuallyCheckCoreBatch"
@@ -1076,7 +1092,19 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
     <template v-if="modal==='batch'"><h2 id="operation-dialog-title">{{ t('app.batch.title') }}</h2><p>{{ t('app.batch.body',{count:pendingBatch?.targets.length ?? 0,action:t(pendingBatch?.action==='start'?'app.batch.start':pendingBatch?.action==='stop'?'app.batch.stop':'app.batch.restart')}) }}</p><p v-if="pendingBatch?.action==='restart'" class="hint">{{ t('app.batch.restartHint') }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">{{ t('action.cancel') }}</button><OperationButton class="primary" :label="t('app.batch.confirm')" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
     <template v-if="modal==='console-window'"><h2 id="operation-dialog-title">{{ t('console.confirm.title') }}</h2><p>{{ t('console.confirm.body',{name:target?.name ?? '',reason:consoleWindowStart?.reason ?? ''}) }}</p><p class="notice">{{ t('console.confirm.warning') }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus @click="close">{{ t('action.cancel') }}</button><button @click="startFromConsoleDialog(false)">{{ t('console.confirm.plain') }}</button><button class="danger" @click="startFromConsoleDialog(true)">{{ t('console.confirm.window') }}</button></div></template>
     <template v-else-if="modal==='force'"><h2 id="operation-dialog-title">{{ t('app.force.title') }}</h2><p>{{ t('app.force.body',{name:target?.name ?? ''}) }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="forceStop">{{ t('app.force.confirm') }}</button></div></template>
-    <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">{{ t('app.remove.title') }}</h2><p>{{ t('app.remove.keep',{name:target?.name ?? ''}) }}</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">{{ t('app.remove.retain') }}</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">{{ t('app.remove.delete') }}</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="removeManagement">{{ t('app.remove.confirm') }}</button></div></template>
+    <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">{{ t('app.remove.title') }}</h2><p>{{ t('app.remove.intro',{name:target?.name ?? ''}) }}</p>
+      <fieldset class="remove-choices" :disabled="modalBusy">
+        <label class="remove-choice"><input v-model="removeChoice" type="radio" name="remove-choice" value="retain" aria-describedby="remove-retain-hint"><span><strong>{{ t('app.remove.retain') }}</strong><span id="remove-retain-hint" class="hint">{{ t('app.remove.retainHint') }}</span></span></label>
+        <label class="remove-choice"><input v-model="removeChoice" type="radio" name="remove-choice" value="delete" aria-describedby="remove-delete-hint"><span><strong>{{ t('app.remove.delete') }}</strong><span id="remove-delete-hint" class="hint">{{ t(removeMeta?.managementDiscovered?'app.remove.deleteDiscoveredHint':'app.remove.deleteHint') }}</span></span></label>
+        <label class="remove-choice"><input v-model="removeChoice" type="radio" name="remove-choice" value="recycle" aria-describedby="remove-recycle-hint"><span><strong class="remove-danger">{{ t('app.remove.recycle') }}</strong><span id="remove-recycle-hint" class="hint">{{ t(removeMeta?.managementDiscovered?'app.remove.recycleDiscoveredHint':'app.remove.recycleHint') }}</span></span></label>
+      </fieldset>
+      <div class="remove-confirm" :class="{inactive:removeChoice!=='recycle'}">
+        <p class="hint selectable" translate="no">{{ t('app.remove.folder',{path:removeMeta?.path?displayPath(removeMeta.path,visiblePreferences.pathSeparator):'--'}) }}</p>
+        <p class="hint">{{ t('app.remove.nukeWarning') }}</p>
+        <div class="remove-confirm-label"><span id="remove-confirm-label" class="selectable">{{ t('app.remove.typeName',{name:target?.name ?? ''}) }}</span><CopyButton :text="target?.name ?? ''" :label="t('app.remove.copyName')" :disabled="modalBusy||removeChoice!=='recycle'" /></div>
+        <input v-model="removeConfirmName" type="text" name="remove-confirm-name" aria-labelledby="remove-confirm-label" autocomplete="off" spellcheck="false" :disabled="modalBusy||removeChoice!=='recycle'" @keydown.enter.prevent="removeManagement">
+      </div>
+      <p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy||!removeReady" @click="removeManagement">{{ t(removeChoice==='recycle'?'app.remove.confirmRecycle':'app.remove.confirm') }}</button></div></template>
     <template v-else-if="modal==='logs'"><h2 id="operation-dialog-title">{{ t('app.logs.title',{name:target?.name ?? ''}) }}</h2><label v-if="logs?.sources">{{ t('app.logs.source') }}
         <select v-model="logSource" name="log-source">
           <option v-for="source in logs.sources" :key="source.source" :value="source.source">{{ source.source==='terminal'&&logs.merged?t('app.logs.merged'):logLabels[source.source] }}</option>
