@@ -35,7 +35,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 滑鼠停在圖示上會顯示執行中的伺服器台數，右鍵選單第一行也會顯示（每 5 秒更新，算法與清單的「可停止」相同）。
   選單文字依「語言與外觀」的語言設定。
 - 左鍵點圖示，或右鍵選「開啟 InstanceHarbor」，會以這個工作區開啟 GUI；GUI 已在執行時則叫回它的視窗。
-- 右鍵選「結束（伺服器會繼續執行）」會結束 Manager，並關閉已登記的 GUI 視窗。伺服器與 Host 是獨立程序，會繼續執行。
+- 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗。伺服器與 Host 是獨立程序，會繼續執行。
   還有批次工作或核心更新在進行時，Manager 不結束，改為跳出說明，請等工作完成後再結束；這與 `manager-exit` 回報
   `ManagerHasActiveWork` 的條件相同。
 - 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。
@@ -476,7 +476,7 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 以腳本直接啟動時，`IH_WORKSPACE` 可指定已初始化的工作區。Setup 建立的「開始」捷徑固定使用正式預設工作區。
 需要隔離多個候選時，請明確指定各自的工作區。這個版本第一次啟動會建立預設工作區，不會自動遷移舊版資料。
 
-解除安裝前先從 GUI 正常停止各台伺服器，再從系統匣選「結束（伺服器會繼續執行）」，一併關閉 GUI 與該工作區的 Manager。
+解除安裝前先從 GUI 正常停止各台伺服器，再從系統匣選「結束」，一併關閉 GUI 與該工作區的 Manager。
 也可以改用該安裝的 `ihctl.exe WORKSPACE manager-exit`。
 卸載會保留工作區與日誌。要測試回退可先備份工作區，解除安裝 Setup，再用已驗證的舊 ZIP 開啟同一工作區。
 便攜安裝可用 `install-windows.ps1 -Action Rollback` 切回已安裝的前一版，包含 GUI 檔名仍為 `instanceharbor-v2.exe` 的候選。保留工作區中的新舊設定，重開後先核對再啟動伺服器。

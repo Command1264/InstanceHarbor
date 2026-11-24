@@ -59,9 +59,9 @@ pub(super) struct Labels {
 
 pub(super) fn labels(chinese: bool) -> Labels {
     if chinese {
-        Labels { open: "開啟 InstanceHarbor", quit: "結束（伺服器會繼續執行）" }
+        Labels { open: "開啟 InstanceHarbor", quit: "結束" }
     } else {
-        Labels { open: "Open InstanceHarbor", quit: "Quit (servers keep running)" }
+        Labels { open: "Open InstanceHarbor", quit: "Quit" }
     }
 }
 
@@ -290,9 +290,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn quit_says_servers_keep_running_in_both_languages() {
-        assert!(labels(true).quit.contains("伺服器會繼續執行"));
-        assert!(labels(false).quit.contains("servers keep running"));
+    fn quit_label_is_short_and_refusal_explains_servers_keep_running() {
+        assert_eq!(labels(true).quit, "結束");
+        assert_eq!(labels(false).quit, "Quit");
         assert!(active_work_message(true).contains("繼續執行"));
         assert!(active_work_message(false).contains("keep running"));
     }
