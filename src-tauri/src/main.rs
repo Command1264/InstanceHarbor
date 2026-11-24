@@ -11,6 +11,7 @@ mod system_accent;
 mod tray;
 #[cfg(windows)]
 mod webview_runtime;
+mod window_placement;
 #[cfg(windows)]
 use instanceharbor::desktop_channel;
 use instanceharbor::diagnostics;
@@ -405,6 +406,17 @@ fn terminal_close(
 }
 
 #[cfg(windows)]
+const CONSOLE_SIZE: window_placement::LogicalSize = window_placement::LogicalSize {
+    width: 1020.0,
+    height: 820.0,
+};
+#[cfg(windows)]
+const CONSOLE_MIN_SIZE: window_placement::LogicalSize = window_placement::LogicalSize {
+    width: 460.0,
+    height: 280.0,
+};
+
+#[cfg(windows)]
 fn run_console(workspace: &str) -> Result<(), String> {
     desktop_channel::validate_workspace(std::path::Path::new(workspace), false)?;
     workspace_binding::configure_desktop()?;
@@ -435,8 +447,8 @@ fn run_console(workspace: &str) -> Result<(), String> {
             )
             // The viewer replaces this with its translated title before the window is shown.
             .title(desktop_channel::TITLE)
-            .inner_size(1020.0, 820.0)
-            .min_inner_size(460.0, 280.0)
+            .inner_size(CONSOLE_SIZE.width, CONSOLE_SIZE.height)
+            .min_inner_size(CONSOLE_MIN_SIZE.width, CONSOLE_MIN_SIZE.height)
             .resizable(true)
             .enable_clipboard_access()
             .devtools(false)
@@ -446,6 +458,11 @@ fn run_console(workspace: &str) -> Result<(), String> {
                 None => window,
             }
             .build()?;
+            if let Err(error) =
+                window_placement::fit_window(&window, CONSOLE_SIZE, CONSOLE_MIN_SIZE)
+            {
+                eprintln!("Could not fit native console to the work area: {error}");
+            }
             let window_handle = window.clone();
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -593,11 +610,22 @@ fn main() {
             #[cfg(windows)]
             for config in &main_window {
                 let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
-                match workspace_binding::webview_data_directory() {
+                let window = match workspace_binding::webview_data_directory() {
                     Some(folder) => window.data_directory(folder),
                     None => window,
                 }
                 .build()?;
+                let size = window_placement::LogicalSize {
+                    width: config.width,
+                    height: config.height,
+                };
+                let min_size = window_placement::LogicalSize {
+                    width: config.min_width.unwrap_or(1.0),
+                    height: config.min_height.unwrap_or(1.0),
+                };
+                if let Err(error) = window_placement::fit_window(&window, size, min_size) {
+                    eprintln!("Could not fit the main window to the work area: {error}");
+                }
             }
             #[cfg(windows)]
             tray::install(app.handle())?;
