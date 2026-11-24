@@ -1,6 +1,6 @@
 # Windows distribution licenses
 
-The original InstanceHarbor source is under MIT. In both the Windows x64 ZIP and the Setup installation folder, `LICENSE` contains the project license and `THIRD-PARTY-NOTICES.txt` preserves the applicable upstream notices. The ZIP manifest covers the three license and source files and the Windows startup guide. Setup installs the same files beside the executables. Use a separately authenticated ZIP SHA-256 when staging a package that contains these files. The executables’ Authenticode signatures, if present, do not cover separate documents.
+The original InstanceHarbor source is under MIT. In both the Windows x64 ZIP and the Setup installation folder, `LICENSE` contains the project license and `THIRD-PARTY-NOTICES.txt` preserves the applicable upstream notices. **Application settings** → **About** opens both files in Notepad from the folder of `InstanceHarbor.exe`; builds without them disable those buttons. The ZIP manifest covers the three license and source files and the Windows startup guide. Setup installs the same files beside the executables. Use a separately authenticated ZIP SHA-256 when staging a package that contains these files. The executables’ Authenticode signatures, if present, do not cover separate documents.
 
 ## MPL source
 

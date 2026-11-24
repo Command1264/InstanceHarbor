@@ -55,6 +55,8 @@ $workspace = "$env:LOCALAPPDATA\InstanceHarbor\workspaces\default"
 & $ihctl $workspace status lobby
 ```
 
+`& $ihctl --version` 會顯示版本與建置時的 Git commit，例如 `InstanceHarbor CLI 1.0.0 (33dfd35)`。「應用程式設定」→「關於」也顯示同樣的資訊，並附上本儲存庫的連結。
+
 完整的指令請見[開發指南](docs/development.md)。
 
 ## 從原始碼建置

@@ -144,7 +144,7 @@ defineExpose({ open })
 .removed-instances-dialog { width: min(640px, calc(100vw - 36px)); overflow: hidden; }
 .removed-instances-dialog[open] { display: flex; flex-direction: column; }
 .removed-instances-scroll { min-height: 0; }
-.removed-instances-scroll :deep(.overlay-viewport) { padding: 4px 14px 8px 4px; }
+.removed-instances-scroll :deep(.overlay-viewport) { padding: calc(4px + var(--focus-ring-extent)) 14px 8px calc(4px + var(--focus-ring-extent)); }
 .removed-instances-list { list-style: none; padding: 0; margin: 8px 0 0; }
 .removed-instances-row { border-top: 1px solid var(--border); padding: 10px 0; font-size: .875rem; min-width: 0; overflow-wrap: anywhere; display: grid; gap: 6px; }
 .removed-instances-row p { margin: 0; }
