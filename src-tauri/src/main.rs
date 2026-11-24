@@ -11,6 +11,7 @@ mod system_accent;
 mod tray;
 #[cfg(windows)]
 mod webview_runtime;
+mod startup_prefetch;
 mod startup_timing;
 mod window_placement;
 #[cfg(windows)]
@@ -20,6 +21,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static IPC_ID: AtomicU64 = AtomicU64::new(1);
 static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
+static PREFETCH: startup_prefetch::Prefetch = startup_prefetch::Prefetch::new();
 fn diagnostic_write(result: Result<(), String>) {
     if let Err(error) = result {
         eprintln!("GUI diagnostic write failed: {error}")
@@ -238,6 +240,12 @@ async fn manage(
     arguments: Vec<String>,
     origin: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if let Some(pending) = PREFETCH.take(&arguments, origin.as_deref()) {
+        // The prefetch already recorded this read in the diagnostics log.
+        if let Ok(Some(result)) = tauri::async_runtime::spawn_blocking(move || pending.finish()).await {
+            return result;
+        }
+    }
     manage_recorded(arguments, origin, None).await
 }
 
@@ -595,6 +603,13 @@ fn main() {
         Err(error)=>eprintln!("GUI diagnostics unavailable: {error}"),
     }
     startup_timing::mark("diagnostics-open");
+    // The workspace is bound; read what the first screen needs while WebView2 starts.
+    #[cfg(windows)]
+    for verb in startup_prefetch::VERBS {
+        PREFETCH.start(verb, move || {
+            tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None))
+        });
+    }
     let mut context = tauri::generate_context!();
     // Acceptance uses the debug profile, so set this before Tauri creates windows.
     let enable_devtools = cfg!(any(debug_assertions, feature = "development-channel"))
