@@ -212,12 +212,15 @@ unsafe extern "system" {
 }
 
 const FO_DELETE: u32 = 3;
+// No Windows progress window; InstanceHarbor shows its own progress text.
+const FOF_SILENT: u16 = 0x0004;
 const FOF_NOCONFIRMATION: u16 = 0x0010;
 const FOF_ALLOWUNDO: u16 = 0x0040;
 const FOF_NOERRORUI: u16 = 0x0400;
 // Windows still asks before deleting permanently, for example when the folder
 // is too large for the Recycle Bin. This overrides FOF_NOCONFIRMATION for that case only.
 const FOF_WANTNUKEWARNING: u16 = 0x4000;
+const RECYCLE_FLAGS: u16 = FOF_ALLOWUNDO | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_WANTNUKEWARNING;
 
 fn recycle(folder: &Path) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
@@ -231,7 +234,7 @@ fn recycle(folder: &Path) -> Result<()> {
         function: FO_DELETE,
         from: from.as_ptr(),
         to: std::ptr::null(),
-        flags: FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_WANTNUKEWARNING,
+        flags: RECYCLE_FLAGS,
         aborted: 0,
         mappings: std::ptr::null_mut(),
         title: std::ptr::null(),
@@ -339,6 +342,13 @@ mod tests {
         let before = fs::read(root.join("scan-policy.json")).unwrap();
         forget_folder(&root, &alpha).unwrap();
         assert_eq!(fs::read(root.join("scan-policy.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn recycling_hides_progress_but_keeps_the_permanent_delete_warning() {
+        assert_ne!(RECYCLE_FLAGS & FOF_SILENT, 0);
+        assert_ne!(RECYCLE_FLAGS & FOF_ALLOWUNDO, 0);
+        assert_ne!(RECYCLE_FLAGS & FOF_WANTNUKEWARNING, 0);
     }
 
     #[test]
