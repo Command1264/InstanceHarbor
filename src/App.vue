@@ -10,6 +10,7 @@ import BatchCoreDialog from './components/BatchCoreDialog.vue'
 import ManagementFolderDialog from './components/ManagementFolderDialog.vue'
 import RemovedInstancesDialog from './components/RemovedInstancesDialog.vue'
 import PathPickerButton from './components/PathPickerButton.vue'
+import CopyButton from './components/CopyButton.vue'
 import { displayPath } from './path-display'
 import OverlayScroll from './components/OverlayScroll.vue'
 import OperationButton from './components/OperationButton.vue'
@@ -1080,7 +1081,8 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
       <div class="remove-confirm" :class="{inactive:removeChoice!=='recycle'}">
         <p class="hint selectable" translate="no">{{ t('app.remove.folder',{path:removeMeta?.path?displayPath(removeMeta.path,visiblePreferences.pathSeparator):'--'}) }}</p>
         <p class="hint">{{ t('app.remove.nukeWarning') }}</p>
-        <label>{{ t('app.remove.typeName',{name:target?.name ?? ''}) }}<input v-model="removeConfirmName" type="text" name="remove-confirm-name" autocomplete="off" spellcheck="false" :disabled="modalBusy||removeChoice!=='recycle'" @keydown.enter.prevent="removeManagement"></label>
+        <div class="remove-confirm-label"><span id="remove-confirm-label" class="selectable">{{ t('app.remove.typeName',{name:target?.name ?? ''}) }}</span><CopyButton :text="target?.name ?? ''" :label="t('app.remove.copyName')" :disabled="modalBusy||removeChoice!=='recycle'" /></div>
+        <input v-model="removeConfirmName" type="text" name="remove-confirm-name" aria-labelledby="remove-confirm-label" autocomplete="off" spellcheck="false" :disabled="modalBusy||removeChoice!=='recycle'" @keydown.enter.prevent="removeManagement">
       </div>
       <p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy||!removeReady" @click="removeManagement">{{ t(removeChoice==='recycle'?'app.remove.confirmRecycle':'app.remove.confirm') }}</button></div></template>
     <template v-else-if="modal==='logs'"><h2 id="operation-dialog-title">{{ t('app.logs.title',{name:target?.name ?? ''}) }}</h2><label v-if="logs?.sources">{{ t('app.logs.source') }}

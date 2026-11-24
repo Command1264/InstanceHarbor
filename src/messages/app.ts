@@ -88,6 +88,7 @@ export const appMessages = {
   'app.remove.folder': ['伺服器資料夾：{path}', 'Server folder: {path}'],
   'app.remove.nukeWarning': ['資料夾太大而無法放進資源回收筒時，Windows 會先詢問是否永久刪除。選「否」會取消刪除，資料不變。', 'If the folder is too large for the Recycle Bin, Windows asks before deleting it permanently. Select No to cancel; nothing changes.'],
   'app.remove.typeName': ['輸入實例名稱 {name} 以確認', 'Type the instance name {name} to confirm'],
+  'app.remove.copyName': ['複製實例名稱', 'Copy instance name'],
   'app.remove.confirm': ['確認移除', 'Confirm removal'],
   'app.remove.confirmRecycle': ['移到資源回收筒', 'Move to Recycle Bin'],
   'app.remove.recycling': ['正在把伺服器資料夾移到資源回收筒', 'Moving the server folder to the Recycle Bin'],
