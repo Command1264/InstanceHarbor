@@ -57,6 +57,43 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   `Monitor::work_area()` 是實體像素，先扣掉框線再除以縮放比例換算成邏輯像素。
 - 不記住上次的視窗大小與位置。
 
+## GUI 冷啟動計時
+
+GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、新的 WebView2）。每次啟動在 GUI 診斷紀錄
+（`<應用程式資料夾>\logs\gui-*.jsonl`）寫入一筆 `gui-startup` 事件。數值是從 Windows 建立程序起算的毫秒，
+包含 `main` 之前的載入時間。
+
+| 標記 | 位置 | 意義 |
+|---|---|---|
+| `main` … `diagnostics-open` | `native` | `main` 開始、安裝租約、WebView2 檢查、工作區、單一實例鎖、診斷紀錄開啟 |
+| `setup`、`window-built`、`setup-done` | `native` | Tauri setup 開始、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
+| `present-window`、`window-shown` | `native` | 頁面第一次呼叫 `present_window`、視窗實際顯示 |
+| `page-navigation-start` | `page` | WebView2 開始載入頁面 |
+| `page-script-start`、`page-mounted` | `page` | 主程式包執行完畢、Vue 掛載完成 |
+| `page-preferences-read`、`page-window-presented` | `page` | 收到外觀設定、`present_window` 回傳 |
+| `page-first-list-read`、`page-first-list-rendered`、`page-first-list-painted` | `page` | 收到第一份實例清單、DOM 更新、第一次繪製 |
+
+量測方式：建置開發版（`./build-product.ps1 -Development`，`dev-channel` 繼承 release 最佳化），再執行
+
+```powershell
+./tests/measure-gui-cold-start.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-cold-start') -Runs 10
+```
+
+腳本先連線該工作區的 Manager（模擬 Manager 常駐、點系統匣開 GUI），逐次啟動 GUI、讀出 `gui-startup`，
+再以 PID 結束自己啟動的 GUI，最後請該工作區的 Manager 結束。其他開發版 GUI 開著時，腳本會等待，不會關閉它。
+`-BinaryDirectory` 可指定另一份建置，`-BrowserArguments` 可在不重建的情況下比較 WebView2 參數。
+
+冷啟動的時間大多花在建立 WebView2（`setup` 到 `window-built` 約 580 ms），這段由 WebView2 自己決定。
+為了不讓頁面載入後再等讀取，GUI 綁定工作區後立刻在背景執行緒讀外觀設定（`preferences-snapshot`）與實例清單
+（`instance-snapshot`），和建立 WebView2 同時進行（`src-tauri/src/startup_prefetch.rs`）。讀取走與頁面呼叫相同、
+會寫診斷紀錄的路徑；頁面第一次以背景方式呼叫同一動作時直接拿到結果，不再寫一次紀錄。結果在完成後超過 1.5 秒
+（清單輪詢間隔）才被取用時捨棄，頁面改為重新讀取，所以畫面上的清單不會比一次輪詢更舊。
+
+2026-11 在開發機量測（中位數，各 10 次以上）：第一份清單畫出從約 1006 ms 降到約 880 ms，視窗顯示從約 1009 ms
+降到約 950 ms。試過但沒有超出雜訊的做法，因此未採用：設定頁與操作紀錄頁延遲載入（主程式包 274 kB → 157 kB，
+掛載時間沒有可量測的差異）、把診斷紀錄寫入移到 blocking 執行緒池、WebView2 參數
+`--no-proxy-server --disable-background-networking --disable-component-update`。
+
 ## 介面語言
 
 - 「應用程式設定」→「介面語言」的選項依序為「跟隨系統」、English、繁體中文。預設為「跟隨系統」，沒有語言設定的舊偏好設定也視為跟隨系統。
