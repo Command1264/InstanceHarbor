@@ -8,7 +8,7 @@ import OperationButton from './OperationButton.vue'
 export type TestAdministrator = { name: string; uuid: string }
 export type LuckPermsArtifact = { platform: 'bukkit' | 'bukkit-java8' | 'velocity'; fileName: string; version: string; sha256: string; state: 'Ready' | 'Missing' | 'Mismatch' }
 
-const props = defineProps<{ artifacts?: LuckPermsArtifact[]; busy: boolean; fetching: boolean; connected: boolean }>()
+const props = defineProps<{ artifacts?: LuckPermsArtifact[]; busy: boolean; fetching: boolean; connected: boolean; nodesError?: string }>()
 const rows = defineModel<TestAdministrator[]>('administrators', { required: true })
 const luckperms = defineModel<boolean>('luckperms', { required: true })
 const op = defineModel<boolean>('op', { required: true })
@@ -52,7 +52,7 @@ function remove(index: number) {
   if (looking.value === row) looking.value = undefined
   rows.value = rows.value.filter((_, position) => position !== index)
 }
-function nameChanged(row: TestAdministrator) {
+function nameChanged(row: TestAdministrator, now = false) {
   clearTimeout(timers.get(row))
   timers.delete(row)
   lookupError.value = ''
@@ -60,7 +60,14 @@ function nameChanged(row: TestAdministrator) {
   // A UUID found for another name must not stay beside a different name.
   row.uuid = ''
   owners.delete(row)
-  if (validMinecraftName(row.name.trim())) timers.set(row, setTimeout(() => void lookup(row), LOOKUP_DEBOUNCE_MS))
+  if (!validMinecraftName(row.name.trim())) return
+  if (now) void lookup(row)
+  else timers.set(row, setTimeout(() => void lookup(row), LOOKUP_DEBOUNCE_MS))
+}
+// Enter looks the name up at once; it also retries a lookup that failed.
+function nameEntered(row: TestAdministrator) {
+  nameChanged(row, true)
+  nameLeft(row)
 }
 // Leaving a name whose lookup failed tries again, so a network error is not a dead end.
 function nameLeft(row: TestAdministrator) {
@@ -69,7 +76,7 @@ function nameLeft(row: TestAdministrator) {
 async function lookup(row: TestAdministrator) {
   timers.delete(row)
   const requested = row.name.trim()
-  if (!props.connected || !rows.value.includes(row) || row.uuid) return
+  if (!props.connected || !rows.value.includes(row) || row.uuid || looking.value === row) return
   looking.value = row
   lookupError.value = ''
   try {
@@ -97,7 +104,7 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
       <thead><tr><th scope="col">{{ t('components.testAdmins.name') }}</th><th scope="col">UUID</th><th scope="col"><span class="sr-only">{{ t('components.testAdmins.actions') }}</span></th></tr></thead>
       <tbody>
         <tr v-for="(row, index) in rows" :key="index">
-          <td><input v-model.trim="row.name" :name="`test-admin-name-${index}`" :aria-label="t('components.testAdmins.nameRow', { row: index + 1 })" autocomplete="off" spellcheck="false" maxlength="16" :disabled="busy" @change="nameChanged(row)" @blur="nameLeft(row)"></td>
+          <td><input v-model.trim="row.name" :name="`test-admin-name-${index}`" :aria-label="t('components.testAdmins.nameRow', { row: index + 1 })" autocomplete="off" spellcheck="false" maxlength="16" :disabled="busy" @change="nameChanged(row)" @blur="nameLeft(row)" @keydown.enter.prevent="nameEntered(row)"></td>
           <td><input :value="row.uuid" class="mono readonly-plain" :name="`test-admin-uuid-${index}`" :aria-label="t('components.testAdmins.uuidRow', { row: index + 1 })" :aria-busy="looking === row" :placeholder="looking === row ? t('components.testAdmins.lookingUp') : '--'" readonly autocomplete="off" spellcheck="false"></td>
           <td><button type="button" :disabled="busy" @click="remove(index)">{{ t('components.testAdmins.remove') }}</button></td>
         </tr>
@@ -116,8 +123,9 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
     </div>
     <div class="field">
       <label for="test-admin-nodes">{{ t('components.testAdmins.nodes') }}</label>
-      <div class="editor with-clear"><textarea id="test-admin-nodes" v-model="nodes" name="test-admin-nodes" rows="4" autocomplete="off" spellcheck="false" :placeholder="t('components.testAdmins.nodesPlaceholder')" :disabled="luckpermsOff || kind !== 'custom'"></textarea>
+      <div class="editor with-clear"><textarea id="test-admin-nodes" v-model="nodes" name="test-admin-nodes" rows="4" autocomplete="off" spellcheck="false" :placeholder="t('components.testAdmins.nodesPlaceholder')" :disabled="luckpermsOff || kind !== 'custom'" :aria-invalid="nodesError ? 'true' : undefined" :aria-describedby="nodesError ? 'test-admin-nodes-error' : undefined"></textarea>
         <button type="button" :aria-label="t('components.testAdmins.clearNodes')" :disabled="busy || !nodes" @click="nodes = ''">{{ t('components.testAdmins.clear') }}</button></div>
+      <small v-if="nodesError" id="test-admin-nodes-error" class="form-error" role="alert">{{ nodesError }}</small>
     </div>
     <div class="field">
       <label for="test-admin-group">{{ t('components.testAdmins.group') }}</label>

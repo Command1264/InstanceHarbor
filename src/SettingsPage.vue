@@ -61,6 +61,8 @@ const testAdminOp=ref(false)
 const testAdminKind=ref<PermissionKind>('all')
 const testAdminNodes=ref('')
 const testAdminGroup=ref('')
+const testAdminNodesError=ref('')
+watch([testAdminNodes,testAdminKind],()=>{testAdminNodesError.value=''})
 const testAdminFetching=ref(false)
 const testAdminDraft=computed(()=>testAdminPayload({rows:testAdminRows.value,luckperms:testAdminLuckperms.value,op:testAdminOp.value,kind:testAdminKind.value,nodes:testAdminNodes.value,group:testAdminGroup.value}))
 function showTestAdmins(snapshot: TestAdminSnapshot) {
@@ -985,10 +987,16 @@ async function save(confirmWorld = false, confirmScope = false){
   if(tab.value==='autorestart' && !autoRestartPayload.value)return
   // Nodes kept beside "all" may be empty, but must still be valid to be saved.
   const nodeIssue=tab.value!=='test-admins' ? undefined : testAdminKind.value==='custom' ? nodeProblem(testAdminNodes.value) : testAdminNodes.value.trim() ? nodeProblem(testAdminNodes.value) : undefined
+  testAdminNodesError.value=''
   if(nodeIssue){
-    error.value=t(nodeIssue==='empty'?'settingsPage.testAdminsNodesRequired':nodeIssue==='tooMany'?'settingsPage.testAdminsNodesTooMany':'settingsPage.testAdminsNodesInvalid')
+    // Shown under the node field, which is far above the page-level error line.
+    testAdminNodesError.value=t(nodeIssue==='empty'?'settingsPage.testAdminsNodesRequired':nodeIssue==='tooMany'?'settingsPage.testAdminsNodesTooMany':'settingsPage.testAdminsNodesInvalid')
     message.value=failureText.value=t('settings.saveFailed')
     saveSucceeded.value=false
+    await nextTick()
+    const field=document.getElementById('test-admin-nodes')
+    if(field instanceof HTMLTextAreaElement && !field.disabled)field.focus()
+    else field?.scrollIntoView({block:'center'})
     return
   }
   emit('mutating')
@@ -1414,7 +1422,7 @@ void load()
       <template v-else-if="tab==='test-admins'">
         <h2>{{ t('settingsPage.testAdmins') }}</h2>
         <TestAdminFields v-model:administrators="testAdminRows" v-model:luckperms="testAdminLuckperms" v-model:op="testAdminOp" v-model:kind="testAdminKind" v-model:nodes="testAdminNodes" v-model:group="testAdminGroup"
-          :artifacts="testAdmins?.artifacts" :busy="saving || !testAdmins" :fetching="testAdminFetching" :connected="connected" @fetch="fetchLuckPerms" />
+          :artifacts="testAdmins?.artifacts" :busy="saving || !testAdmins" :fetching="testAdminFetching" :connected="connected" :nodes-error="testAdminNodesError" @fetch="fetchLuckPerms" />
       </template>
       <RecoveryKeyPanel v-else-if="tab==='recovery'" :connected="connected" />
       <AboutPanel v-else-if="tab==='about'" />
