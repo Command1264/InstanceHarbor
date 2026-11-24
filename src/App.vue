@@ -23,6 +23,7 @@ import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './ope
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
+import { startupListRendered, startupMark, startupWindowPresented } from './startup-timing'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
@@ -413,6 +414,7 @@ async function revealWindow(){
     await nextTick()
     await invoke('present_window',{theme:presentation.value.preferences.theme})
     windowReady=true
+    startupWindowPresented()
   }catch(e){
     feedback.value=t('app.windowError',{error:errorText(e)})
   }finally{windowOpening=false}
@@ -483,6 +485,7 @@ async function refresh(manual=false){
     const preferencesRead=shouldReadPreferences
       ? manage<PreferencesSnapshot>(['preferences-snapshot'],origin).then(
         snapshot=>{
+          startupMark('page-preferences-read')
           if(epoch!==refreshEpoch || preferencesRetrying || preferenceEpoch!==preferencesReadEpoch)return
           applyPreferences(snapshot)
         },
@@ -507,6 +510,7 @@ async function refresh(manual=false){
     const live=new Map(nextRows.map(row=>[row.name,row]))
     for(const [name,run] of Object.entries(stopping.value))if(!canStop(live.get(name))||live.get(name)?.run?.id!==run)delete stopping.value[name]
     connection.value='connected'
+    if(!listLoaded.value){startupMark('page-first-list-read');void nextTick(startupListRendered)}
     listLoaded.value=true
     backgroundFailures=0
     if(manual){

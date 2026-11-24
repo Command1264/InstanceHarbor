@@ -11,6 +11,7 @@ mod system_accent;
 mod tray;
 #[cfg(windows)]
 mod webview_runtime;
+mod startup_timing;
 mod window_placement;
 #[cfg(windows)]
 use instanceharbor::desktop_channel;
@@ -22,6 +23,14 @@ static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
 fn diagnostic_write(result: Result<(), String>) {
     if let Err(error) = result {
         eprintln!("GUI diagnostic write failed: {error}")
+    }
+}
+/// Records the page's cold-start marks once, together with the native marks.
+#[tauri::command]
+fn report_startup_timing(marks: std::collections::BTreeMap<String, f64>) -> Result<(), String> {
+    match startup_timing::report(&marks)? {
+        Some(event) => diagnostics::global()?.record(event),
+        None => Ok(()),
     }
 }
 #[tauri::command]
@@ -193,6 +202,10 @@ fn present_window(window: tauri::WebviewWindow, theme: String) -> Result<(), Str
     result
 }
 fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(), String> {
+    let first = !WINDOW_REVEALED.load(Ordering::SeqCst);
+    if first {
+        startup_timing::mark("present-window");
+    }
     let theme = match theme.as_str() {
         "system" => None,
         "light" => Some(tauri::Theme::Light),
@@ -211,6 +224,9 @@ fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(
         && !window.is_visible().map_err(|error| error.to_string())?
     {
         window.show().map_err(|error| error.to_string())?;
+    }
+    if first {
+        startup_timing::mark("window-shown");
     }
     WINDOW_REVEALED.store(true, Ordering::SeqCst);
     #[cfg(windows)]
@@ -489,6 +505,7 @@ fn run_console(workspace: &str) -> Result<(), String> {
 }
 
 fn main() {
+    startup_timing::mark("main");
     #[cfg(windows)]
     let _installation = match instanceharbor::installation::acquire() {
         Ok(lease) => lease,
@@ -499,10 +516,12 @@ fn main() {
     };
     // Before the single-instance lock: a GUI that cannot create its window must
     // not keep running and block the next launch.
+    startup_timing::mark("installation-lease");
     #[cfg(windows)]
     if !webview_runtime::ensure_available() {
         std::process::exit(1);
     }
+    startup_timing::mark("webview-runtime-checked");
     #[cfg(windows)]
     if let [_, workspace, mode] = std::env::args().collect::<Vec<_>>().as_slice() {
         if mode == "native-console" {
@@ -541,6 +560,7 @@ fn main() {
             std::process::exit(1);
         }
     }
+    startup_timing::mark("workspace-validated");
     #[cfg(windows)]
     let _gui_lease = match instanceharbor::gui_singleton::acquire() {
         Ok(Some(lease)) => lease,
@@ -558,6 +578,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    startup_timing::mark("gui-singleton");
     #[cfg(windows)]
     if std::env::var_os("IH_WORKSPACE").is_none() {
         match workspace_binding::default_workspace() {
@@ -573,6 +594,7 @@ fn main() {
         Ok(log)=>diagnostic_write(log.record(json!({"type":"gui-start","pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"commit":instanceharbor::about::COMMIT,"executableFingerprint":std::env::current_exe().ok().map(|p|diagnostics::path_fingerprint(&p)),"workspaceFingerprint":std::env::var("IH_WORKSPACE").ok().map(|p|diagnostics::path_fingerprint(std::path::Path::new(&p)))}))),
         Err(error)=>eprintln!("GUI diagnostics unavailable: {error}"),
     }
+    startup_timing::mark("diagnostics-open");
     let mut context = tauri::generate_context!();
     // Acceptance uses the debug profile, so set this before Tauri creates windows.
     let enable_devtools = cfg!(any(debug_assertions, feature = "development-channel"))
@@ -604,9 +626,11 @@ fn main() {
             report_gui_event,
             tray_status,
             about_info,
-            open_about_link
+            open_about_link,
+            report_startup_timing
         ])
         .setup(move |app| {
+            startup_timing::mark("setup");
             #[cfg(windows)]
             for config in &main_window {
                 let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
@@ -615,6 +639,7 @@ fn main() {
                     None => window,
                 }
                 .build()?;
+                startup_timing::mark("window-built");
                 let size = window_placement::LogicalSize {
                     width: config.width,
                     height: config.height,
@@ -631,6 +656,7 @@ fn main() {
             tray::install(app.handle())?;
             #[cfg(not(windows))]
             let _ = app;
+            startup_timing::mark("setup-done");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -641,6 +667,7 @@ fn main() {
         })
         .build(context)
         .map_err(|error| error.to_string());
+    startup_timing::mark("app-built");
     match application {
         Ok(app) => app.run(|_, event| {
             // Tauri exits the process after this callback; code after run is not
