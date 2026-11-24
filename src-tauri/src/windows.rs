@@ -630,7 +630,20 @@ fn identity(pid: u32) -> io::Result<Option<Identity>> {
 }
 
 fn alive(process: &Identity) -> Result<bool> {
-    Ok(identity(process.pid).map_err(fail)?.as_ref() == Some(process))
+    recorded_alive(process, identity(process.pid))
+}
+
+/// Whether the process found at a recorded PID is still the recorded one.
+fn recorded_alive(recorded: &Identity, current: io::Result<Option<Identity>>) -> Result<bool> {
+    match current {
+        Ok(current) => Ok(current.as_ref() == Some(recorded)),
+        // Windows reuses PIDs. A process this user started could be opened when it was
+        // recorded, and PROCESS_QUERY_LIMITED_INFORMATION works across integrity levels,
+        // so access denied means the PID now belongs to another process, such as a
+        // system service, and the recorded one has ended.
+        Err(error) if error.raw_os_error() == Some(5) => Ok(false),
+        Err(error) => Err(fail(error)),
+    }
 }
 
 fn process_image(pid: u32) -> Option<PathBuf> {
@@ -2940,6 +2953,18 @@ pub fn dispatch_with_creation_progress(
 #[cfg(test)]
 mod transition_tests {
     use super::*;
+
+    #[test]
+    fn a_recorded_process_id_reused_by_a_process_we_cannot_open_is_not_alive() {
+        let recorded = Identity { pid: 52188, created: 1 };
+        // The PID now belongs to, for example, a system service: OpenProcess is denied.
+        assert_eq!(recorded_alive(&recorded, Err(io::Error::from_raw_os_error(5))), Ok(false));
+        assert_eq!(recorded_alive(&recorded, Ok(Some(Identity { pid: 52188, created: 1 }))), Ok(true));
+        assert_eq!(recorded_alive(&recorded, Ok(Some(Identity { pid: 52188, created: 2 }))), Ok(false));
+        assert_eq!(recorded_alive(&recorded, Ok(None)), Ok(false));
+        // Any other failure still cannot be decided.
+        assert!(recorded_alive(&recorded, Err(io::Error::from_raw_os_error(6))).is_err());
+    }
 
     #[test]
     fn velocity_import_requires_explicit_single_bound_address() {
