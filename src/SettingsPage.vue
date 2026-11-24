@@ -983,7 +983,7 @@ async function save(confirmWorld = false, confirmScope = false){
     if(!scopePlan.value || scopePlan.value.payload!==scanPayload() || !scopePlan.value.preview.previewRevision)return
   }
   if(tab.value==='autorestart' && !autoRestartPayload.value)return
-  const nodeIssue=tab.value==='test-admins' && testAdminLuckperms.value && testAdminKind.value==='custom' ? nodeProblem(testAdminNodes.value) : undefined
+  const nodeIssue=tab.value==='test-admins' && testAdminKind.value==='custom' ? nodeProblem(testAdminNodes.value) : undefined
   if(nodeIssue){
     error.value=t(nodeIssue==='empty'?'settingsPage.testAdminsNodesRequired':nodeIssue==='tooMany'?'settingsPage.testAdminsNodesTooMany':'settingsPage.testAdminsNodesInvalid')
     message.value=failureText.value=t('settings.saveFailed')

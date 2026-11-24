@@ -129,16 +129,12 @@ impl Settings {
             seen.push(uuid.clone());
             checked.push(Administrator { name, uuid });
         }
-        // The grant content only exists while LuckPerms is on.
-        let (permissions, group) = if self.luckperms {
-            let group = self.group.trim().to_owned();
-            if !valid_group(&group) {
-                return Err("InvalidTestAdministratorGroup".into());
-            }
-            (self.permissions.map(Self::normalized_nodes).transpose()?, group)
-        } else {
-            (None, String::new())
-        };
+        // The grant content is kept while LuckPerms is off, so it is checked the same way.
+        let group = self.group.trim().to_owned();
+        if !valid_group(&group) {
+            return Err("InvalidTestAdministratorGroup".into());
+        }
+        let permissions = self.permissions.map(Self::normalized_nodes).transpose()?;
         Ok(Self { administrators: checked, luckperms: self.luckperms, op: self.op, permissions, group })
     }
 
@@ -456,9 +452,11 @@ impl Grant {
     pub(super) fn summary(&self) -> Value {
         let pin = self.luckperms.as_ref().map(|plan| &plan.pin);
         json!({
-            "count":self.settings.administrators.len(), "group":self.settings.group,
+            // Kept LuckPerms content does not apply while LuckPerms is off.
+            "count":self.settings.administrators.len(),
+            "group":if pin.is_some() { self.settings.group.as_str() } else { "" },
             "luckperms":self.luckperms.is_some(), "op":self.op,
-            "customPermissions":self.settings.permissions.as_ref().map(Vec::len),
+            "customPermissions":pin.and(self.settings.permissions.as_ref().map(Vec::len)),
             "fileName":pin.map(|pin| pin.file_name.as_str()), "version":pin.map(|pin| pin.version.as_str()),
             "sha256":pin.map(|pin| pin.sha256.as_str()),
             "settingsRevision":self.revision,
@@ -733,16 +731,14 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn luckperms_content_is_dropped_while_luckperms_is_off() {
-        let off = Settings {
-            luckperms: false,
-            group: "ignored".into(),
-            permissions: Some(vec![]),
-            ..Settings::default()
-        }
-        .normalized()
-        .unwrap();
-        assert_eq!((off.group.as_str(), off.permissions), ("", None));
+    fn luckperms_content_is_kept_and_checked_while_luckperms_is_off() {
+        let off = |group: &str, permissions: Option<Vec<String>>| {
+            Settings { luckperms: false, group: group.into(), permissions, ..Settings::default() }.normalized()
+        };
+        let kept = off(" staff ", Some(vec!["essentials.fly".into()])).unwrap();
+        assert_eq!((kept.group.as_str(), kept.permissions), ("staff", Some(vec!["essentials.fly".into()])));
+        assert_eq!(off("default", None).unwrap_err(), "InvalidTestAdministratorGroup");
+        assert_eq!(off("", Some(vec![])).unwrap_err(), "EmptyTestAdministratorPermissions");
     }
 
     #[test]

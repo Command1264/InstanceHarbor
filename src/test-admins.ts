@@ -47,13 +47,21 @@ export type TestAdminDraftInput = {
   group: string
 }
 
-/** The settings payload; custom nodes are sent only when that choice is made. */
+/**
+ * The settings payload. Custom nodes are sent only when that choice is made.
+ * Turning LuckPerms off keeps the nodes and group; only {@link clearedLuckPerms} removes them.
+ */
 export function testAdminPayload(input: TestAdminDraftInput) {
   return {
     administrators: input.rows.map(row => ({ name: row.name.trim(), uuid: row.uuid.trim() })),
     luckperms: input.luckperms,
     op: input.op,
-    permissions: input.luckperms && input.kind === 'custom' ? parseNodes(input.nodes) : null,
-    group: input.luckperms ? input.group.trim() : '',
+    permissions: input.kind === 'custom' ? parseNodes(input.nodes) : null,
+    group: input.group.trim(),
   }
+}
+
+/** What the clear button resets the LuckPerms grant content to. */
+export function clearedLuckPerms(): Pick<TestAdminDraftInput, 'kind' | 'nodes' | 'group'> {
+  return { kind: 'all', nodes: '', group: '' }
 }

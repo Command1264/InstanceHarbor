@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useAppLanguage } from '../i18n'
 import { errorText, manage } from '../manager'
-import { LOOKUP_DEBOUNCE_MS, MAX_TEST_ADMINISTRATORS, shouldLookup, type PermissionKind } from '../test-admins'
+import { clearedLuckPerms, LOOKUP_DEBOUNCE_MS, MAX_TEST_ADMINISTRATORS, shouldLookup, type PermissionKind } from '../test-admins'
 import OperationButton from './OperationButton.vue'
 
 export type TestAdministrator = { name: string; uuid: string }
@@ -30,6 +30,14 @@ const stateNames = {
 } as const
 const allReady = computed(() => !!props.artifacts?.length && props.artifacts.every(row => row.state === 'Ready'))
 const luckpermsOff = computed(() => props.busy || !luckperms.value)
+// The nodes and group stay when LuckPerms is turned off; only this button removes them.
+const hasLuckPermsContent = computed(() => kind.value !== 'all' || nodes.value !== '' || group.value !== '')
+function clearLuckPerms() {
+  const cleared = clearedLuckPerms()
+  kind.value = cleared.kind
+  nodes.value = cleared.nodes
+  group.value = cleared.group
+}
 
 // Rows whose UUID came from a lookup may be looked up again; a hand-typed or saved UUID never is.
 const autoFilled = new WeakMap<TestAdministrator, string>()
@@ -118,6 +126,7 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
       <label for="test-admin-group">{{ t('components.testAdmins.group') }}</label>
       <div class="editor"><input id="test-admin-group" v-model.trim="group" name="test-admin-group" autocomplete="off" spellcheck="false" maxlength="36" :disabled="luckpermsOff"></div>
     </div>
+    <div class="actions"><button type="button" :disabled="busy || !hasLuckPermsContent" @click="clearLuckPerms">{{ t('components.testAdmins.clearLuckPerms') }}</button></div>
   </section>
   <section class="test-admins" aria-labelledby="test-admins-luckperms">
     <h3 id="test-admins-luckperms">LuckPerms</h3>

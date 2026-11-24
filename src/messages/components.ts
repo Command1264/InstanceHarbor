@@ -146,6 +146,7 @@ export const componentsMessages = {
   'components.testAdmins.nodes': ['權限節點', 'Permission nodes'],
   'components.testAdmins.nodesPlaceholder': ['每行一個節點；開頭加 - 表示 false，例如 -worldedit.*', 'One node per line; a leading - sets false, for example -worldedit.*'],
   'components.testAdmins.group': ['LuckPerms 群組（選填）', 'LuckPerms group (optional)'],
+  'components.testAdmins.clearLuckPerms': ['清除權限節點與群組', 'Clear permission nodes and group'],
   'components.testAdmins.lookingUp': ['查詢中', 'Looking up'],
   'components.testAdmins.lookupFailed': ['第 {row} 位：{reason}', 'Row {row}: {reason}'],
   'components.testAdmins.platform': ['平台', 'Platform'],

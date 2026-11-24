@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
-  formatNodes, nodeProblem, parseNodes, shouldLookup, testAdminPayload, validMinecraftName,
+  clearedLuckPerms, formatNodes, nodeProblem, parseNodes, shouldLookup, testAdminPayload, validMinecraftName,
 } from './test-admins.ts'
 
 test('names follow the Minecraft rule before any lookup', () => {
@@ -42,6 +42,8 @@ test('the payload sends custom nodes and the group only while LuckPerms is on', 
     luckperms: true, op: true, permissions: ['a.b', '-c.d'], group: 'staff',
   })
   assert.equal(testAdminPayload({ ...base, kind: 'all' }).permissions, null)
+  // Turning LuckPerms off keeps the nodes and group; only the clear button removes them.
   const off = testAdminPayload({ ...base, luckperms: false })
-  assert.deepEqual([off.permissions, off.group, off.op], [null, '', true])
+  assert.deepEqual([off.luckperms, off.permissions, off.group, off.op], [false, ['a.b', '-c.d'], 'staff', true])
+  assert.deepEqual(clearedLuckPerms(), { kind: 'all', nodes: '', group: '' })
 })
