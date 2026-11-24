@@ -50,6 +50,8 @@ function remove(index: number) {
   clearTimeout(timers.get(row))
   timers.delete(row)
   if (looking.value === row) looking.value = undefined
+  // The message names a row number, which no longer fits once rows move.
+  lookupError.value = ''
   rows.value = rows.value.filter((_, position) => position !== index)
 }
 function nameChanged(row: TestAdministrator, now = false) {
@@ -123,14 +125,14 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
     </div>
     <div class="field">
       <label for="test-admin-nodes">{{ t('components.testAdmins.nodes') }}</label>
-      <div class="editor with-clear"><textarea id="test-admin-nodes" v-model="nodes" name="test-admin-nodes" rows="4" autocomplete="off" spellcheck="false" :placeholder="t('components.testAdmins.nodesPlaceholder')" :disabled="luckpermsOff || kind !== 'custom'" :aria-invalid="nodesError ? 'true' : undefined" :aria-describedby="nodesError ? 'test-admin-nodes-error' : undefined"></textarea>
+      <div class="editor"><div class="with-clear"><textarea id="test-admin-nodes" v-model="nodes" name="test-admin-nodes" rows="4" autocomplete="off" spellcheck="false" :placeholder="t('components.testAdmins.nodesPlaceholder')" :disabled="luckpermsOff || kind !== 'custom'" :aria-invalid="nodesError ? 'true' : undefined" :aria-describedby="nodesError ? 'test-admin-nodes-error' : undefined"></textarea>
         <button type="button" :aria-label="t('components.testAdmins.clearNodes')" :disabled="busy || !nodes" @click="nodes = ''">{{ t('components.testAdmins.clear') }}</button></div>
-      <small v-if="nodesError" id="test-admin-nodes-error" class="form-error" role="alert">{{ nodesError }}</small>
+        <small v-if="nodesError" id="test-admin-nodes-error" class="form-error" role="alert">{{ nodesError }}</small></div>
     </div>
     <div class="field">
       <label for="test-admin-group">{{ t('components.testAdmins.group') }}</label>
-      <div class="editor with-clear"><input id="test-admin-group" v-model.trim="group" name="test-admin-group" autocomplete="off" spellcheck="false" maxlength="36" :disabled="luckpermsOff">
-        <button type="button" :aria-label="t('components.testAdmins.clearGroup')" :disabled="busy || !group" @click="group = ''">{{ t('components.testAdmins.clear') }}</button></div>
+      <div class="editor"><div class="with-clear"><input id="test-admin-group" v-model.trim="group" name="test-admin-group" autocomplete="off" spellcheck="false" maxlength="36" :disabled="luckpermsOff">
+        <button type="button" :aria-label="t('components.testAdmins.clearGroup')" :disabled="busy || !group" @click="group = ''">{{ t('components.testAdmins.clear') }}</button></div></div>
     </div>
   </section>
   <section class="test-admins" aria-labelledby="test-admins-luckperms">
@@ -161,7 +163,9 @@ onBeforeUnmount(() => timers.forEach(timer => clearTimeout(timer)))
 .test-admins .actions { margin-block: .5rem; }
 .empty-row { color: var(--muted); }
 .with-clear { display: flex; gap: .5rem; align-items: flex-start; }
-.with-clear > textarea, .with-clear > input { flex: 1; min-width: 0; }
+.with-clear > textarea, .with-clear > input { flex: 1; min-width: 0; width: auto; }
+.with-clear > textarea { resize: vertical; }
+.editor > .form-error { margin-top: 0; }
 .with-clear > button { flex: none; }
 .toggles { display: flex; flex-wrap: wrap; gap: .25rem 1.5rem; margin-block: .5rem; }
 </style>
