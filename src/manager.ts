@@ -22,7 +22,7 @@ export interface Instance {
   run?: { id: string; java: { pid: number }; host: { pid: number } }
 }
 export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean }
-export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity }
+export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity; managementDiscovered?: boolean }
 export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean; closeToTray?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }
 export interface RegistryIssue { file: string; reason: 'FileInUse' | 'AccessDenied' | 'InvalidRecord' | 'Unconfirmed' | 'ObservationUnconfirmed'; osError: number | null }
@@ -59,6 +59,7 @@ export function canCancelCoreBatchItem(item: CoreBatch['items'][number]): boolea
 export function coreBatchJob(batch: CoreBatch): Job {
   return {...batch, instance: '', items: batch.items.map(item=>({...item,runId:null,canCancel:canCancelCoreBatchItem(item)}))}
 }
+export interface RemovedInstance { name: string; port: number; path: string | null; folderPresent: boolean; java: string | null; managementDiscovered: boolean }
 export interface JavaCandidate { path: string; version: string | null; valid: boolean; source: string; architecture?: string | null; vendor?: string | null }
 export interface Jvm { minMib: number | null; maxMib: number | null; gc: 'g1' | 'parallel' | 'serial' | null; advanced?: string[] }
 export interface LifecycleTiming { stopSeconds: number | null; readySeconds: number | null; restartDelayMs: number | null }
@@ -130,6 +131,7 @@ const actionMessageIds: Record<string, MessageId> = {
   'core-restore': 'manager.action.coreRestore',
   'core-reconcile': 'manager.action.coreReconcile',
   'remove-management': 'manager.action.removeManagement',
+  'delete-server': 'manager.action.deleteServer',
   adopt: 'manager.action.adopt',
 }
 export function actionName(action: string) { return Object.hasOwn(actionMessageIds, action) ? tr(actionMessageIds[action]) : action }
@@ -161,6 +163,17 @@ export function errorText(error: unknown) {
   if (raw.includes('InvalidBatchTargets')) return tr('manager.error.invalidBatchTargets')
   if (raw.includes('ManagerBusy')) return tr('manager.error.managerBusy')
   if (raw.includes('StopTimeout') || raw.includes('HostUnavailable')) return tr('manager.error.stopTimeout')
+  if (raw.includes('DeleteServerRecycledButRegistered')) return tr('manager.error.deleteServerRecycledButRegistered')
+  if (raw.includes('DeleteServerRecycledButPathListed')) return tr('manager.error.deleteServerRecycledButPathListed')
+  if (raw.includes('DeleteServerNameMismatch')) return tr('manager.error.deleteServerNameMismatch')
+  if (raw.includes('DeleteServerProtectedFolder')) return tr('manager.error.deleteServerProtectedFolder')
+  if (raw.includes('DeleteServerNetworkPath')) return tr('manager.error.deleteServerNetworkPath')
+  if (raw.includes('DeleteServerContainsLink')) return tr('manager.error.deleteServerContainsLink')
+  if (raw.includes('DeleteServerContainsOtherInstance')) return tr('manager.error.deleteServerContainsOtherInstance')
+  if (raw.includes('DeleteServerCancelled')) return tr('manager.error.deleteServerCancelled')
+  if (raw.includes('DeleteServerIncomplete')) return tr('manager.error.deleteServerIncomplete')
+  if (raw.includes('DeleteServerRecycleFailed')) return tr('manager.error.deleteServerRecycleFailed')
+  if (raw.includes('ServerPortRegistryMismatch')) return tr('manager.error.serverPortRegistryMismatch')
   if (raw.includes('InstanceMustBeStopped')) return tr('manager.error.instanceMustBeStopped')
   if (raw.includes('WorldGenerationOnly')) return tr('manager.error.worldGenerationOnly')
   if (raw.includes('WorldSettingsReadbackMismatch')) return tr('manager.error.worldSettingsReadbackMismatch')

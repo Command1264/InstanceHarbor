@@ -31,6 +31,8 @@ const emit = defineEmits<{
   (e:'batch-core', names?:string[]):void
   (e:'logs', name:string):void
   (e:'remove', name:string):void
+  (e:'open-folder', name:string):void
+  (e:'removed'):void
   (e:'create'):void
   (e:'add-management-folder'):void
   (e:'refresh'):void
@@ -102,8 +104,9 @@ const menuItems=computed(()=>{
  const name=menu.value?.name??'',row=props.rows.find(row=>row.name===name)
  const index=props.preferences.pins.indexOf(name),blocked=!!props.pinBusy||!props.connected
  const pins=index<0?[{id:'pin',label:t('instances.pin'),disabled:blocked}]:[{id:'up',label:t('instances.pinUp'),disabled:blocked||index===0},{id:'down',label:t('instances.pinDown'),disabled:blocked||index===props.preferences.pins.length-1},{id:'pin',label:t('instances.unpin'),disabled:blocked}]
- return [...pins,{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!props.connected||!row||row.state!=='Stopped'||props.busyNames.has(name)||!!props.queuedNames?.has(name)}]
+ return [...pins,{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!removable(row)}]
 })
+function removable(row?:Instance){return !!row&&props.connected&&row.state==='Stopped'&&!props.busyNames.has(row.name)&&!props.queuedNames?.has(row.name)}
 function showMenu(event:MouseEvent,name:string){
  if(keepEditingContext(event.target,event))return
  event.preventDefault();event.stopPropagation();pinDrag.cancel()
@@ -232,6 +235,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       <button :disabled="!canSubmitBatch('stop',rows)" @click="emit('batch-action','stop',batchRows('stop',rows))">{{ t('instances.stopAll') }}</button>
       <button :disabled="!canSubmitBatch('restart',rows)" @click="emit('batch-action','restart',batchRows('restart',rows))">{{ t('instances.restartAll') }}</button>
       <button type="button" :disabled="!connected" @click="emit('batch-core')">{{ t('core.batch.all') }}</button>
+      <button type="button" :disabled="!connected" @click="emit('removed')">{{ t('instances.removedInstances') }}</button>
     </ActionMenu></div>
   </div>
   <p class="operation-status selectable" role="status">{{ feedback }}</p>
@@ -278,6 +282,10 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button v-if="consoleAvailable" :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">{{ t('instances.openConsole') }}</button>
           <button :disabled="!connected || busyNames.has(single.name) || isQueued(single) || startingNames?.has(single.name) || !canRestart(single)" @click="emit('action','restart',[single])">{{ t('instances.restart') }}</button>
           <button @click="emit('settings',single.name)">{{ t('instances.settings') }}</button>
+        </div>
+        <div class="detail-actions">
+          <button type="button" :disabled="!connected" @click="emit('open-folder',single.name)">{{ t('instances.openServerFolder') }}</button>
+          <button type="button" class="danger" :disabled="!removable(single)" @click="emit('remove',single.name)">{{ t('instances.removeManagement') }}</button>
         </div>
 
         <div class="recent-operation detail-section"><p v-if="recent" class="hint">{{ t('instances.recentLine', { action: actionName(recent.action), state: jobStateName(recent.state) }) }}</p></div>

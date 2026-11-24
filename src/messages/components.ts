@@ -15,6 +15,8 @@ export const componentsMessages = {
   'components.about.noticesMissing': ['這個建置沒有附上授權通知檔案。安裝版與 ZIP 版的程式資料夾裡才有。', 'This build has no notice files. They are in the program folder of the Setup and ZIP versions.'],
   'components.about.readFailed': ['無法讀取版本資訊：{reason}', 'Could not read the version information: {reason}'],
   'components.about.openFailed': ['無法開啟：{reason}', 'Could not open it: {reason}'],
+  'components.copy.done': ['已複製', 'Copied'],
+  'components.copy.failed': ['無法複製', 'Could not copy'],
   'components.coreMaintenance.notChecked': ['尚未核對', 'Not checked yet'],
   'components.coreMaintenance.changed': ['核心已變更，請重新核對更新', 'The core changed. Check for updates again.'],
   'components.coreMaintenance.sourceUnavailable': ['未能核對更新來源', 'Could not check the update source'],

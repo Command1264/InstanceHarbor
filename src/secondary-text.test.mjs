@@ -18,6 +18,12 @@ const ALLOWED_ALWAYS_VISIBLE = [
   "App.vue: {{ selectedLog?.path ?? logs?.path ?? t('app.logs.noPath') }}",
   // Starting in a console window needs this consequence stated before the user decides.
   "App.vue: {{ t('console.confirm.warning') }}",
+  // Each removal option states what it keeps and what it deletes (#26); the other two hints are computed.
+  "App.vue: {{ t('app.remove.retainHint') }}",
+  // Windows may offer permanent deletion; the user needs to know that No cancels before choosing.
+  "App.vue: {{ t('app.remove.nukeWarning') }}",
+  // The exact folder that deleting server data moves to the Recycle Bin.
+  "App.vue: {{ t('app.remove.folder',{path:removeMeta?.path?displayPath(removeMeta.path,visiblePreferences.pathSeparator):'--'}) }}",
   "components/DisplayPreferencesFields.vue: {{ t('appearance.preview') }} · {{ formatDisplayTime(sampleTime, locale, timeFormat) }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.jarHelp') }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.source', { source: sourceText(signal.source) }) }}",

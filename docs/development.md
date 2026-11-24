@@ -45,6 +45,13 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - `src/hardcoded-text.test.mjs` 會在 `.vue`、`.ts` 出現寫死的中文時失敗。資料用途的中文（語言名稱、後端送來的分類 ID）列在測試的允許清單。開發者用的 `console` 訊息使用英文。
 - 「初始化預設」與世界設定的欄位資料由後端 `policy_catalog.rs` 提供。後端回傳的中文 `label`、`reason`、`source` 保持不變，另附 `reasonCode`、`sourceKind`、`sourceKey`；前端依欄位 key 與這些代碼翻譯（`src/messages/policy.ts`）。新增欄位或原因時，`policy-catalog.test.mjs` 會要求補上翻譯，且中文必須與後端一致。
 
+## 焦點框與捲動區
+
+- 焦點框的寬度與外擴距離由 `src/app.css` 的 `--focus-ring-width`、`--focus-ring-offset` 定義，合計為 `--focus-ring-extent`。
+- 對話框裡的 `OverlayScroll` 捲動區在上緣與左緣保留 `--focus-ring-extent` 的內距，並以相同的負外距抵銷，內容位置與寬度不變；右緣與下緣原本的內距已大於焦點框外擴量。
+- 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。
+- `OverlayScroll` 的捲動區只在內容需要捲動時才能用 Tab 選到，讓鍵盤可以捲動；不需要捲動時，Tab 直接跳到裡面的控制項，不會停在整個容器上。
+
 ## Windows 檔案存取與部分清單
 
 - `ihctl WORKSPACE list` 保留 JSON 陣列，個別登記無法讀取時會把原因寫到標準錯誤。
@@ -135,6 +142,45 @@ Spigot 由 BuildTools 在本機建置，沒有官方檔案可比對，所以內�
 需在匯入時另外確認位址，自動登記會略過。掃描略過連結及排除路徑，回報名稱、路徑、連接埠及管理權衝突。
 達到掃描上限時，請縮小範圍後重新預覽。建立新實例仍由「建立實例」處理。舊版 CLI 匯入命令
 及匯入工作紀錄維持相容，桌面版的日常入口是「新增管理資料夾」。
+
+## 移除管理與刪除伺服器資料
+
+詳細面板與實例的右鍵選單都有「移除管理」。伺服器必須已正常停止。對話框有三個選項：
+
+| 選項 | 伺服器資料夾 | InstanceHarbor 設定 | 之後要再管理 |
+| --- | --- | --- | --- |
+| 移除管理，保留管理設定 | 保留 | 保留 | 「已移除的實例」→「恢復管理」 |
+| 移除管理，清除管理設定 | 保留 | 刪除 | 重新匯入；管理資料夾掃描到的伺服器改用「恢復管理」 |
+| 刪除伺服器資料 | 移到資源回收筒 | 刪除 | 先從資源回收筒還原資料夾，再依上一列處理 |
+
+管理資料夾掃描到的伺服器，清除管理設定後仍保留「不要再自動登記」的紀錄，所以它會出現在「已移除的實例」。
+「恢復管理」使用既有的 `adopt`，需要指定 Java，而且 `server.properties` 的 Port 必須與原本登記的相同。
+
+刪除伺服器資料需要輸入實例名稱確認；名稱旁的複製按鈕可以複製實例名稱。下列情況會拒絕刪除，資料不變：
+
+- 實例不是已停止，或核心正被其他程式使用（`CoreInUse`）。
+- 資料夾是工作區、工作區內 `instances` 以外的資料夾、`instances` 本身、包含工作區的上層資料夾、
+  磁碟根目錄，或底下一層還有其他伺服器資料夾的管理資料夾根目錄。建立或恢復管理的實例，
+  自己的資料夾也會列為管理資料夾；這種資料夾底下沒有其他伺服器時可以刪除。
+- 資料夾在網路路徑（UNC）上、路徑或內容含有 reparse point（junction、symbolic link 等），
+  或資料夾內還有其他受管理的實例。
+
+移到資源回收筒後，程式也會從管理資料夾清單移除這個資料夾的路徑。清單中留著不存在的路徑時，
+之後建立實例或變更管理資料夾都會回報「找不到可使用的上層資料夾」。
+
+移動期間不顯示 Windows 的進度視窗，由 InstanceHarbor 顯示進度文字。資料夾太大而無法放進資源回收筒時，Windows 會先詢問是否永久刪除；選「否」會取消，資料與登記都不變。
+資料夾移走後才清除登記；清除失敗時回報 `DeleteServerRecycledButRegistered`，可再從右鍵選單移除管理。
+
+CLI 對應：
+
+```powershell
+ihctl WORKSPACE delete-server NAME NAME
+ihctl WORKSPACE removed-instances
+ihctl WORKSPACE open-server-folder NAME
+ihctl WORKSPACE adopt NAME REQUEST_ID JAVA_EXE
+```
+
+`delete-server` 的第二個參數是確認用的實例名稱，必須與第一個完全相同。
 
 ## 從 V1 移交伺服器
 
