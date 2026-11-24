@@ -401,7 +401,7 @@ $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-fe
 - 手動設定 `IH_BUILD_COMMIT` 時，值必須是七位小寫十六進位（可加 `-dirty`）或 `unknown`，否則 Rust 建置失敗。
 
 `ihctl --version` 輸出 `InstanceHarbor CLI 1.0.0 (33dfd35)`，開發版為 `InstanceHarbor Dev CLI 1.0.0 (33dfd35)`。
-「應用程式設定」→「關於」顯示版本、Git commit、作者、GitHub 儲存庫與回報問題的按鈕，以及授權條款與第三方授權通知的按鈕。
+「應用程式設定」→「關於」顯示版本、Git commit、作者、GitHub 儲存庫與回報問題的按鈕，以及授權條款與第三方授權通知的按鈕。這一頁沒有可儲存的設定，所以不顯示「儲存設定」與「還原變更」。
 GitHub 按鈕用預設瀏覽器開啟固定的 `https://github.com/Command1264/InstanceHarbor` 與其 `/issues`，頁面只傳送連結名稱，不傳送網址。
 授權按鈕用記事本開啟執行檔旁的 `LICENSE` 與 `THIRD-PARTY-NOTICES.txt`。開發版與本機建置沒有這兩個檔案，按鈕會停用。
 GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
