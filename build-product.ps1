@@ -24,7 +24,8 @@ try {
     $previousCommit=$env:IH_BUILD_COMMIT
     $env:IH_BUILD_COMMIT=$commit
     $frontendDirectory=if($Development){'dist-dev'}else{'dist'}
-    & npm.cmd run build -- --outDir $frontendDirectory
+    $npm=& (Join-Path $PSScriptRoot 'resolve-npm.ps1')
+    & $npm run build -- --outDir $frontendDirectory
     $cargoArgs=@('build','--offline','--locked','--manifest-path','src-tauri/Cargo.toml')
     if($Development){
         $cargoArgs+=@('--profile','dev-channel','--target','x86_64-pc-windows-msvc','--features','development-channel')
