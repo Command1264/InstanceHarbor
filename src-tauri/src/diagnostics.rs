@@ -473,6 +473,11 @@ pub fn path_fingerprint(path: &Path) -> String {
     }
     format!("fnv1a64:{hash:016x}")
 }
+/// The folders under LocalAppData that hold GUI logs. A development workspace gets its
+/// own folder, so GUIs of different workspaces never wait for one another's budget lock.
+fn log_folder_parts<'a>(app_directory: &'a str, workspace: Option<&'a str>) -> Vec<&'a str> {
+    [app_directory, "logs"].into_iter().chain(workspace).collect()
+}
 static GLOBAL: OnceLock<Result<Diagnostics, String>> = OnceLock::new();
 pub fn global() -> Result<&'static Diagnostics, String> {
     GLOBAL
@@ -483,7 +488,11 @@ pub fn global() -> Result<&'static Diagnostics, String> {
             let app_directory = crate::desktop_channel::APP_DIRECTORY;
             #[cfg(not(windows))]
             let app_directory = "InstanceHarbor";
-            for part in [app_directory, "logs"] {
+            #[cfg(windows)]
+            let workspace = crate::desktop_channel::workspace_name();
+            #[cfg(not(windows))]
+            let workspace: Option<String> = None;
+            for part in log_folder_parts(app_directory, workspace.as_deref()) {
                 root.push(part);
                 match fs::create_dir(&root) {
                     Ok(()) => {}
@@ -500,6 +509,15 @@ pub fn global() -> Result<&'static Diagnostics, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn each_development_workspace_writes_its_own_log_folder() {
+        // Parallel development GUIs must not share one lock and one directory budget.
+        assert_eq!(log_folder_parts("InstanceHarbor", None), ["InstanceHarbor", "logs"]);
+        assert_eq!(
+            log_folder_parts("InstanceHarbor Dev", Some("agent-73a")),
+            ["InstanceHarbor Dev", "logs", "agent-73a"]
+        );
+    }
     fn folder() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
             "ih-diagnostics-{}-{}-{}",

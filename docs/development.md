@@ -63,7 +63,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 ## GUI 冷啟動計時
 
 GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、新的 WebView2）。每次啟動在 GUI 診斷紀錄
-（`<應用程式資料夾>\logs\gui-*.jsonl`）寫入一筆 `gui-startup` 事件。數值是從 Windows 建立程序起算的毫秒，
+（`<應用程式資料夾>\logs\gui-*.jsonl`，開發版為 `InstanceHarbor Dev\logs\<工作區名稱>\gui-*.jsonl`）寫入一筆 `gui-startup` 事件。數值是從 Windows 建立程序起算的毫秒，
 包含 `main` 之前的載入時間。
 
 | 標記 | 位置 | 意義 |
@@ -556,10 +556,11 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 | 主視窗、工作列、系統匣提示、訊息框 | `InstanceHarbor` | `InstanceHarbor Dev — <工作區名稱>` |
 | 伺服器後台視窗 | 原標題 | 原標題後加上 `[InstanceHarbor Dev — <工作區名稱>]` |
 | 側欄名稱、「關於」 | `InstanceHarbor` | 同主視窗標題；「關於」另列「開發工作區」與 Git commit |
+| GUI 診斷紀錄 | `InstanceHarbor\logs` | `InstanceHarbor Dev\logs\<工作區名稱>`，同時開著的 GUI 不會互搶寫入鎖與 16 MiB 容量上限 |
 
 `<工作區名稱>` 是工作區資料夾名稱；`<工作區鍵>` 是名稱轉小寫後的 FNV-1a 64 位元雜湊（16 位十六進位），
 讓鎖名稱與 AppUserModelID 長度固定。實作集中在 `src-tauri/src/desktop_channel.rs`。
-1.0.1 以前的開發版把所有工作區的 WebView2 資料放在 `InstanceHarbor Dev\webview`，現在不再使用，可以手動刪除。
+1.0.1 以前的開發版把所有工作區的 WebView2 資料放在 `InstanceHarbor Dev\webview`，GUI 診斷紀錄直接放在 `InstanceHarbor Dev\logs`；這兩處的舊資料不再使用，可以手動刪除。
 
 需要重新建置開發版，或手動指定另一個開發工作區時，可使用下列入口。
 
@@ -600,7 +601,7 @@ GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 |---|---|---|
 | 工作區 | `<應用程式資料夾>\workspaces\default`（正式）、`InstanceHarbor Dev\workspaces\<名稱>`（開發） | 實例登記、設定、工作紀錄與執行狀態 |
 | 測試管理員 | 工作區的 `test-administrators.json` 與 `plugin-cache/luckperms/` | 只存在本機；見「測試管理員權限」 |
-| GUI 診斷紀錄 | `<應用程式資料夾>\logs\gui-*.jsonl` | 1.0 之前寫在 `<應用程式資料夾>\v2\logs`；舊檔留在原處，可以手動刪除 |
+| GUI 診斷紀錄 | `<應用程式資料夾>\logs\gui-*.jsonl`（正式）、`InstanceHarbor Dev\logs\<名稱>\gui-*.jsonl`（開發） | 1.0 之前寫在 `<應用程式資料夾>\v2\logs`；舊檔留在原處，可以手動刪除。每個資料夾各有 16 MiB 上限 |
 | WebView2 資料 | `<應用程式資料夾>\webview`（正式）、`InstanceHarbor Dev\webviews\<名稱>`（開發） | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
 | Setup 安裝位置 | `Programs\InstanceHarbor` | 解除安裝登錄 `InstanceHarbor-Desktop`，安裝租約檔 `instanceharbor.install` |
 

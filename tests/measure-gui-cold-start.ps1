@@ -44,7 +44,8 @@ while ($true) {
     if ([DateTime]::UtcNow -gt $connectUntil) { throw 'Could not connect to the workspace Manager.' }
     Start-Sleep -Milliseconds 500
 }
-$logs = Join-Path $devRoot 'logs'
+# Each development workspace writes its GUI logs into its own folder.
+$logs = Join-Path $devRoot (Join-Path 'logs' (Split-Path -Leaf $Workspace))
 
 function Read-Startup([string]$path) {
     # The GUI keeps its log open for writing.
