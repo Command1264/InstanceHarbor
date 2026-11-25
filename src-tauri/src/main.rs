@@ -1,14 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 #[cfg(windows)]
+mod about_links;
+#[cfg(windows)]
 mod folder_picker;
 #[cfg(windows)]
 mod workspace_binding;
 #[cfg(windows)]
 mod system_accent;
 #[cfg(windows)]
-mod tray;
-#[cfg(windows)]
 mod webview_runtime;
+mod startup_prefetch;
+mod startup_timing;
+#[cfg(windows)]
+mod exit_watchdog;
+mod window_placement;
 #[cfg(windows)]
 use instanceharbor::desktop_channel;
 use instanceharbor::diagnostics;
@@ -16,16 +21,49 @@ use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static IPC_ID: AtomicU64 = AtomicU64::new(1);
 static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
+static PREFETCH: startup_prefetch::Prefetch = startup_prefetch::Prefetch::new();
 fn diagnostic_write(result: Result<(), String>) {
     if let Err(error) = result {
         eprintln!("GUI diagnostic write failed: {error}")
+    }
+}
+/// Records the page's cold-start marks once, together with the native marks.
+#[tauri::command]
+fn report_startup_timing(marks: std::collections::BTreeMap<String, f64>) -> Result<(), String> {
+    match startup_timing::report(&marks)? {
+        Some(event) => diagnostics::global()?.record(event),
+        None => Ok(()),
     }
 }
 #[tauri::command]
 fn diagnostic_status() -> serde_json::Value {
     match diagnostics::global() {
         Ok(log) => log.status(),
-        Err(error) => json!({"available":false,"error":error}),
+        Err(error) => json!({"available":false,"error":error,"folder":diagnostics::log_folder()}),
+    }
+}
+#[tauri::command]
+fn about_info() -> Result<serde_json::Value, String> {
+    #[cfg(windows)]
+    {
+        Ok(about_links::info())
+    }
+    #[cfg(not(windows))]
+    {
+        Err("AboutUnavailable".into())
+    }
+}
+/// Opens one of the About section's fixed links; `link` is a name, never a URL.
+#[tauri::command]
+fn open_about_link(link: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        about_links::open(&link)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = link;
+        Err("AboutUnavailable".into())
     }
 }
 #[tauri::command]
@@ -37,21 +75,6 @@ fn system_accent_color() -> Result<String, String> {
     #[cfg(not(windows))]
     {
         Err("SystemAccentUnavailable".into())
-    }
-}
-#[tauri::command]
-fn tray_status(app: tauri::AppHandle, running: u32, language: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        use tauri::Manager;
-        let language = tray::Language::parse(&language)?;
-        let tray = app.try_state::<tray::Tray>().ok_or("TrayUnavailable")?;
-        tray.update(running, language).map_err(|error| error.to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, running, language);
-        Err("TrayUnavailable".into())
     }
 }
 #[tauri::command]
@@ -166,6 +189,10 @@ fn present_window(window: tauri::WebviewWindow, theme: String) -> Result<(), Str
     result
 }
 fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(), String> {
+    let first = !WINDOW_REVEALED.load(Ordering::SeqCst);
+    if first {
+        startup_timing::mark("present-window");
+    }
     let theme = match theme.as_str() {
         "system" => None,
         "light" => Some(tauri::Theme::Light),
@@ -185,6 +212,9 @@ fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(
     {
         window.show().map_err(|error| error.to_string())?;
     }
+    if first {
+        startup_timing::mark("window-shown");
+    }
     WINDOW_REVEALED.store(true, Ordering::SeqCst);
     #[cfg(windows)]
     caption?;
@@ -195,6 +225,12 @@ async fn manage(
     arguments: Vec<String>,
     origin: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    if let Some(pending) = PREFETCH.take(&arguments, origin.as_deref()) {
+        // The prefetch already recorded this read in the diagnostics log.
+        if let Ok(Some(result)) = tauri::async_runtime::spawn_blocking(move || pending.finish()).await {
+            return result;
+        }
+    }
     manage_recorded(arguments, origin, None).await
 }
 
@@ -255,7 +291,7 @@ async fn manage_inner(
     if arguments.first().is_some_and(|verb| {
         matches!(
             verb.as_str(),
-            "host" | "init" | "manager-serve" | "manager-exit"
+            "host" | "init" | "manager-serve" | "manager-exit" | "app-exit" | "gui-attach"
         )
     }) {
         return Err("不允許從 GUI 啟動 Host 或變更工作區。".into());
@@ -350,7 +386,8 @@ fn terminal_title(
     viewer: tauri::State<'_, instanceharbor::ConsoleViewer>,
     run: String,
 ) -> Result<(), String> {
-    window.set_title(&viewer.title(&run)?).map_err(|error| error.to_string())
+    let title = desktop_channel::window_title(&viewer.title(&run)?, desktop_channel::workspace_name().as_deref());
+    window.set_title(&title).map_err(|error| error.to_string())
 }
 
 /// Sets the translated window title while no tab supplies its own.
@@ -360,6 +397,7 @@ fn terminal_window_title(window: tauri::WebviewWindow, title: String) -> Result<
     if title.trim().is_empty() || title.chars().count() > 256 || title.chars().any(char::is_control) {
         return Err("InvalidConsoleRequest".into());
     }
+    let title = desktop_channel::window_title(&title, desktop_channel::workspace_name().as_deref());
     window.set_title(&title).map_err(|error| error.to_string())
 }
 
@@ -379,8 +417,20 @@ fn terminal_close(
 }
 
 #[cfg(windows)]
+const CONSOLE_SIZE: window_placement::LogicalSize = window_placement::LogicalSize {
+    width: 1020.0,
+    height: 820.0,
+};
+#[cfg(windows)]
+const CONSOLE_MIN_SIZE: window_placement::LogicalSize = window_placement::LogicalSize {
+    width: 460.0,
+    height: 280.0,
+};
+
+#[cfg(windows)]
 fn run_console(workspace: &str) -> Result<(), String> {
     desktop_channel::validate_workspace(std::path::Path::new(workspace), false)?;
+    desktop_channel::bind_workspace(std::path::Path::new(workspace));
     workspace_binding::configure_desktop()?;
     let Some(viewer) = instanceharbor::ConsoleViewer::start(workspace)? else {
         return Ok(());
@@ -408,9 +458,9 @@ fn run_console(workspace: &str) -> Result<(), String> {
                 tauri::WebviewUrl::App("console.html".into()),
             )
             // The viewer replaces this with its translated title before the window is shown.
-            .title(desktop_channel::TITLE)
-            .inner_size(1020.0, 820.0)
-            .min_inner_size(460.0, 280.0)
+            .title(desktop_channel::product_title(desktop_channel::workspace_name().as_deref()))
+            .inner_size(CONSOLE_SIZE.width, CONSOLE_SIZE.height)
+            .min_inner_size(CONSOLE_MIN_SIZE.width, CONSOLE_MIN_SIZE.height)
             .resizable(true)
             .enable_clipboard_access()
             .devtools(false)
@@ -420,6 +470,11 @@ fn run_console(workspace: &str) -> Result<(), String> {
                 None => window,
             }
             .build()?;
+            if let Err(error) =
+                window_placement::fit_window(&window, CONSOLE_SIZE, CONSOLE_MIN_SIZE)
+            {
+                eprintln!("Could not fit native console to the work area: {error}");
+            }
             let window_handle = window.clone();
             window.on_window_event(move |event| match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -445,7 +500,42 @@ fn run_console(workspace: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Keeps this GUI registered with its workspace's Manager, so the Manager's tray
+/// icon shows while the GUI runs and its Quit closes this GUI too. Repeats in case
+/// the Manager is restarted while the window stays open.
+#[cfg(windows)]
+fn attach_to_manager() {
+    let Some(root) = std::env::var_os("IH_WORKSPACE").and_then(|root| root.into_string().ok()) else {
+        return;
+    };
+    let pid = std::process::id().to_string();
+    let mut last_error: Option<String> = None;
+    loop {
+        // A closing GUI must not start the Manager again: the user may have just quit it.
+        if exit_watchdog::closing() {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            continue;
+        }
+        match instanceharbor::dispatch(&[root.clone(), "gui-attach".into(), pid.clone()]) {
+            Ok(_) => last_error = None,
+            // A Manager that is quitting is about to close this GUI.
+            Err(error) if error == "ManagerExiting" => {}
+            Err(error) => {
+                if last_error.as_deref() != Some(error.as_str()) {
+                    eprintln!("Could not attach to the Manager: {error}");
+                    if let Ok(log) = diagnostics::global() {
+                        diagnostic_write(log.record(json!({"type":"gui-attach","error":diagnostics::safe_error(&error)})));
+                    }
+                    last_error = Some(error);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+}
+
 fn main() {
+    startup_timing::mark("main");
     #[cfg(windows)]
     let _installation = match instanceharbor::installation::acquire() {
         Ok(lease) => lease,
@@ -456,10 +546,12 @@ fn main() {
     };
     // Before the single-instance lock: a GUI that cannot create its window must
     // not keep running and block the next launch.
+    startup_timing::mark("installation-lease");
     #[cfg(windows)]
     if !webview_runtime::ensure_available() {
         std::process::exit(1);
     }
+    startup_timing::mark("webview-runtime-checked");
     #[cfg(windows)]
     if let [_, workspace, mode] = std::env::args().collect::<Vec<_>>().as_slice() {
         if mode == "native-console" {
@@ -481,6 +573,7 @@ fn main() {
     #[cfg(windows)]
     if desktop_channel::DEVELOPMENT {
         if let Err(error) = workspace_binding::development_workspace()
+            .map(|workspace| desktop_channel::bind_workspace(&workspace))
             .and_then(|_| workspace_binding::configure_desktop())
         {
             workspace_binding::show_startup_error(&error);
@@ -498,6 +591,7 @@ fn main() {
             std::process::exit(1);
         }
     }
+    startup_timing::mark("workspace-validated");
     #[cfg(windows)]
     let _gui_lease = match instanceharbor::gui_singleton::acquire() {
         Ok(Some(lease)) => lease,
@@ -515,6 +609,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    startup_timing::mark("gui-singleton");
     #[cfg(windows)]
     if std::env::var_os("IH_WORKSPACE").is_none() {
         match workspace_binding::default_workspace() {
@@ -527,8 +622,16 @@ fn main() {
         }
     }
     match diagnostics::global(){
-        Ok(log)=>diagnostic_write(log.record(json!({"type":"gui-start","pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"executableFingerprint":std::env::current_exe().ok().map(|p|diagnostics::path_fingerprint(&p)),"workspaceFingerprint":std::env::var("IH_WORKSPACE").ok().map(|p|diagnostics::path_fingerprint(std::path::Path::new(&p)))}))),
+        Ok(log)=>diagnostic_write(log.record(json!({"type":"gui-start","pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"commit":instanceharbor::about::COMMIT,"executableFingerprint":std::env::current_exe().ok().map(|p|diagnostics::path_fingerprint(&p)),"workspaceFingerprint":std::env::var("IH_WORKSPACE").ok().map(|p|diagnostics::path_fingerprint(std::path::Path::new(&p)))}))),
         Err(error)=>eprintln!("GUI diagnostics unavailable: {error}"),
+    }
+    startup_timing::mark("diagnostics-open");
+    // The workspace is bound; read what the first screen needs while WebView2 starts.
+    #[cfg(windows)]
+    for verb in startup_prefetch::VERBS {
+        PREFETCH.start(verb, move || {
+            tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None))
+        });
     }
     let mut context = tauri::generate_context!();
     // Acceptance uses the debug profile, so set this before Tauri creates windows.
@@ -537,9 +640,11 @@ fn main() {
     #[cfg(windows)]
     {
         context.config_mut().identifier = desktop_channel::IDENTIFIER.into();
-        context.config_mut().product_name = Some(desktop_channel::TITLE.into());
+        // The development channel names the workspace in the title and taskbar.
+        let title = desktop_channel::product_title(desktop_channel::workspace_name().as_deref());
+        context.config_mut().product_name = Some(title.clone());
         for window in &mut context.config_mut().app.windows {
-            window.title = desktop_channel::TITLE.into();
+            window.title = title.clone();
         }
     }
     for window in &mut context.config_mut().app.windows {
@@ -559,39 +664,77 @@ fn main() {
             pick_file,
             diagnostic_status,
             report_gui_event,
-            tray_status
+            about_info,
+            open_about_link,
+            report_startup_timing
         ])
         .setup(move |app| {
+            startup_timing::mark("setup");
             #[cfg(windows)]
             for config in &main_window {
                 let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
-                match workspace_binding::webview_data_directory() {
+                let window = match workspace_binding::webview_data_directory() {
                     Some(folder) => window.data_directory(folder),
                     None => window,
                 }
                 .build()?;
+                startup_timing::mark("window-built");
+                let size = window_placement::LogicalSize {
+                    width: config.width,
+                    height: config.height,
+                };
+                let min_size = window_placement::LogicalSize {
+                    width: config.min_width.unwrap_or(1.0),
+                    height: config.min_height.unwrap_or(1.0),
+                };
+                if let Err(error) = window_placement::fit_window(&window, size, min_size) {
+                    eprintln!("Could not fit the main window to the work area: {error}");
+                }
+                match window.hwnd() {
+                    Ok(handle) => {
+                        if let Err(error) = workspace_binding::name_taskbar_window(handle.0 as _) {
+                            eprintln!("Could not name the taskbar Jump List: {error}");
+                        }
+                        exit_watchdog::watch(handle.0 as isize)
+                    }
+                    Err(error) => eprintln!("GUI exit watchdog cannot see the main window: {error}"),
+                }
+                window.on_window_event(|event| {
+                    if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
+                        exit_watchdog::arm();
+                    }
+                });
             }
+            // The Manager owns the notification-area icon; attaching starts it if needed.
             #[cfg(windows)]
-            tray::install(app.handle())?;
+            std::thread::spawn(attach_to_manager);
             #[cfg(not(windows))]
             let _ = app;
+            startup_timing::mark("setup-done");
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            #[cfg(windows)]
-            tray::window_event(window, event);
-            #[cfg(not(windows))]
-            let _ = (window, event);
         })
         .build(context)
         .map_err(|error| error.to_string());
+    startup_timing::mark("app-built");
     match application {
         Ok(app) => app.run(|_, event| {
+            #[cfg(windows)]
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                exit_watchdog::arm();
+            }
             // Tauri exits the process after this callback; code after run is not
             // a reliable place to record a normal Windows GUI shutdown.
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Ok(log) = diagnostics::global() {
                     diagnostic_write(log.runtime_result(&Ok(())));
+                }
+                // Development builds only: stay alive with no window, as the stuck GUI
+                // did, so the exit watchdog can be verified.
+                #[cfg(feature = "development-channel")]
+                if std::env::var_os("IH_DEV_HANG_ON_EXIT").is_some() {
+                    loop {
+                        std::thread::park();
+                    }
                 }
             }
         }),

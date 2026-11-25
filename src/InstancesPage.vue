@@ -11,6 +11,8 @@ import {usePinnedDrag} from './usePinnedDrag'
 import {keepEditingContext} from './context-menu'
 import { displayPath } from './path-display'
 import { presentedState } from './instance-state'
+import { coreBuildText, coreReasonId, coreVersionText } from './core-display'
+import { registryIssueMessage, stateIssueMessage } from './registry-issues'
 import { useAppLanguage, type MessageId } from './i18n'
 import { actionName, batchItemState, canOpenConsole, canRestart, canStop, consoleSummary, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
 
@@ -31,6 +33,8 @@ const emit = defineEmits<{
   (e:'batch-core', names?:string[]):void
   (e:'logs', name:string):void
   (e:'remove', name:string):void
+  (e:'open-folder', name:string):void
+  (e:'removed'):void
   (e:'create'):void
   (e:'add-management-folder'):void
   (e:'refresh'):void
@@ -102,8 +106,9 @@ const menuItems=computed(()=>{
  const name=menu.value?.name??'',row=props.rows.find(row=>row.name===name)
  const index=props.preferences.pins.indexOf(name),blocked=!!props.pinBusy||!props.connected
  const pins=index<0?[{id:'pin',label:t('instances.pin'),disabled:blocked}]:[{id:'up',label:t('instances.pinUp'),disabled:blocked||index===0},{id:'down',label:t('instances.pinDown'),disabled:blocked||index===props.preferences.pins.length-1},{id:'pin',label:t('instances.unpin'),disabled:blocked}]
- return [...pins,{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!props.connected||!row||row.state!=='Stopped'||props.busyNames.has(name)||!!props.queuedNames?.has(name)}]
+ return [...pins,{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!removable(row)}]
 })
+function removable(row?:Instance){return !!row&&props.connected&&row.state==='Stopped'&&!props.busyNames.has(row.name)&&!props.queuedNames?.has(row.name)}
 function showMenu(event:MouseEvent,name:string){
  if(keepEditingContext(event.target,event))return
  event.preventDefault();event.stopPropagation();pinDrag.cancel()
@@ -136,13 +141,15 @@ const diagnosticProxies = computed(() => props.meta.filter(item => item.core?.fa
 function isQueued(row:Instance){return row.state==='Stopped' && !!props.queuedNames?.has(row.name)}
 function starting(row:Instance){return row.state==='Stopped' && !!props.startingNames?.has(row.name)}
 function stateClass(row:Instance){return presentedState(row,{queued:!!props.queuedNames?.has(row.name),starting:!!props.startingNames?.has(row.name),stopping:!!row.run && props.stopping[row.name]===row.run.id})}
+function stateIssueText(row:Instance,full=false){const issue=row.stateIssue;if(!issue)return '';const message=full?registryIssueMessage({...issue,file:'',stage:'observation'}):stateIssueMessage(issue);return t(message.id,message.values)}
 function displayState(row:Instance){const state=stateClass(row);return state==='Queued'?t('activity.state.Queued'):stateName(state)}
 const emergency = computed(() => !!single.value && canStop(single.value) &&
   !!(single.value.stopPhase || props.stopping[single.value.name] === single.value.run?.id))
 const recent = computed(() => single.value && recentByName.value.get(single.value.name))
 const refreshBusy=computed(()=>!!props.refreshPending)
 const refreshLabel=computed(()=>props.refreshDone?t('instances.refreshDone'):t('action.refresh'))
-function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? core.label ?? `${core.family} ${core.minecraft}${core.build ? ` build ${core.build}` : ''}` : t('instances.coreUnchecked')}
+function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? coreVersionText(core) : t('instances.coreUnchecked')}
+function coreReason(name:string){const core=metaByName.value.get(name)?.core;if(core?.state==='known')return core.offline?t('instances.coreOffline'):undefined;const id=coreReasonId(core?.reason);return id?t(id):undefined}
 const coreVersions = computed(() => new Map<string, {version:string;build?:string;update?:string}>(props.meta.map(({ name, core }) => {
   if (core?.state !== 'known') return [name, { version: coreLabel(name) }]
   const source = props.coreCheckRows?.[name]
@@ -152,7 +159,7 @@ const coreVersions = computed(() => new Map<string, {version:string;build?:strin
     && source.minecraft === core.minecraft && source.build === build
     && source.remoteBuild !== build ? source.remoteBuild : undefined
   return [name, {
-    version: core.family && core.minecraft ? `${core.family} ${core.minecraft}` : coreLabel(name),
+    version: core.family && core.minecraft ? coreVersionText({ family: core.family, minecraft: core.minecraft }) : coreLabel(name),
     build,
     update,
   }]
@@ -232,6 +239,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       <button :disabled="!canSubmitBatch('stop',rows)" @click="emit('batch-action','stop',batchRows('stop',rows))">{{ t('instances.stopAll') }}</button>
       <button :disabled="!canSubmitBatch('restart',rows)" @click="emit('batch-action','restart',batchRows('restart',rows))">{{ t('instances.restartAll') }}</button>
       <button type="button" :disabled="!connected" @click="emit('batch-core')">{{ t('core.batch.all') }}</button>
+      <button type="button" :disabled="!connected" @click="emit('removed')">{{ t('instances.removedInstances') }}</button>
     </ActionMenu></div>
   </div>
   <p class="operation-status selectable" role="status">{{ feedback }}</p>
@@ -242,16 +250,16 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <td class="instance-name-cell"><button class="pin-toggle" type="button" :class="{pinned:preferences.pins.includes(row.name)}" :aria-pressed="preferences.pins.includes(row.name)" :aria-label="preferences.pins.includes(row.name)?t('instances.unpinNamed',{name:row.name}):t('instances.pinNamed',{name:row.name})" :title="preferences.pins.includes(row.name)?t('instances.unpinInstance'):t('instances.pinInstance')" :aria-disabled="pinBusy || !connected" @click.stop="!pinBusy && connected && emit('pin',row.name)" @dblclick.stop @keydown.stop="showKeyboardMenu($event,row.name)"><PinIcon :filled="preferences.pins.includes(row.name)" /></button><span class="instance-name">{{ row.name }}</span></td>
           <td class="core-column">
             <div class="core-version">
-              <span>{{ coreVersions.get(row.name)?.version ?? t('instances.coreUnchecked') }}</span>
+              <span :title="coreReason(row.name)">{{ coreVersions.get(row.name)?.version ?? t('instances.coreUnchecked') }}</span>
               <small v-if="coreVersions.get(row.name)?.build" class="core-build" translate="no">
-                Build {{ coreVersions.get(row.name)?.build }}
+                {{ coreBuildText(coreVersions.get(row.name)?.build ?? '') }}
                 <template v-if="coreVersions.get(row.name)?.update">
                   <span aria-hidden="true"> → {{ coreVersions.get(row.name)?.update }}</span>
                   <span class="sr-only" translate="yes"> {{ t('core.batch.updateTo', { build: coreVersions.get(row.name)?.update ?? '' }) }}</span>
                 </template>
               </small>
             </div>
-          </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : t('instances.noActions') }}</td>
+          </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span><span v-if="row.stateIssue" class="sub">{{ stateIssueText(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : t('instances.noActions') }}</td>
         </tr></tbody></table><InitialQueryProgress v-if="initialLoading" :label="t('instances.loadingList')" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? t('instances.emptyNotLoaded') : rows.length ? t('instances.emptyNoMatch') : t('instances.emptyNone') }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">{{ t('instances.createInstance') }}</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
     </section>
     <aside class="detail-panel" :aria-label="t('instances.detailLabel')"><OverlayScroll class="detail-scroll" :label="t('instances.detailContentLabel')"><div class="detail-content">
@@ -269,8 +277,8 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
         <details><summary>{{ t('instances.viewTargets') }}</summary><p v-for="row in chosen" :key="row.name" class="small">{{ row.name }} · {{ displayState(row) }}</p></details>
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
-        <p class="hint">{{ coreLabel(single.name) }}<br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><p v-if="single.listenAddress==='0.0.0.0'" class="form-error" role="note">{{ t('velocity.allInterfaces') }}</p><p v-if="metaByName.get(single.name)?.core?.unverified" class="form-error" role="note">{{ t('core.warning.unverifiedInstance') }}</p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
-        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
+        <p class="hint">{{ coreLabel(single.name) }}<template v-if="coreReason(single.name)"> · {{ coreReason(single.name) }}</template><br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><p v-if="single.listenAddress==='0.0.0.0'" class="form-error" role="note">{{ t('velocity.allInterfaces') }}</p><p v-if="metaByName.get(single.name)?.core?.unverified" class="form-error" role="note">{{ t('core.warning.unverifiedInstance') }}</p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
+        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.stateIssue">{{ t('instances.stateProblem') }}</dt><dd v-if="single.stateIssue">{{ stateIssueText(single, true) }}</dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
         <div class="detail-actions">
           <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>
           <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?t('instance.state.starting'):isQueued(single)?t('activity.state.Queued'):t('activity.action.start') }}</button>
@@ -278,6 +286,10 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button v-if="consoleAvailable" :class="{primary:connected && canOpenConsole(single) && !emergency}" :disabled="!connected || consoleBusy || !canOpenConsole(single)" @click="emit('console',[single])">{{ t('instances.openConsole') }}</button>
           <button :disabled="!connected || busyNames.has(single.name) || isQueued(single) || startingNames?.has(single.name) || !canRestart(single)" @click="emit('action','restart',[single])">{{ t('instances.restart') }}</button>
           <button @click="emit('settings',single.name)">{{ t('instances.settings') }}</button>
+        </div>
+        <div class="detail-actions">
+          <button type="button" :disabled="!connected" @click="emit('open-folder',single.name)">{{ t('instances.openServerFolder') }}</button>
+          <button type="button" class="danger" :disabled="!removable(single)" @click="emit('remove',single.name)">{{ t('instances.removeManagement') }}</button>
         </div>
 
         <div class="recent-operation detail-section"><p v-if="recent" class="hint">{{ t('instances.recentLine', { action: actionName(recent.action), state: jobStateName(recent.state) }) }}</p></div>

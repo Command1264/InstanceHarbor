@@ -35,7 +35,7 @@ impl Tabs {
         if self.closing {
             return Err("ConsoleViewerClosing".into());
         }
-        if !token(&tab.name) || !token(&tab.run) || tab.title.trim().is_empty()
+        if !instance_name(&tab.name) || !token(&tab.run) || tab.title.trim().is_empty()
             || tab.title.chars().count() > 1024 || tab.title.chars().any(char::is_control) {
             return Err("InvalidConsoleRequest".into());
         }

@@ -233,12 +233,30 @@ pub(super) fn managed_path(root: &Path, value: &str) -> Result<PathBuf> {
 }
 
 impl Policy {
+    /// Keep only the management paths `keep` accepts. Returns whether any
+    /// path was dropped. Removing paths needs no revalidation.
+    pub(super) fn retain_allow_paths(&mut self, keep: impl Fn(&str) -> bool) -> bool {
+        let before = self.allow_paths.len();
+        self.allow_paths.retain(|rule| keep(rule));
+        self.allow_paths.len() != before
+    }
+
     pub(super) fn management_roots(&self) -> &[String] {
         if self.managed_folders {
             &self.allow_paths
         } else {
             &[]
         }
+    }
+
+    /// Whether a management folder contains `path`, so its scan would find it.
+    pub(super) fn manages_path(&self, root: &Path, path: &Path) -> Result<bool> {
+        for rule in self.management_roots() {
+            if contains(&rule_path(root, rule)?, path) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(super) fn excludes_path(&self, root: &Path, path: &Path) -> Result<bool> {
@@ -348,7 +366,7 @@ impl Policy {
     ) -> Result<Self> {
         let canonical = managed_path(root, &path_format::display(parent))?;
         if !target.parent().is_some_and(|path| same_path(path, &canonical))
-            || !target.file_name().and_then(|name| name.to_str()).is_some_and(token)
+            || !target.file_name().and_then(|name| name.to_str()).is_some_and(instance_name)
         {
             return Err("InvalidInstancePath".into());
         }
@@ -482,7 +500,7 @@ pub(super) fn preview(root: &Path, current: &Policy, proposed: &Policy) -> Resul
         let name = path
             .file_stem()
             .and_then(|name| name.to_str())
-            .filter(|name| token(name))
+            .filter(|name| instance_name(name))
             .ok_or("InvalidInstanceName")?;
         let item = instance(root, name)?;
         if item.removed {
@@ -544,7 +562,7 @@ fn changed_discovery_roots(
     Ok(outer)
 }
 
-fn discovered_changes(
+pub(super) fn discovered_changes(
     root: &Path,
     current: &Policy,
     proposed: &Policy,

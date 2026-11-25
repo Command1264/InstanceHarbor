@@ -153,8 +153,6 @@ const baseMessages = {
   'appearance.selectionColor': ['清單選取色', 'List selection color'],
   'appearance.selectionOpacity': ['清單選取底色不透明度', 'List selection opacity'],
   'appearance.selectionOpacityValue': ['不透明度百分比', 'Opacity percentage'],
-  'appearance.closeToTray': ['關閉視窗時縮到系統匣', 'Keep running in the notification area when the window is closed'],
-  'appearance.closeToTrayHelp': ['兩種方式都不會停止伺服器。', 'Servers keep running either way.'],
   'settings.coreUpdates': ['核心更新', 'Core updates'],
   'settings.corePrefetch': ['預先下載核心更新', 'Download core updates in advance'],
   'settings.corePrefetchUnavailable': ['目前無法核對已儲存的核心更新設定。', 'Could not verify the saved core update settings.'],
@@ -376,7 +374,7 @@ const baseMessages = {
   'batchImport.reason.BatchImportNotFound': ['找不到此工作 ID 的匯入紀錄。', 'No import record matches this work ID.'],
   'batchImport.reason.RequestConflict': ['工作 ID 已用於不同內容。請使用原工作 ID 查詢紀錄，或重新預覽。', 'This work ID belongs to different inputs. Look up the original record or preview again.'],
   'batchImport.reason.ManagerBusy': ['管理服務正在處理其他工作。請查詢結果，並在確認後重新預覽。', 'The management service is busy. Look up the result before starting another preview.'],
-  'batchImport.reason.InvalidInstanceName': ['管理名稱請使用小寫英文字母、數字及連字號，並以英文字母或數字開頭。', 'Start the registration name with a lowercase letter or digit. Use lowercase letters, digits, and hyphens.'],
+  'batchImport.reason.InvalidInstanceName': ['管理名稱請使用小寫英文字母、數字、連字號或句點，以英文字母或數字開頭，不以句點結尾。', 'Start the registration name with a lowercase letter or digit. Use lowercase letters, digits, hyphens, or periods, and do not end it with a period.'],
   'batchImport.reason.AlreadyManaged': ['已有同名實例登記。', 'An instance with this name is already registered.'],
   'batchImport.reason.InstanceMustBeStopped': ['請先正常停止這台伺服器。', 'Stop this server gracefully before importing.'],
   'batchImport.reason.ImportPathAlreadyRegistered': ['這個目錄與既有登記的目錄重疊。', 'This folder overlaps a registered folder.'],
@@ -439,7 +437,7 @@ const baseMessages = {
   'core.batch.noCandidate': ['沒有可安裝的同版核心', 'No installable core for the same Minecraft version'],
   'core.batch.notStopped': ['已略過，請先正常停止', 'Skipped. Stop the server gracefully first.'],
   'core.batch.operationPending': ['已略過，請等候目前的實例操作完成', 'Skipped. Wait for the current instance operation to finish.'],
-  'core.batch.updateTo': ['可更新至 Build {build}', 'Can update to build {build}'],
+  'core.batch.updateTo': ['可更新至 Build {build}', 'Can update to Build {build}'],
   'core.batch.check': ['檢查更新', 'Check for updates'],
   'core.batch.checking': ['正在核對更新', 'Checking for updates'],
   'core.batch.confirm': ['確認更新', 'Confirm update'],
@@ -626,6 +624,7 @@ const baseMessages = {
   'instance.state.stopping': ['停止中', 'Stopping'],
   'instance.state.portOccupied': ['Port 已被占用', 'Port in use'],
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
+  'instance.state.stateUnconfirmed': ['狀態無法核對', 'State unverified'],
 } as const satisfies Record<string, readonly [string, string]>
 
 const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages, consoleMessages] as const

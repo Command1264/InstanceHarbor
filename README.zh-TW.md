@@ -16,7 +16,7 @@ InstanceHarbor 是在自己電腦上執行 Minecraft 伺服器的 Windows 桌面
 - **設定與遊戲規則**：修改 `server.properties` 與遊戲規則。變更透過後台即時套用，或在正常停止後寫入世界存檔。
 - **核心更新**：檢查同版本線的新 build，可以先在背景下載，再更新單台或多台。每次更新都會保留備份，可以還原。
 - **核對核心，也能離線使用**：以 SHA-256 比對 PaperMC 官方清單。沒有網路，或是 PaperMC 沒有發布的核心時，伺服器仍可使用，InstanceHarbor 會顯示警告。
-- **桌面整合**：系統匣圖示；介面依 Windows 語言顯示英文或繁體中文。
+- **桌面整合**：背景 Manager 執行時顯示系統匣圖示，可從圖示結束 Manager；介面依 Windows 語言顯示英文或繁體中文。
 
 ## 系統需求
 
@@ -55,6 +55,8 @@ $workspace = "$env:LOCALAPPDATA\InstanceHarbor\workspaces\default"
 & $ihctl $workspace status lobby
 ```
 
+`& $ihctl --version` 會顯示版本與建置時的 Git commit，例如 `InstanceHarbor CLI 1.0.0 (33dfd35)`。「應用程式設定」→「關於」也顯示同樣的資訊，並附上本儲存庫的連結。
+
 完整的指令請見[開發指南](docs/development.md)。
 
 ## 從原始碼建置
@@ -83,7 +85,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib
 ## 文件
 
 - [開發指南](docs/development.md)：功能細節、建置、測試、隔離驗收、儲存位置與回退。
-- [1.0.1 發行說明](docs/windows-1.0.1.md)。先前的 [1.0.0 發行說明](docs/windows-1.0.0.md) 與 [1.0.0-rc2 預發行說明](docs/windows-rc2.md) 保留供參考。
+- [1.1.0 發行說明](docs/windows-1.1.0.md)。先前的 [1.0.1 發行說明](docs/windows-1.0.1.md)、[1.0.0 發行說明](docs/windows-1.0.0.md) 與 [1.0.0-rc2 預發行說明](docs/windows-rc2.md) 保留供參考。
 - [Windows 發行與授權](docs/windows-distribution-licenses.md)（英文）：如何建置發行版，以及第三方授權通知與對應的 MPL 原始碼。
 
 問題回報與建議請到 [GitHub Issues](https://github.com/Command1264/InstanceHarbor/issues)。

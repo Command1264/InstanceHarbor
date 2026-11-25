@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
 import { useAppLanguage } from '../i18n'
 
 const props = defineProps<{ label: string }>()
@@ -18,6 +18,8 @@ const maximumX = ref(0)
 const currentX = ref(0)
 const thumbWidth = ref(28)
 const thumbLeft = ref(0)
+// Keyboard users need a tab stop only when there is something to scroll.
+const scrollable = computed(() => needed.value || maximumX.value > 1)
 let observer: ResizeObserver | undefined
 // Lets a parent keep a live view pinned to its end across content updates.
 defineExpose({ viewport })
@@ -110,7 +112,7 @@ onUnmounted(() => {
 
 <template>
   <div class="scroll-shell">
-    <div :id="viewportId" ref="viewport" class="overlay-viewport" tabindex="0" :aria-label="props.label" @scroll.passive="update">
+    <div :id="viewportId" ref="viewport" class="overlay-viewport" :tabindex="scrollable ? 0 : undefined" :aria-label="props.label" @scroll.passive="update">
       <div ref="inner" class="overlay-inner"><slot /></div>
     </div>
     <div v-if="maximumX > 1" ref="horizontalTrack" class="overlay-track horizontal-track" role="scrollbar" tabindex="0"
@@ -135,6 +137,12 @@ onUnmounted(() => {
 .scroll-shell { position:relative; display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
 .overlay-viewport { flex:1; min-height:0; min-width:0; overflow:auto; scrollbar-width:none; overscroll-behavior:contain; padding-right:14px; padding-bottom:14px; }
 .overlay-viewport::-webkit-scrollbar { display:none; }
+/* Inside a dialog, fields sit flush with the scroll area's top and left edges, where the
+   viewport's overflow would clip their focus ring. The viewport reserves the ring's extent
+   and pulls back by the same amount, so content position, width and the right-edge overlay
+   track stay unchanged; the shell lets that reserved edge show in the dialog's padding. */
+:where(dialog) .scroll-shell { overflow:visible; }
+:where(dialog) .overlay-viewport { margin-top:calc(-1 * var(--focus-ring-extent)); margin-left:calc(-1 * var(--focus-ring-extent)); padding-top:var(--focus-ring-extent); padding-left:var(--focus-ring-extent); }
 .overlay-inner { min-width:0; display:flow-root; }
 .overlay-track { position:absolute; top:4px; right:2px; bottom:4px; width:10px; touch-action:none; border-radius:5px; cursor:default; }
 .overlay-thumb { position:absolute; top:0; right:2px; width:6px; border-radius:4px; background:var(--muted,#64748b); opacity:.65; pointer-events:auto; }

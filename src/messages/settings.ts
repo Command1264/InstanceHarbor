@@ -72,4 +72,10 @@ export const settingsMessages = {
   'settingsPage.javaInstalls': ['可用 Java 安裝', 'Available Java installations'],
   'settingsPage.javaVersionUnknown': ['無法確認版本', 'Version not verified'],
   'settingsPage.javaUnusable': ['無法使用', 'Unusable'],
+  'settingsPage.testAdmins': ['測試管理員', 'Test administrators'],
+  'settingsPage.testAdminsFetched': ['LuckPerms 已下載並核對。', 'LuckPerms was downloaded and verified.'],
+  'settingsPage.testAdminsFetchFailed': ['無法下載 LuckPerms：{reason}', 'Could not download LuckPerms: {reason}'],
+  'settingsPage.testAdminsNodesRequired': ['請至少輸入一個權限節點，或改為授予所有權限。', 'Enter at least one permission node, or grant all permissions instead.'],
+  'settingsPage.testAdminsNodesInvalid': ['權限節點只能使用小寫英文字母、數字與 . _ * -，每行一個，長度不超過 200。', 'Permission nodes use only lowercase letters, digits, and . _ * -, one per line, up to 200 characters.'],
+  'settingsPage.testAdminsNodesTooMany': ['權限節點最多 50 個。', 'At most 50 permission nodes are allowed.'],
 } as const satisfies Record<string, readonly [string, string]>

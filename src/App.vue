@@ -1,26 +1,36 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import brandLogo from './assets/instanceharbor-brand.png?no-inline'
+import brandLogo from '@brand-logo?no-inline'
 import InstancesPage from './InstancesPage.vue'
 import SettingsPage from './SettingsPage.vue'
 import ActivityPage from './ActivityPage.vue'
 import CoreMaintenanceDialog from './components/CoreMaintenanceDialog.vue'
 import BatchCoreDialog from './components/BatchCoreDialog.vue'
 import ManagementFolderDialog from './components/ManagementFolderDialog.vue'
+import RemovedInstancesDialog from './components/RemovedInstancesDialog.vue'
 import PathPickerButton from './components/PathPickerButton.vue'
+import CopyButton from './components/CopyButton.vue'
 import { displayPath } from './path-display'
+import { coreVersionText } from './core-display'
 import OverlayScroll from './components/OverlayScroll.vue'
 import OperationButton from './components/OperationButton.vue'
 import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
+import {productTitle,type AboutInfo} from './about'
+import { managementChoice, NO_MANAGEMENT_FOLDER, previewedManagementChoice, selectedManagementFolder, type ManagementChoice } from './creation-management'
+import { ScopeCache } from './creation-scope-cache'
+import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
+import { diagnosticWarning, type DiagnosticStatus } from './diagnostic-warning'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
+import { startupListRendered, startupMark, startupWindowPresented } from './startup-timing'
+import { registryDiagnosticText, registryIssueMessage } from './registry-issues'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
@@ -28,6 +38,7 @@ type Mode='create'|'force'|'remove'|'logs'|'batch'|'console-window'|null
 const coreDialog = ref<InstanceType<typeof CoreMaintenanceDialog>>()
 const coreTarget = ref<string>()
 const managementFolderDialog = ref<InstanceType<typeof ManagementFolderDialog>>()
+const removedInstancesDialog = ref<InstanceType<typeof RemovedInstancesDialog>>()
 const batchCoreDialog = ref<InstanceType<typeof BatchCoreDialog>>()
 async function openCore(name: string) {
   if (coreTarget.value) return
@@ -42,11 +53,6 @@ const listReading=ref(false)
 const presentation=ref<Presentation>({preferences:{theme:'system',pins:[]},instances:[]})
 const languagePreview=ref<LanguagePreference>()
 const { t, locale }=provideAppLanguage(()=>presentation.value.preferences.language,()=>languagePreview.value)
-// The tray tooltip follows the list; it still updates while the window is hidden in the tray.
-const runningCount=computed(()=>rows.value.filter(row=>canStop(row)).length)
-watch([runningCount,locale],([running,language])=>{
-  if(nativeBridge)void invoke('tray_status',{running,language}).catch(e=>console.error('Could not update the tray tooltip',e))
-},{immediate:true})
 const coreCheckRows=ref<Record<string,CoreSource>>({})
 let coreEpoch=0
 let lastCoreTargets=''
@@ -113,9 +119,16 @@ async function refreshAfterCoreChange() {
   await checkCoreUpdates(presentation.value.instances.map(item=>item.name),false)
 }
 const registryIssues=ref<RegistryIssue[]>([])
-const registryIssueLabels=computed<Record<RegistryIssue['reason'],string>>(()=>({
-  FileInUse:t('app.registry.fileInUse'), AccessDenied:t('app.registry.accessDenied'), InvalidRecord:t('app.registry.invalidRecord'), Unconfirmed:t('app.registry.unconfirmed'), ObservationUnconfirmed:t('app.registry.observationUnconfirmed'),
-}))
+function registryIssueLabel(issue:RegistryIssue){const message=registryIssueMessage(issue);return t(message.id,message.values)}
+const registryStateIssues=computed(()=>rows.value.some(row=>!!row.stateIssue))
+const registryCopy=ref<'copied'|'failed'>()
+let registryCopyTimer:ReturnType<typeof setTimeout>|undefined
+async function copyRegistryDiagnostics(){
+  clearTimeout(registryCopyTimer)
+  try{await navigator.clipboard.writeText(registryDiagnosticText(registryIssues.value));registryCopy.value='copied'}
+  catch{registryCopy.value='failed'}
+  registryCopyTimer=setTimeout(()=>{registryCopy.value=undefined},2000)
+}
 const listUnavailable=ref('')
 const preferencesRevision=ref('')
 function applyPreferences(snapshot:PreferencesSnapshot){
@@ -236,6 +249,7 @@ const lifecycleBusy=computed(()=>new Set([...busyNames.value,
 const catalog = useCoreCatalog()
 const draft = reactive({
   name: '', parent: 'instances', port: 12010, core: '', source: '' as '' | CatalogFamily, version: '',
+  testAdministrators: 'default' as 'default' | 'grant' | 'skip',
 })
 const creationVersions = computed(() => draft.source ? catalog.versions[draft.source] : undefined)
 const creationBuild = computed(() => draft.source && draft.version
@@ -265,9 +279,13 @@ type CreationPreview = {
   target: string
   parent: string
   whitelist: string | null
+  managementOptions: string[]
+  managementCandidates: { name: string; directory: string; core: string | null; kind: 'Minecraft' | 'Velocity' | 'Unknown'; port: number | null; listenAddress: string | null }[]
+  managementScanComplete: boolean
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
   initializationDefaults?: boolean
+  testAdministrators?: { requested: boolean; configured: number; skipped?: 'ProxyHasNoOp' | 'UnsupportedCore' | null; grant: { count: number; group: string; luckperms: boolean; op: boolean; fileName: string | null } | null }
   revision: string
 }
 const creationPreview=ref<CreationPreview>()
@@ -284,22 +302,15 @@ const creationBytes=computed(()=>{
   return update && 'total' in update ? update : undefined
 })
 const previewedCreation=ref<ReturnType<typeof creationInput>>()
+const creationManagement=ref<ManagementChoice>()
 const creationUnconfirmedWork=ref('')
 const createEditingPicker=ref(false)
 const createBackButton=ref<HTMLButtonElement>()
 const createNameInput=ref<HTMLInputElement>()
 const createNameChecked=ref(false)
 const createNameIssue=computed(()=>{
-  const {name}=draft
-  if(!name)return t('app.name.required')
-  if(name.length>64)return t('app.name.tooLong')
-  if(name.includes('.'))return t('app.name.period')
-  if(!/^[a-z0-9]/.test(name))return t('app.name.start')
-  if(!/^[a-z0-9-]+$/.test(name))return t('app.name.characters')
-  if(/^(?:con|prn|aux|nul|(?:com|lpt)[1-9])$/.test(name)){
-    return t('app.name.reserved')
-  }
-  return ''
+  const issue=instanceNameIssue(draft.name)
+  return issue?t(`app.name.${issue}`):''
 })
 function validateCreationName(){
   createNameChecked.value=true
@@ -308,7 +319,7 @@ function validateCreationName(){
   return false
 }
 const createPath=(path:string)=>displayPath(path,visiblePreferences.value.pathSeparator)
-function creationInput() {
+function creationInput(management: ManagementChoice | undefined = creationManagement.value) {
   const build = creationBuild.value?.value
   if (!canPreviewCreation.value || (draft.source && !build)) return
   return {
@@ -316,20 +327,106 @@ function creationInput() {
     parent:draft.parent,
     port:draft.port,
     source: draft.source && build ? { kind: 'official', ...build } : { kind: 'local', path: draft.core },
+    ...(draft.testAdministrators === 'default' ? {} : { testAdministrators: draft.testAdministrators === 'grant' }),
+    ...(management ? { managementFolder: management } : {}),
   }
 }
+const creationRescoping=ref(false)
+let creationRescopeRequest=0
+// One preview per management folder option of the open confirmation, so switching back is instant.
+const creationScopes=new ScopeCache<CreationPreview>()
+function startCreationScopes(preview: CreationPreview) {
+  const generation=creationScopes.reset()
+  creationScopes.set(generation,selectedManagementFolder(creationManagement.value,preview.managementOptions),preview)
+  void prefetchCreationScopes(generation,preview.managementOptions)
+}
+async function prefetchCreationScopes(generation: number, options: readonly string[]) {
+  for(const selected of [...options,NO_MANAGEMENT_FOLDER]){
+    if(generation!==creationScopes.generation)return
+    if(creationScopes.get(selected))continue
+    const input=creationInput(managementChoice(selected,options))
+    if(!input)return
+    try{
+      creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+    }catch{
+      // A failed background preview is fetched again when that option is chosen.
+    }
+  }
+}
+async function retryCreationScope(generation: number, selected: string, input: NonNullable<ReturnType<typeof creationInput>>) {
+  try{
+    creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+  }catch{
+    // The option is read again in the foreground when it is chosen next time.
+  }
+}
+async function chooseManagementFolder(selected: string) {
+  const preview = creationPreview.value
+  if (!preview || modalBusy.value) return
+  const options = preview.managementOptions
+  creationManagement.value = managementChoice(selected, options)
+  const input = creationInput()
+  if (!input) return
+  modalError.value=''
+  const generation=creationScopes.generation
+  const cached=creationScopes.get(selected)
+  // A newer choice supersedes any request still in flight.
+  const request = ++creationRescopeRequest
+  if(cached){
+    creationRescoping.value=false
+    creationPreview.value=cached
+    previewedCreation.value=input
+    return
+  }
+  // Keep the checked preview on screen and replace it once.
+  creationRescoping.value=true
+  try{
+    const next=await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)])
+    if(!creationScopes.set(generation,selected,next)||request!==creationRescopeRequest)return
+    creationPreview.value=next
+    previewedCreation.value=input
+  }catch(e){
+    // Select the option of the preview still on screen again, so "Create" sends what is shown.
+    if(request===creationRescopeRequest){
+      creationManagement.value=previewedManagementChoice(previewedCreation.value)
+      modalError.value=t('app.create.rescopeFailed',{error:creationError(e)})
+    }
+      // Read the chosen option once more in the background; a reply is kept in the cache,
+      // so choosing that option again shows it at once.
+      void retryCreationScope(generation,selected,input)
+  }finally{
+    if(request===creationRescopeRequest)creationRescoping.value=false
+  }
+}
+const creationTestAdmins = computed(() => {
+  const state = creationPreview.value?.testAdministrators
+  if (!state) return undefined
+  if (state.grant) {
+    const { count, group, luckperms, op } = state.grant
+    const what = [luckperms && (group ? t('app.create.testAdminsLuckPermsGroup', { group }) : 'LuckPerms'), op && 'OP'].filter(Boolean).join(' · ')
+    return t('app.create.testAdminsGranted', { count, what })
+  }
+  if (state.skipped === 'ProxyHasNoOp') return t('app.create.testAdminsSkippedProxy')
+  if (state.skipped) return t('app.create.testAdminsSkippedCore')
+  return t(state.configured ? 'app.create.testAdminsDeclined' : 'app.create.testAdminsNone')
+})
 function pickerFailed() {
   void showModalError(t('management.pickFailed'))
 }
 function cancelCreationPreview() {
+  creationScopes.reset()
   creationPreview.value=undefined
   previewedCreation.value=undefined
+  creationManagement.value=undefined
   creationUnconfirmedWork.value=''
   modalError.value=''
   modalMessage.value=''
 }
 watch(draft,cancelCreationPreview,{flush:'sync'})
-const removeChoice=ref<'retain'|'delete'>('retain')
+const removeChoice=ref<'retain'|'delete'|'recycle'>('retain')
+const removeConfirmName=ref('')
+const removeMeta=computed(()=>presentation.value.instances.find(item=>item.name===target.value?.name))
+const removeReady=computed(()=>removeChoice.value!=='recycle'||(!!target.value&&removeConfirmName.value===target.value.name))
 const pendingBatch=ref<{action:'start'|'stop'|'restart';targets:Instance[]}>()
 const javaCandidates=ref<JavaCandidate[]>([])
 const javaChecked=ref(false)
@@ -394,6 +491,7 @@ async function revealWindow(){
     await nextTick()
     await invoke('present_window',{theme:presentation.value.preferences.theme})
     windowReady=true
+    startupWindowPresented()
   }catch(e){
     feedback.value=t('app.windowError',{error:errorText(e)})
   }finally{windowOpening=false}
@@ -407,16 +505,16 @@ const BACKGROUND_FAILURE_LIMIT=3
 let backgroundFailures=0
 function clearRefreshFeedback(){clearTimeout(refreshFeedbackTimer);refreshFeedbackTimer=undefined;manualRefreshDone.value=false}
 let diagnosticFailureReported=false
-let pendingDiagnosticWarning=false
+let pendingDiagnosticWarning:DiagnosticStatus|undefined
 function presentDiagnosticWarning(){
-  if(pendingDiagnosticWarning && !failureMessage.value && !failureDialog.value?.open){pendingDiagnosticWarning=false;showOperationError(t('app.diagnosticWarning'))}
+  if(pendingDiagnosticWarning && !failureMessage.value && !failureDialog.value?.open){const status=pendingDiagnosticWarning;pendingDiagnosticWarning=undefined;showOperationError(diagnosticWarning(locale.value,status))}
 }
 function afterFailureClose(){failureMessage.value='';failureItems.value=[];failureBatch=undefined;const pending=pendingOperationErrors.shift();if(pending)showOperationError(pending.message,pending.items,pending.batch);else void nextTick(presentDiagnosticWarning)}
 async function checkDiagnostics(){
   if(!nativeBridge||diagnosticFailureReported)return
   try{
-    const status=await invoke<{available:boolean;error?:string}>('diagnostic_status')
-    if(!status.available){diagnosticFailureReported=true;pendingDiagnosticWarning=true;void nextTick(presentDiagnosticWarning)}
+    const status=await invoke<DiagnosticStatus>('diagnostic_status')
+    if(!status.available){diagnosticFailureReported=true;pendingDiagnosticWarning=status;void nextTick(presentDiagnosticWarning)}
   }catch(error){console.error('Could not check the diagnostic log state',error)}
 }
 let pollTick=0
@@ -464,6 +562,7 @@ async function refresh(manual=false){
     const preferencesRead=shouldReadPreferences
       ? manage<PreferencesSnapshot>(['preferences-snapshot'],origin).then(
         snapshot=>{
+          startupMark('page-preferences-read')
           if(epoch!==refreshEpoch || preferencesRetrying || preferenceEpoch!==preferencesReadEpoch)return
           applyPreferences(snapshot)
         },
@@ -488,6 +587,7 @@ async function refresh(manual=false){
     const live=new Map(nextRows.map(row=>[row.name,row]))
     for(const [name,run] of Object.entries(stopping.value))if(!canStop(live.get(name))||live.get(name)?.run?.id!==run)delete stopping.value[name]
     connection.value='connected'
+    if(!listLoaded.value){startupMark('page-first-list-read');void nextTick(startupListRendered)}
     listLoaded.value=true
     backgroundFailures=0
     if(manual){
@@ -605,9 +705,9 @@ function open(next:Mode,item?:{name:string;run?:string}){
   logs.value=undefined
   logsError.value=''
   logsMessage.value=''
-  if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:'instances',port:12010,core:'',source:'',version:''})}
+  if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:'instances',port:12010,core:'',source:'',version:'',testAdministrators:'default'})}
   provisionBaseline.value=JSON.stringify(draft)
-  if(next==='remove')removeChoice.value='retain'
+  if(next==='remove'){removeChoice.value='retain';removeConfirmName.value=''}
   void nextTick(()=>{dialog.value?.showModal();cancelButton.value?.focus()})
   if(next==='logs'&&item){
     logSource.value='terminal'
@@ -882,6 +982,7 @@ async function previewCreation(){
   try{
     creationPreview.value=await manage<CreationPreview>(['gui-create-preview',JSON.stringify(input)])
     previewedCreation.value=input
+    startCreationScopes(creationPreview.value)
   }catch(e){
     const reason = rawError(e)
     if (/CreationPreviewChanged|CoreNoStableBuild|CreationNoStableBuild/.test(reason)) refreshCreationBuild()
@@ -897,6 +998,9 @@ function creationError(error: unknown) {
   const reason = rawError(error)
   if (reason.includes('InvalidCreationName')) {
     return t('app.create.invalidName')
+  }
+  if (reason.includes('CreationManagementFolderNotAncestor')) {
+    return t('app.create.managementFolderNotAncestor')
   }
   if (/CoreNoStableBuild|CreationNoStableBuild/.test(reason)) {
     return t('app.create.noStable')
@@ -921,6 +1025,15 @@ function creationError(error: unknown) {
   }
   if (/AutoJavaUnavailable|GlobalJavaUnavailable/.test(reason)) {
     return t('app.create.javaUnavailable')
+  }
+  if (reason.includes('TestPermissionArtifactMissing')) {
+    return t('app.create.testAdminsMissing')
+  }
+  if (reason.includes('TestPermissionArtifactMismatch')) {
+    return t('app.create.testAdminsMismatch')
+  }
+  if (reason.includes('UnsupportedTestPermissionPlatform')) {
+    return t('app.create.testAdminsUnsupported')
   }
   return errorText(error)
 }
@@ -991,23 +1104,39 @@ function movePin(name:string,direction:number){
 }
 async function removeManagement(){
   const item=target.value
-  if(!item)return
+  if(!item||!removeReady.value)return
+  const recycle=removeChoice.value==='recycle'
   invalidateRefresh()
   modalBusy.value=true
   modalError.value=''
-  modalMessage.value=t('app.remove.removing')
+  modalMessage.value=t(recycle?'app.remove.recycling':'app.remove.removing')
   try{
-    await manage(['remove-management',item.name,removeChoice.value])
-    feedback.value=t('app.remove.done',{name:item.name})
+    if(recycle)await manage(['delete-server',item.name,removeConfirmName.value])
+    else await manage(['remove-management',item.name,removeChoice.value])
+    feedback.value=t(recycle?'app.remove.recycled':'app.remove.done',{name:item.name})
     dialog.value?.close()
     modal.value=null
     await refresh()
   }catch(e){
-    await showModalError(t('app.remove.error',{error:errorText(e)}))
+    modalMessage.value=''
+    await showModalError(t(recycle?'app.remove.recycleError':'app.remove.error',{error:errorText(e)}))
+    if(recycle)void refresh()
   }
   finally{modalBusy.value=false}
 }
+async function openServerFolder(name:string){
+  try{await manage(['open-server-folder',name])}
+  catch(e){feedback.value=t('instances.openServerFolderError',{error:errorText(e)})}
+}
 let catalogTimer:ReturnType<typeof setInterval> | undefined
+// The development channel names its workspace under the channel name, so a narrow rail
+// wraps between words and never inside "InstanceHarbor".
+const channelInfo=ref<Pick<AboutInfo,'channel'|'workspace'>>()
+onMounted(async()=>{
+  if(!nativeBridge)return
+  try{channelInfo.value=await invoke<AboutInfo>('about_info')}
+  catch(error){console.warn('Could not read the channel name',error)}
+})
 onMounted(() => {
   if (!nativeBridge) return
   refreshCatalog()
@@ -1030,21 +1159,26 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 </script>
 <template>
   <a class="skip" href="#view">{{ t('skip.main') }}</a>
-  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span>InstanceHarbor</span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
+  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span class="brand-name" :title="productTitle(channelInfo)">{{ channelInfo?.channel ?? 'InstanceHarbor' }}<span v-if="channelInfo?.workspace" class="brand-workspace"><span class="sr-only"> — </span>{{ channelInfo.workspace }}</span></span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
     <main id="view" :class="{'route-settings':route==='settings'}"><div v-if="!nativeBridge" class="notice error" role="alert">{{ t('app.bridgeNotice') }}</div>
       <aside v-if="route==='instances' && (registryIssues.length || listUnavailable)" class="registry-notice" role="status">
         <p v-if="listUnavailable">{{ listUnavailable }}</p>
         <template v-else>
           <p>{{ t('app.registry.intro') }}</p>
-          <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="issue in registryIssues" :key="issue.file">{{ issue.file }} · {{ registryIssueLabels[issue.reason] }}</li></ul></OverlayScroll>
+          <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="(issue,index) in registryIssues" :key="`${issue.file}-${index}`">{{ issue.file }} · {{ registryIssueLabel(issue) }}</li></ul></OverlayScroll>
+          <p v-if="registryStateIssues" class="hint">{{ t('app.registry.stillListed') }}</p>
+          <div class="registry-actions"><button type="button" @click="copyRegistryDiagnostics">{{ t('app.registry.copyDiagnostics') }}</button>
+            <span v-if="registryCopy" :class="registryCopy==='copied'?'hint':'form-error'" role="status">{{ t(registryCopy==='copied'?'app.registry.copied':'app.registry.copyFailed') }}</span></div>
         </template>
       </aside>
-      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :console-available="presentation.capabilities?.nativeConsole===true" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @create="open('create')" @refresh="refresh(true)"/>
+      <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :console-available="presentation.capabilities?.nativeConsole===true" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @open-folder="openServerFolder" @removed="removedInstancesDialog?.open()" @create="open('create')" @refresh="refresh(true)"/>
       <ActivityPage v-else-if="route==='activity'" :jobs="projectedJobs" :initial-loading="jobsReading && !jobsLoaded && !jobsError && !residentError" :loaded="jobsLoaded" :time-format="visiblePreferences.timeFormat" :error="jobsError" :batch-error="residentError" :cancelling-batch="cancellingBatch" :cancelling-core-batch="cancellingCoreBatch" :core-cancel-failure="coreCancelFailure" :feedback="activityFeedback" @refresh="refreshJobs(true)" @cancel-batch="cancelResidentBatch" @cancel-core-batch="cancelCoreBatch"/>
       <SettingsPage v-else :instance="settingsName" :instance-state="currentSettingsState" :instance-run="currentSettingsRow?.run?.id" :world-command-ready="worldCommandReady" :world-rule-work="worldRuleWork" :restart-status="currentSettingsRow?.autoRestartStatus" :instance-meta="currentSettingsMeta" :preferences="presentation.preferences" :preferences-revision="preferencesRevision" :preferences-loaded="preferencesLoaded" :preferences-ready="preferencesLoaded && !preferencesUnavailable" :connected="connected" :java-candidates="javaCandidates" :java-checked="javaChecked" :refresh-java="discoverJava" :retry-preferences="retryPreferences" @close="navigate('instances')" @core="openCore" @language-preview="languagePreview=$event" @dirty="settingsDirty=$event" @saving="settingsSaving=$event" @mutating="invalidateRefresh" @management-changed="invalidateRefresh(); refresh(); refreshJobs(false,true)" @preferences="next=>{invalidateRefresh();applyPreferences(next)}"/>
     </main></div>
   <footer class="statusbar" :class="{disconnected:connection==='disconnected'||connection==='browser'}" role="status"><span class="connection-dot" aria-hidden="true"></span>{{ t(connection==='connected'?'connection.connected':connection==='browser'?'connection.browser':connection==='unknown'?'connection.unknown':'connection.disconnected') }}<span v-if="preferencesUnavailable"> · {{ t(preferencesLoaded ? 'connection.preferencesStale' : 'connection.preferencesMissing') }}</span></footer>
   <CoreMaintenanceDialog v-if="coreTarget" ref="coreDialog" :name="coreTarget" :cached-source="coreCheckRows[coreTarget]" :query="manuallyCheckCore" :time-format="visiblePreferences.timeFormat" @close="coreTarget=undefined" @changed="refreshAfterCoreChange" />
+  <RemovedInstancesDialog ref="removedInstancesDialog" :connected="connected" :java-candidates="javaCandidates" :java-checked="javaChecked" :refresh-java="discoverJava" :path-separator="visiblePreferences.pathSeparator"
+    @changed="invalidateRefresh(); refresh()" />
   <ManagementFolderDialog ref="managementFolderDialog" :connected="connected" :path-separator="visiblePreferences.pathSeparator"
     @changed="invalidateRefresh(); refresh(); refreshJobs(false,true)" />
   <BatchCoreDialog ref="batchCoreDialog" :instances="rows" :meta="presentation.instances" :source-rows="coreCheckRows" :query="manuallyCheckCoreBatch"
@@ -1056,7 +1190,19 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
     <template v-if="modal==='batch'"><h2 id="operation-dialog-title">{{ t('app.batch.title') }}</h2><p>{{ t('app.batch.body',{count:pendingBatch?.targets.length ?? 0,action:t(pendingBatch?.action==='start'?'app.batch.start':pendingBatch?.action==='stop'?'app.batch.stop':'app.batch.restart')}) }}</p><p v-if="pendingBatch?.action==='restart'" class="hint">{{ t('app.batch.restartHint') }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="submittingBatch" @click="close">{{ t('action.cancel') }}</button><OperationButton class="primary" :label="t('app.batch.confirm')" :busy-label="t('action.submitting')" :busy="submittingBatch" @click="confirmBatch"/></div></template>
     <template v-if="modal==='console-window'"><h2 id="operation-dialog-title">{{ t('console.confirm.title') }}</h2><p>{{ t('console.confirm.body',{name:target?.name ?? '',reason:consoleWindowStart?.reason ?? ''}) }}</p><p class="notice">{{ t('console.confirm.warning') }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus @click="close">{{ t('action.cancel') }}</button><button @click="startFromConsoleDialog(false)">{{ t('console.confirm.plain') }}</button><button class="danger" @click="startFromConsoleDialog(true)">{{ t('console.confirm.window') }}</button></div></template>
     <template v-else-if="modal==='force'"><h2 id="operation-dialog-title">{{ t('app.force.title') }}</h2><p>{{ t('app.force.body',{name:target?.name ?? ''}) }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="forceStop">{{ t('app.force.confirm') }}</button></div></template>
-    <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">{{ t('app.remove.title') }}</h2><p>{{ t('app.remove.keep',{name:target?.name ?? ''}) }}</p><label class="choice"><input v-model="removeChoice" type="radio" value="retain">{{ t('app.remove.retain') }}</label><label class="choice"><input v-model="removeChoice" type="radio" value="delete">{{ t('app.remove.delete') }}</label><p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy" @click="removeManagement">{{ t('app.remove.confirm') }}</button></div></template>
+    <template v-else-if="modal==='remove'"><h2 id="operation-dialog-title">{{ t('app.remove.title') }}</h2><p>{{ t('app.remove.intro',{name:target?.name ?? ''}) }}</p>
+      <fieldset class="remove-choices" :disabled="modalBusy">
+        <label class="remove-choice"><input v-model="removeChoice" type="radio" name="remove-choice" value="retain" aria-describedby="remove-retain-hint"><span><strong>{{ t('app.remove.retain') }}</strong><span id="remove-retain-hint" class="hint">{{ t('app.remove.retainHint') }}</span></span></label>
+        <label class="remove-choice"><input v-model="removeChoice" type="radio" name="remove-choice" value="delete" aria-describedby="remove-delete-hint"><span><strong>{{ t('app.remove.delete') }}</strong><span id="remove-delete-hint" class="hint">{{ t(removeMeta?.managementDiscovered?'app.remove.deleteDiscoveredHint':'app.remove.deleteHint') }}</span></span></label>
+        <label class="remove-choice"><input v-model="removeChoice" type="radio" name="remove-choice" value="recycle" aria-describedby="remove-recycle-hint"><span><strong class="remove-danger">{{ t('app.remove.recycle') }}</strong><span id="remove-recycle-hint" class="hint">{{ t(removeMeta?.managementDiscovered?'app.remove.recycleDiscoveredHint':'app.remove.recycleHint') }}</span></span></label>
+      </fieldset>
+      <div class="remove-confirm" :class="{inactive:removeChoice!=='recycle'}">
+        <p class="hint selectable" translate="no">{{ t('app.remove.folder',{path:removeMeta?.path?displayPath(removeMeta.path,visiblePreferences.pathSeparator):'--'}) }}</p>
+        <p class="hint">{{ t('app.remove.nukeWarning') }}</p>
+        <div class="remove-confirm-label"><span id="remove-confirm-label" class="selectable">{{ t('app.remove.typeName',{name:target?.name ?? ''}) }}</span><CopyButton :text="target?.name ?? ''" :label="t('app.remove.copyName')" :disabled="modalBusy||removeChoice!=='recycle'" /></div>
+        <input v-model="removeConfirmName" type="text" name="remove-confirm-name" aria-labelledby="remove-confirm-label" autocomplete="off" spellcheck="false" :disabled="modalBusy||removeChoice!=='recycle'" @keydown.enter.prevent="removeManagement">
+      </div>
+      <p v-if="modalMessage" role="status">{{ modalMessage }}</p><p v-if="modalError" ref="modalErrorElement" tabindex="-1" class="form-error" role="alert">{{ modalError }}</p><div class="dialog-actions"><button ref="cancelButton" autofocus :disabled="modalBusy" @click="close">{{ t('action.cancel') }}</button><button class="danger" :disabled="modalBusy||!removeReady" @click="removeManagement">{{ t(removeChoice==='recycle'?'app.remove.confirmRecycle':'app.remove.confirm') }}</button></div></template>
     <template v-else-if="modal==='logs'"><h2 id="operation-dialog-title">{{ t('app.logs.title',{name:target?.name ?? ''}) }}</h2><label v-if="logs?.sources">{{ t('app.logs.source') }}
         <select v-model="logSource" name="log-source">
           <option v-for="source in logs.sources" :key="source.source" :value="source.source">{{ source.source==='terminal'&&logs.merged?t('app.logs.merged'):logLabels[source.source] }}</option>
@@ -1069,14 +1215,41 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
       <template v-if="creationPreview">
         <dl class="create-review">
           <dt>{{ t('app.create.path') }}</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.target) }}</dd>
-          <dt>{{ t('app.create.coreVersion') }}</dt><dd>{{ creationPreview.core.family }} {{ creationPreview.core.minecraft }}<span v-if="creationPreview.core.build"> · Build {{ creationPreview.core.build }}</span></dd>
+          <dt>{{ t('app.create.coreVersion') }}</dt><dd>{{ coreVersionText(creationPreview.core) }}</dd>
           <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>{{ t('app.create.suggestedJava') }}</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
-          <template v-if="creationPreview.whitelist">
-            <dt>{{ t('app.create.allowedFolder') }}</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
+          <template v-if="creationTestAdmins"><dt>{{ t('app.create.testAdmins') }}</dt><dd>{{ creationTestAdmins }}</dd></template>
+          <template v-if="creationPreview.managementOptions.length">
+            <dt id="create-management-folder-label">{{ t('app.create.allowedFolder') }}</dt>
+            <dd role="radiogroup" aria-labelledby="create-management-folder-label" class="create-folder-choices">
+              <label v-for="folder in creationPreview.managementOptions" :key="folder" class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="folder" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === folder"
+                  :disabled="modalBusy" @change="chooseManagementFolder(folder)">
+                <span class="selectable" translate="no">{{ createPath(folder) }}</span>
+              </label>
+              <label class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="NO_MANAGEMENT_FOLDER" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === NO_MANAGEMENT_FOLDER"
+                  :disabled="modalBusy" @change="chooseManagementFolder(NO_MANAGEMENT_FOLDER)">
+                <span>{{ t('app.create.noManagementFolder') }}</span>
+              </label>
+            </dd>
+          </template>
+          <template v-if="creationPreview.managementOptions.length">
+            <dt>{{ t('app.create.alsoRegistered') }}</dt>
+            <dd v-if="!creationPreview.managementCandidates.length">{{ t('app.create.noCandidates') }}</dd>
+            <dd v-else><ul class="create-candidates">
+              <li v-for="candidate in creationPreview.managementCandidates" :key="candidate.directory">
+                <strong class="selectable" translate="no">{{ candidate.name }}</strong>
+                <span class="create-candidate-core">{{ candidate.core || t(`batchImport.${candidate.kind}`) }}</span>
+                <span v-if="candidate.port !== null" class="create-candidate-core">{{ t('batchImport.port', { port: candidate.port }) }}</span>
+                <bdi v-if="candidate.listenAddress" class="create-candidate-core selectable" translate="no">{{ candidate.listenAddress }}</bdi>
+                <span class="hint selectable create-candidate-path" translate="no">{{ createPath(candidate.directory) }}</span>
+              </li>
+            </ul></dd>
           </template>
         </dl>
-        <p v-if="creationPreview.whitelist" class="hint">{{ t('app.create.onlyFolder') }}</p>
+        <p v-if="creationPreview.managementOptions.length && !creationPreview.whitelist" class="hint">{{ t('app.create.noFolderHint') }}</p>
+        <p v-if="!creationPreview.managementScanComplete" class="form-error" role="alert">{{ t('app.create.scanIncomplete') }}</p>
         <p v-if="creationPreview.initializationDefaults === false" class="hint">{{ t('app.create.builtinDefaults') }}</p>
         
         <div v-if="creationPhase" class="creation-progress">
@@ -1091,7 +1264,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="creationUnconfirmedWork" class="hint selectable">{{ t('app.create.workId') }} <bdi class="mono" translate="no">{{ creationUnconfirmedWork }}</bdi></p>
         <div class="dialog-actions">
           <button ref="createBackButton" type="button" :disabled="modalBusy" @click="cancelCreationPreview">{{ t('app.create.back') }}</button>
-          <button type="button" class="primary" :disabled="modalBusy" @click="provision">{{ t('app.create.submit') }}</button>
+          <button type="button" class="primary" :disabled="modalBusy || creationRescoping" @click="provision">{{ t('app.create.submit') }}</button>
         </div>
       </template>
       <form v-else @submit.prevent="previewCreation">
@@ -1129,6 +1302,13 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
               @picking="createEditingPicker=$event" @failed="pickerFailed" @selected="draft.core=createPath($event)" />
           </div>
         </template>
+        <label class="create-test-admins">{{ t('app.create.testAdmins') }}
+          <select v-model="draft.testAdministrators" name="test-administrators" :disabled="modalBusy || createEditingPicker">
+            <option value="default">{{ t('app.create.testAdminsDefault') }}</option>
+            <option value="grant">{{ t('app.create.testAdminsGrant') }}</option>
+            <option value="skip">{{ t('app.create.testAdminsSkip') }}</option>
+          </select>
+        </label>
         <p v-if="modalMessage" role="status">{{ modalMessage }}</p>
         <p v-if="modalError" class="form-error" role="alert">{{ modalError }}</p>
         <div class="dialog-actions">
@@ -1147,6 +1327,8 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 
 <style scoped>
 .creation-progress { display: grid; gap: .5rem; margin-block: 1rem; }
+.create-test-admins { margin-block-start: 1rem; }
+.create-test-admins select { justify-self: start; }
 .creation-progress p { margin: 0; }
 .creation-progress-heading { display: flex; justify-content: space-between; gap: .5rem; font-variant-numeric: tabular-nums; }
 .creation-progress progress {
@@ -1180,10 +1362,18 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 .registry-notice p { margin: 0; }
 .registry-notice ul { margin: .25rem 0 0; padding-inline-start: 1.125rem; }
 .registry-notice li { overflow-wrap: anywhere; }
+.registry-actions { display: flex; align-items: center; gap: .5rem; margin-top: .375rem; }
+.registry-actions .form-error { margin: 0; }
 .create-name-row .form-error { margin: .375rem 0 0; font-size: .8125rem; }
 .create-path-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; margin-block: .375rem 1rem; }
 .create-path-editor input { width: 100%; }
 .create-review { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .5rem 1rem; font-size: .875rem; }
 .create-review dt { color: var(--muted); }
 .create-review dd { margin: 0; overflow-wrap: anywhere; }
+.create-folder-choices { display: grid; gap: .375rem; }
+.create-folder-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; align-items: start; cursor: pointer; }
+.create-folder-choice input { margin: .2rem 0 0; }
+.create-candidates { margin: 0; padding: 0; list-style: none; display: grid; gap: .5rem; }
+.create-candidate-core { margin-inline-start: .5rem; }
+.create-candidate-path { display: block; }
 </style>

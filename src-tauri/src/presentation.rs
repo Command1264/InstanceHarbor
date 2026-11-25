@@ -31,6 +31,8 @@ struct Preferences {
     console_title_overrides: BTreeMap<String, String>,
     #[serde(default, rename = "corePrefetch")]
     core_prefetch: bool,
+    // No longer used: the Manager owns the tray and closing the window ends the GUI.
+    // Kept so files from 1.0.0 still load and a rollback keeps the user's choice.
     // Omit the default so 1.0.0-rc2, which rejects unknown fields, can still read the file.
     #[serde(default = "default_close_to_tray", rename = "closeToTray", skip_serializing_if = "is_default_close_to_tray")]
     close_to_tray: bool,
@@ -119,10 +121,10 @@ pub(super) fn core_prefetch_enabled(root: &Path) -> Result<bool> {
     Ok(load_preferences(root)?.core_prefetch)
 }
 
-/// Accepts the workspace as configured; resolves it the same way `dispatch` does.
-pub(super) fn close_to_tray_enabled(workspace: &Path) -> Result<bool> {
-    let root = safe_directory(workspace)?;
-    Ok(load_preferences(&root)?.close_to_tray)
+/// Whether Manager-owned text such as the tray menu uses Traditional Chinese.
+#[cfg_attr(test, allow(dead_code))]
+pub(super) fn chinese_ui(root: &Path) -> bool {
+    chinese_interface(load_preferences(root).map(|preferences| preferences.language).unwrap_or_default())
 }
 
 fn load_preferences(root: &Path) -> Result<Preferences> {
@@ -177,7 +179,7 @@ pub(super) fn registry_records(root: &Path) -> Result<Vec<Instance>> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or("InvalidInstanceName")?;
-        if !token(name) {
+        if !instance_name(name) {
             return Err("InvalidInstanceName".into());
         }
         rows.push(instance(root, name)?);
@@ -251,7 +253,7 @@ fn validate_console_preferences(value: &Preferences) -> Result<()> {
         return Err("TooManyConsoleTitleOverrides".into());
     }
     for (name, template) in &value.console_title_overrides {
-        if !token(name) {
+        if !instance_name(name) {
             return Err("InvalidConsoleTitleOverride".into());
         }
         render_title(template, |_| None)?;
@@ -325,36 +327,86 @@ pub(super) fn console_appearance(root: &Path, name: &str, run: &str) -> Result<(
 
 pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
     let jar = core_artifact::jar(path, row);
-    let saved = row.core_profile.as_ref().filter(|profile| {
-        profile.family != "PAPER"
-            && content_revision::file_revision(&jar).is_ok_and(|hash| hash == profile.sha256)
-    });
-    let mut core = if let Some(profile) = saved {
-        let label = if profile.build.is_empty() {
-            format!("{} {}", profile.family, profile.minecraft)
-        } else {
-            format!("{} {} build {}", profile.family, profile.minecraft, profile.build)
-        };
-        json!({"state":"known","family":profile.family,"minecraft":profile.minecraft,
-            "build":profile.build,"label":label})
-    } else if no_redirect(&jar).is_ok() {
-        match core_identity::read_identity(&jar) {
-            Ok(Some(identity)) => {
-                json!({"state":"known","family":identity.family,"minecraft":identity.minecraft_version,
-                "build":identity.build,"label":format!("{} {} build {}",identity.family,identity.minecraft_version,identity.build),
-                "directoryRevision":identity.directory_revision})
-            }
-            Ok(None) => json!({"state":"unknown","reason":"此核心的本機版本格式尚未支援"}),
-            Err(_) => json!({"state":"unknown","reason":"無法讀取目前的本機核心"}),
-        }
+    let core = core_metadata(row, &jar, |sha| core_maintenance::trusted_profile(row, sha));
+    json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core,
+        "managementDiscovered":row.management_discovered})
+}
+
+fn known_core(family: &str, minecraft: &str, build: &str) -> Value {
+    let label = if build.is_empty() {
+        format!("{family} {minecraft}")
     } else {
-        json!({"state":"unknown","reason":"本機核心路徑尚未通過核對"})
+        format!("{family} {minecraft} build {build}")
     };
+    json!({"state":"known","family":family,"minecraft":minecraft,"build":build,"label":label})
+}
+
+/// The core the list and the details panel show. It agrees with core maintenance:
+/// the built-in table or a registered profile whose hash matches the current JAR
+/// (`trust`) is verified. Otherwise a Paper, Folia or Spigot JAR that states its
+/// own version, or an offline-accepted profile with the same hash, is shown and
+/// marked `offline`: only the JAR states that version. `reason` is a stable code
+/// that the interface translates.
+fn core_metadata(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<CoreProfile>) -> Value {
+    let mut core = current_core(row, jar, trust);
     // Accepted without the built-in table or the official catalog (#14 offline use).
     if row.core_profile.as_ref().is_some_and(|profile| profile.unverified) {
         core["unverified"] = json!(true);
     }
-    json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core})
+    core
+}
+
+fn current_core(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<CoreProfile>) -> Value {
+    if no_redirect(jar).is_err() {
+        return json!({"state":"unknown","reason":"CorePathUnverified"});
+    }
+    let identity = core_identity::read_identity(jar);
+    let sha = match &identity {
+        Ok(Some(identity)) => core_hash(jar, &identity.directory_revision),
+        _ => content_revision::file_revision(jar),
+    };
+    let Ok(sha) = sha else {
+        return json!({"state":"unknown","reason":"CoreUnreadable"});
+    };
+    if let Some(profile) = trust(sha.clone()) {
+        return known_core(&profile.family, &profile.minecraft, &profile.build);
+    }
+    let saved = row.core_profile.as_ref().filter(|profile| profile.sha256 == sha);
+    let mut core = match (identity, saved) {
+        (Ok(Some(identity)), _) => {
+            let mut core = known_core(identity.family, &identity.minecraft_version, &identity.build);
+            core["directoryRevision"] = json!(identity.directory_revision);
+            core
+        }
+        (_, Some(profile)) => known_core(&profile.family, &profile.minecraft, &profile.build),
+        (Ok(None), None) => return json!({"state":"unknown","reason":"CoreProfileUnverified"}),
+        (Err(_), None) => return json!({"state":"unknown","reason":"CoreUnreadable"}),
+    };
+    core["offline"] = json!(true);
+    core
+}
+
+/// The SHA-256 of a core whose ZIP directory was read. The list refreshes every
+/// few seconds and a core is 40 to 90 MB, so the hash is kept while the file
+/// length and directory stay the same. The directory records every entry's CRC,
+/// so a changed entry changes it.
+fn core_hash(jar: &Path, directory_revision: &str) -> Result<String> {
+    use std::{collections::HashMap, sync::Mutex};
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (u64, String, String)>>> = OnceLock::new();
+    let length = fs::metadata(jar).map_err(fail)?.len();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((saved_length, revision, sha)) = cache.lock().map_err(|_| "CoreHashCacheUnavailable")?.get(jar) {
+        if *saved_length == length && revision == directory_revision {
+            return Ok(sha.clone());
+        }
+    }
+    let sha = content_revision::file_revision(jar)?;
+    let mut cache = cache.lock().map_err(|_| "CoreHashCacheUnavailable")?;
+    if cache.len() >= 64 && !cache.contains_key(jar) {
+        cache.clear();
+    }
+    cache.insert(jar.to_path_buf(), (length, directory_revision.to_owned(), sha.clone()));
+    Ok(sha)
 }
 
 /// `nativeConsole` reports whether this installation can show a server console
@@ -366,6 +418,7 @@ pub(super) fn capabilities(_root: &Path) -> Value {
     let system = native_console::system_runtime().err();
     json!({"instanceSettings":true,"javaDiscovery":true,"javaSelection":true,"logs":true,
         "removeManagement":true,"adopt":true,"openLogFolder":true,
+        "deleteServer":true,"removedInstances":true,"openServerFolder":true,
         "coreMaintenance":true,"nativeConsole":bundled.is_none() || system.is_none(),
         "consoleRuntime":{"bundled":bundled.is_none(),"bundledReason":bundled,"system":system.is_none(),"systemReason":system},
         "worldSettings":true,"initialization":true,"scanPaths":true})
@@ -392,11 +445,12 @@ fn system_chinese(ui_language: u16) -> bool {
 /// Title of a console window run (tier 3). It states the consequence of closing it.
 pub(super) fn console_window_title(root: &Path, name: &str) -> String {
     let language = load_preferences(root).map(|preferences| preferences.language).unwrap_or_default();
-    if chinese_interface(language) {
+    let title = if chinese_interface(language) {
         format!("{name} - InstanceHarbor 伺服器後台（關閉此視窗會停止伺服器）")
     } else {
         format!("{name} - InstanceHarbor server console (closing this window stops the server)")
-    }
+    };
+    crate::desktop_channel::window_title(&title, crate::desktop_channel::workspace_of(root).as_deref())
 }
 
 /// Turns the VT output a pseudoconsole writes into `stdout.log` into plain
@@ -469,7 +523,7 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
     }
     let mut names = previous.pins.clone();
     for name in &value.pins {
-        if token(name) && !names.contains(name) && admitted(root, name)? && !instance(root, name)?.removed {
+        if instance_name(name) && !names.contains(name) && admitted(root, name)? && !instance(root, name)?.removed {
             names.push(name.clone());
         }
     }
@@ -512,8 +566,8 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
     Ok(json!({"preferences":value,"revision":content_revision::revision(&bytes)?}))
 }
 
-fn active_instance(root: &Path, name: &str) -> Result<Instance> {
-    if !token(name) || !admitted(root, name)? {
+pub(super) fn active_instance(root: &Path, name: &str) -> Result<Instance> {
+    if !instance_name(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
     let item = instance(root, name)?;
@@ -523,7 +577,7 @@ fn active_instance(root: &Path, name: &str) -> Result<Instance> {
     Ok(item)
 }
 
-fn stopped(root: &Path, item: &Instance) -> Result<()> {
+pub(super) fn stopped(root: &Path, item: &Instance) -> Result<()> {
     if status(root, item)?["state"] != "Stopped" {
         return Err("InstanceMustBeStopped".into());
     }
@@ -954,7 +1008,18 @@ fn open_log_folder(root: &Path, name: &str) -> Result<Value> {
     Ok(json!({"opened":true,"path":path_format::display(&folder)}))
 }
 
-fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
+/// Whether a management folder scan would register this instance again once its
+/// record is gone. A folder that no longer exists cannot be found by a scan.
+fn scanned_again(root: &Path, item: &Instance) -> Result<bool> {
+    let folder = scan_policy::registered_path(root, &item.name, item.directory.as_deref())?;
+    match fs::symlink_metadata(&folder) {
+        Ok(_) => scan_policy::load(root)?.0.manages_path(root, &folder),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(fail(error)),
+    }
+}
+
+pub(super) fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
     let mut item = active_instance(root, name)?;
     stopped(root, &item)?;
     let record = record_path(root, name);
@@ -964,7 +1029,7 @@ fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
             item.removed = true;
             save(&record, &item)?;
         }
-        "delete" if item.management_discovered => {
+        "delete" if item.management_discovered || scanned_again(root, &item)? => {
             // Keep only the opt-out identity. Otherwise the next scan would
             // immediately recreate the settings the user asked us to remove.
             item.removed = true;
@@ -985,7 +1050,7 @@ fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
 
 fn adopt(root: &Path, name: &str, request: &str, executable: &str) -> Result<Value> {
     let created_at = Some((clock() / 1_000_000) as u64);
-    if !token(name) || !admitted(root, name)? {
+    if !instance_name(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
     if !token(request) {
@@ -1546,30 +1611,21 @@ mod tests {
     }
 
     #[test]
-    fn close_to_tray_defaults_on_and_is_only_written_when_off() {
+    fn retired_close_to_tray_is_kept_for_rollback_and_only_written_when_off() {
         let fixture = std::env::temp_dir().join(format!("ih-tray-pref-{}-{}", std::process::id(), clock()));
         fs::create_dir(&fixture).unwrap();
         let root = fs::canonicalize(&fixture).unwrap();
-        assert!(close_to_tray_enabled(&root).unwrap());
+        let stored = |root: &Path| load_preferences(root).unwrap().close_to_tray;
+        assert!(stored(&root));
 
         // The default stays out of the file so rc2 can still read it after a rollback.
         save_preferences(&root, r#"{"theme":"dark","pins":[]}"#, None).unwrap();
-        let saved = fs::read_to_string(preferences_path(&root)).unwrap();
-        assert!(!saved.contains("closeToTray"));
-        assert!(close_to_tray_enabled(&root).unwrap());
-
-        save_preferences(&root, r#"{"theme":"dark","pins":[],"closeToTray":false}"#, None).unwrap();
-        assert!(!close_to_tray_enabled(&root).unwrap());
-        // The GUI passes IH_WORKSPACE as given, without the extended-length prefix.
-        assert!(!fixture.to_string_lossy().starts_with(r"\\?\"));
-        assert!(!close_to_tray_enabled(&fixture).unwrap());
-        // Saves from other settings tabs omit the field and keep the stored choice.
-        save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
-        assert!(!close_to_tray_enabled(&root).unwrap());
-
-        save_preferences(&root, r#"{"theme":"light","pins":[],"closeToTray":true}"#, None).unwrap();
-        assert!(close_to_tray_enabled(&root).unwrap());
         assert!(!fs::read_to_string(preferences_path(&root)).unwrap().contains("closeToTray"));
+
+        // A 1.0.0 file that turned it off still loads, and later saves keep that choice.
+        save_preferences(&root, r#"{"theme":"dark","pins":[],"closeToTray":false}"#, None).unwrap();
+        save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
+        assert!(!stored(&root));
         fs::remove_file(preferences_path(&root)).unwrap();
         fs::remove_dir(&fixture).unwrap();
     }
@@ -1758,5 +1814,138 @@ mod tests {
         assert_eq!(tail.len(), LOG_LIMIT as usize);
         assert!(tail.ends_with(&"y".repeat(32)));
         assert_eq!(tail.as_bytes()[LOG_LIMIT as usize - 33], b'x');
+    }
+
+    fn core_fixture(bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let folder = std::env::temp_dir().join(format!("ih-core-meta-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&folder).unwrap();
+        let folder = fs::canonicalize(&folder).unwrap();
+        let jar = folder.join("server.jar");
+        fs::write(&jar, bytes).unwrap();
+        (folder, jar)
+    }
+
+    fn core_row(profile: Option<CoreProfile>) -> Instance {
+        Instance { core_file: None, name: "core-meta".into(), java: PathBuf::new(), port: 25565,
+            velocity_listen_address: None, removed: false, directory: None, jvm: None, timing: None,
+            auto_restart: None, core_profile: profile, core_local_create: false, management_discovered: false }
+    }
+
+    fn core_profile(family: &str, minecraft: &str, build: &str, sha256: String) -> CoreProfile {
+        CoreProfile { family: family.into(), minecraft: minecraft.into(), build: build.into(), sha256,
+            unverified: false, java: None }
+    }
+
+    fn known(core: &Value) -> (&str, &str, &str) {
+        assert_eq!(core["state"], "known", "{core}");
+        (core["family"].as_str().unwrap(), core["minecraft"].as_str().unwrap(), core["build"].as_str().unwrap())
+    }
+
+    // #48: the list must agree with core maintenance, which trusts the
+    // built-in table first and then a registered profile with the same hash.
+    #[test]
+    fn list_core_uses_the_same_trusted_profile_as_core_maintenance() {
+        let (folder, jar) = core_fixture(b"legacy paperclip without a paper-api library");
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let pinned = core_profile("SPIGOT", "1.14", "c8d4cef", sha.clone());
+        let imported = core_metadata(&core_row(None), &jar, |hash| (hash == sha).then(|| pinned.clone()));
+        assert_eq!(known(&imported), ("SPIGOT", "1.14", "c8d4cef"));
+        // Old Paper (1.14, 1.14.4) has no paper-api library to read offline.
+        let old_paper = core_row(Some(core_profile("PAPER", "1.14.4", "245", sha.clone())));
+        let saved = core_metadata(&old_paper, &jar, |hash| core_maintenance::trusted_profile(&old_paper, hash));
+        assert_eq!(known(&saved), ("PAPER", "1.14.4", "245"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_does_not_reuse_a_profile_after_the_jar_changes() {
+        let (folder, jar) = core_fixture(b"replaced core");
+        let row = core_row(Some(core_profile("FOLIA", "26.1.2", "8", "0".repeat(64))));
+        let core = core_metadata(&row, &jar, |hash| core_maintenance::trusted_profile(&row, hash));
+        assert_eq!(core["state"], "unknown");
+        assert_eq!(core["reason"], "CoreProfileUnverified");
+        fs::remove_file(&jar).unwrap();
+        assert_eq!(core_metadata(&row, &jar, |_| None)["reason"], "CorePathUnverified");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_prefers_a_registered_non_paper_profile_over_paperclip_metadata() {
+        let paper_api = "META-INF/libraries/io/papermc/paper/paper-api/26.1.2.build.74-stable/paper-api-26.1.2.build.74-stable.jar";
+        let (folder, jar) = core_fixture(&core_identity::zip(&[paper_api]));
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let unregistered = core_metadata(&core_row(None), &jar, |_| None);
+        assert_eq!(known(&unregistered), ("Paper", "26.1.2", "74"));
+        let folia = core_row(Some(core_profile("FOLIA", "26.1.2", "8", sha)));
+        let core = core_metadata(&folia, &jar, |hash| core_maintenance::trusted_profile(&folia, hash));
+        assert_eq!(known(&core), ("FOLIA", "26.1.2", "8"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_keeps_an_offline_accepted_profile_marked_unverified() {
+        let (folder, jar) = core_fixture(b"offline accepted core");
+        let mut profile = core_profile("PAPER", "1.21.4", "232", content_revision::file_revision(&jar).unwrap());
+        profile.unverified = true;
+        let row = core_row(Some(profile));
+        let core = core_metadata(&row, &jar, |hash| core_maintenance::trusted_profile(&row, hash));
+        assert_eq!(known(&core), ("PAPER", "1.21.4", "232"));
+        assert_eq!(core["unverified"], true);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    const FOLIA_API: &str = "META-INF/libraries/dev/folia/folia-api/26.3.build.28-stable/folia-api-26.3.build.28-stable.jar";
+
+    // #48: a Folia or Spigot imported without a registration is identified
+    // from the JAR alone, and the list says the version was read offline.
+    #[test]
+    fn list_core_reads_unregistered_folia_and_spigot_offline() {
+        let (folder, jar) = core_fixture(&core_identity::zip(&[FOLIA_API]));
+        let core = core_metadata(&core_row(None), &jar, |_| None);
+        assert_eq!(known(&core), ("Folia", "26.3", "28"));
+        assert_eq!(core["offline"], true);
+        fs::write(&jar, core_identity::zip_with(&[(
+            "META-INF/versions.list",
+            b"0000000000000000000000000000000000000000000000000000000000000000\tspigot-26.2-R0.1-SNAPSHOT.jar\n",
+        )])).unwrap();
+        let core = core_metadata(&core_row(None), &jar, |_| None);
+        assert_eq!(known(&core), ("Spigot", "26.2", ""));
+        assert_eq!(core["offline"], true);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    // An unregistered Spigot 1.12.2 is in the built-in table: core maintenance
+    // shows it verified with its build, so the list must too.
+    #[test]
+    fn list_core_checks_the_built_in_table_for_an_unregistered_core() {
+        let (folder, jar) = core_fixture(&core_identity::zip_with(&[(
+            "META-INF/maven/org.spigotmc/spigot/pom.properties",
+            b"version=1.12.2-R0.1-SNAPSHOT\n",
+        )]));
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let pinned = core_profile("SPIGOT", "1.12.2", "79a30d7", sha.clone());
+        let core = core_metadata(&core_row(None), &jar, |hash| (hash == sha).then(|| pinned.clone()));
+        assert_eq!(known(&core), ("SPIGOT", "1.12.2", "79a30d7"));
+        assert!(core.get("offline").is_none(), "{core}");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_marks_only_unchecked_versions_offline() {
+        let (folder, jar) = core_fixture(&core_identity::zip(&[FOLIA_API]));
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let verified = core_row(Some(core_profile("FOLIA", "26.3", "28", sha.clone())));
+        let core = core_metadata(&verified, &jar, |hash| core_maintenance::trusted_profile(&verified, hash));
+        // The verified profile, exactly as core maintenance shows it.
+        assert_eq!(known(&core), ("FOLIA", "26.3", "28"));
+        assert!(core.get("offline").is_none(), "{core}");
+        // An offline import records no build; the JAR still names it.
+        let mut accepted = core_profile("FOLIA", "26.3", "", sha);
+        accepted.unverified = true;
+        let accepted = core_row(Some(accepted));
+        let core = core_metadata(&accepted, &jar, |hash| core_maintenance::trusted_profile(&accepted, hash));
+        assert_eq!(known(&core), ("Folia", "26.3", "28"));
+        assert_eq!((&core["offline"], &core["unverified"]), (&json!(true), &json!(true)));
+        fs::remove_dir_all(&folder).unwrap();
     }
 }

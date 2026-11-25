@@ -20,7 +20,7 @@ struct Target {
 
 impl Target {
     fn valid(&self) -> bool {
-        token(&self.name)
+        instance_name(&self.name)
             && digest(&self.current_sha256)
             && digest(&self.candidate_sha256)
             && self.current_sha256 != self.candidate_sha256

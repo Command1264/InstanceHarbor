@@ -129,7 +129,7 @@ impl Baseline {
 }
 
 fn baseline_path(root: &Path, name: &str) -> Result<PathBuf> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidYamlPreflightTarget".into());
     }
     Ok(child_directory(root, "history")?.join(format!("yaml-preflight-{name}.json")))

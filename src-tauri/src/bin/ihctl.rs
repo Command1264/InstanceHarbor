@@ -34,8 +34,19 @@ fn main() {
         }
     };
     let mut arguments: Vec<_> = std::env::args().skip(1).collect();
+    // Setup runs this copy from its temporary folder to talk to the installed version.
+    if arguments.first().is_some_and(|verb| verb == "setup-probe") {
+        match instanceharbor::setup_probe::run(&arguments[1..]) {
+            Ok(word) => print!("{word}"),
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if arguments.as_slice() == ["--version"] {
-        println!("{} CLI {}", instanceharbor::desktop_channel::TITLE, env!("CARGO_PKG_VERSION"));
+        println!("{}", instanceharbor::about::cli_version(instanceharbor::desktop_channel::TITLE));
         return;
     }
     let plain_list = arguments.len() == 2 && arguments[1] == "list";
@@ -54,7 +65,7 @@ fn main() {
             if plain_list {
                 if let Some(issues) = result["issues"].as_array() {
                     for issue in issues {
-                        eprintln!("Instance registration unavailable: {issue}");
+                        eprintln!("Instance registration or state unavailable: {issue}");
                     }
                 }
                 println!("{}", result["rows"]);

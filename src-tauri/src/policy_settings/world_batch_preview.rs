@@ -115,7 +115,7 @@ pub(super) fn preview(root: &Path, request: &str) -> Result<Value> {
         || names.len() > 32
         || names
             .iter()
-            .any(|name| !token(name) || !unique.insert(name))
+            .any(|name| !instance_name(name) || !unique.insert(name))
     {
         return Err("InvalidWorldPreviewTargets".into());
     }

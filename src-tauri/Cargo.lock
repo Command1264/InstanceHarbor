@@ -1507,7 +1507,7 @@ dependencies = [
 
 [[package]]
 name = "instanceharbor"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -1516,6 +1516,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "toml 1.1.5+spec-1.1.0",
+ "tray-icon",
 ]
 
 [[package]]

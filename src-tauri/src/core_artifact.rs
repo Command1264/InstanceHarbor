@@ -106,15 +106,19 @@ fn main_class_java(file: &mut File, manifest: &str) -> Option<u16> {
 /// - Spigot bundler JARs: `META-INF/versions.list`.
 /// - Older Spigot or CraftBukkit: Maven `pom.properties`.
 pub(super) fn claim(jar: &Path) -> Option<Claim> {
-    let mut file = File::open(jar).ok()?;
-    let manifest = text(&mut file, b"META-INF/MANIFEST.MF").unwrap_or_default();
-    let mojang = text(&mut file, b"version.json").and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+    claim_file(&mut File::open(jar).ok()?)
+}
+
+/// `claim` for a core that the caller already holds open.
+pub(super) fn claim_file(file: &mut File) -> Option<Claim> {
+    let manifest = text(file, b"META-INF/MANIFEST.MF").unwrap_or_default();
+    let mojang = text(file, b"version.json").and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
     let stated_java = mojang
         .as_ref()
         .and_then(|value| value["java_version"].as_u64())
         .and_then(|value| u16::try_from(value).ok());
-    let java = stated_java.or_else(|| main_class_java(&mut file, &manifest));
-    if let Some(list) = text(&mut file, b"META-INF/patches.list") {
+    let java = stated_java.or_else(|| main_class_java(file, &manifest));
+    if let Some(list) = text(file, b"META-INF/patches.list") {
         let output = list.lines().find(|line| line.starts_with("versions\t"))?.rsplit('\t').next()?;
         let (version, file_name) = output.split_once('/')?;
         let family = family_name(file_name.strip_suffix(&format!("-{version}.jar"))?)?;
@@ -126,9 +130,11 @@ pub(super) fn claim(jar: &Path) -> Option<Claim> {
         let version = token(version.split_whitespace().next()?)?;
         return Some(Claim { family: "VELOCITY".into(), minecraft: version, java });
     }
-    if let Some(list) = text(&mut file, b"META-INF/versions.list") {
-        // For example `<sha256>\tspigot-26.2-R0.1-SNAPSHOT.jar`.
-        let name = list.lines().next()?.rsplit('\t').next()?.strip_suffix(".jar")?;
+    if let Some(list) = text(file, b"META-INF/versions.list") {
+        // For example `<sha256>\tspigot-26.2-R0.1-SNAPSHOT.jar`, or as BuildTools
+        // writes it, `<sha256> *spigot-26.2-R0.1-SNAPSHOT.jar`.
+        let last = list.lines().next()?.rsplit(['\t', ' ']).next()?;
+        let name = last.strip_prefix('*').unwrap_or(last).strip_suffix(".jar")?;
         let mut parts = name.split('-');
         let family = family_name(parts.next()?)?;
         let minecraft = token(parts.next()?)?;
@@ -138,7 +144,7 @@ pub(super) fn claim(jar: &Path) -> Option<Claim> {
         (&b"META-INF/maven/org.spigotmc/spigot/pom.properties"[..], "SPIGOT"),
         (&b"META-INF/maven/org.bukkit/craftbukkit/pom.properties"[..], "CRAFTBUKKIT"),
     ] {
-        if let Some(properties) = text(&mut file, pom) {
+        if let Some(properties) = text(file, pom) {
             let version = properties.lines().find_map(|line| line.strip_prefix("version="))?.trim();
             // `1.8.8-R0.1-SNAPSHOT` is Minecraft 1.8.8.
             let minecraft = token(version.split('-').next()?)?;
@@ -500,6 +506,13 @@ mod tests {
             ("META-INF/versions.list", b"0c45\tspigot-26.2-R0.1-SNAPSHOT.jar\n"),
         ]);
         assert_eq!(claim(&dir.join("spigot-bundler.jar")), claimed("SPIGOT", "26.2", Some(21)));
+        // BuildTools writes the list like `sha256sum`: `<hash> *<file>` with CRLF (#48).
+        jar_with(&dir.join("spigot-buildtools.jar"), &[
+            ("META-INF/MANIFEST.MF", b"Main-Class: org.bukkit.craftbukkit.bootstrap.Main\r\n"),
+            ("org/bukkit/craftbukkit/bootstrap/Main.class", &main),
+            ("META-INF/versions.list", b"0c45 *spigot-1.21.11-R0.2-SNAPSHOT.jar\r\n"),
+        ]);
+        assert_eq!(claim(&dir.join("spigot-buildtools.jar")), claimed("SPIGOT", "1.21.11", Some(21)));
 
         // Old Spigot keeps its Maven coordinates.
         let main = class(8);

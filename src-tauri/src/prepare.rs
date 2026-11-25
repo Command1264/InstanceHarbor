@@ -39,6 +39,10 @@ pub(super) struct Request {
     world_type: WorldType,
     #[serde(default)]
     pub(super) replace: bool,
+    /// Absent: Human instances grant the configured test administrators and
+    /// Agent instances do not.
+    #[serde(default)]
+    test_administrators: Option<bool>,
 }
 
 impl Request {
@@ -157,7 +161,7 @@ impl Request {
         Ok(())
     }
 
-    pub(super) fn verify(&self, profile: &CoreProfile) -> Result<Assets> {
+    pub(super) fn verify(&self, root: &Path, profile: &CoreProfile) -> Result<Assets> {
         self.validate_human(profile)?;
         let plugin = match (
             &self.plugin_jar,
@@ -176,7 +180,12 @@ impl Request {
             _ => return Err("PreparePluginRequired".into()),
         };
         let permission = test_permissions::preflight(&local_jar(&self.permission_jar)?, profile)?;
-        Ok(Assets { plugin, permission })
+        let administrators = if self.grants_test_administrators() {
+            Some(test_admins::load(root)?.0).filter(test_admins::Settings::enabled)
+        } else {
+            None
+        };
+        Ok(Assets { plugin, permission, administrators })
     }
 
     pub(super) fn stage(
@@ -187,6 +196,10 @@ impl Request {
         assets: &Assets,
     ) -> Result<()> {
         test_permissions::stage(stage, &assets.permission)?;
+        if let Some(administrators) = &assets.administrators {
+            // Every permission JAR this path accepts is a Bukkit build.
+            test_admins::seed_prepared(stage, administrators)?;
+        }
         if let Some((source, expected)) = &assets.plugin {
             let path = stage.join("plugins").join("project-plugin.jar");
             core_maintenance::copy_verified(source, &path, expected)?;
@@ -211,15 +224,16 @@ impl Request {
             settings.push_str(&format!("generator-settings={FLAT_GENERATOR}\n"));
         }
         fs::write(properties, settings).map_err(fail)?;
-        save(
-            &stage.join("prepare.json"),
-            &json!({
+        let mut manifest = json!({
                 "schemaVersion":1, "audience": self.audience, "project": self.project,
                 "instance":self.instance, "managedId":name, "port": self.port, "core":profile,
                 "worldType": self.world_type, "permissionSha256": assets.permission.sha256(),
                 "pluginSha256": assets.plugin.as_ref().map(|(_,hash)| hash)
-            }),
-        )
+        });
+        if let Some(administrators) = &assets.administrators {
+            manifest["testAdministrators"] = json!(administrators.count());
+        }
+        save(&stage.join("prepare.json"), &manifest)
     }
 
     pub(super) fn hold_parent(&self, root: &Path) -> Result<Vec<File>> {
@@ -254,11 +268,16 @@ impl Request {
     pub(super) fn human(&self) -> bool {
         self.audience == Audience::Human
     }
+
+    fn grants_test_administrators(&self) -> bool {
+        self.test_administrators.unwrap_or(self.human())
+    }
 }
 
 pub(super) struct Assets {
     plugin: Option<(PathBuf, String)>,
     permission: test_permissions::PinnedArtifact,
+    administrators: Option<test_admins::Settings>,
 }
 
 pub(super) fn local_jar(raw: &str) -> Result<PathBuf> {
@@ -308,5 +327,18 @@ mod tests {
         for unsafe_name in ["../stale", "con.jar", "name.", "other/child"] {
             assert!(Request::parse(&shape(unsafe_name, 20197).to_string()).is_err());
         }
+    }
+
+    #[test]
+    fn human_requests_grant_test_administrators_unless_declined_and_agents_opt_in() {
+        let mut request = shape("example-paper-26.3", 20197);
+        assert!(Request::parse(&request.to_string()).unwrap().grants_test_administrators());
+        request["testAdministrators"] = json!(false);
+        assert!(!Request::parse(&request.to_string()).unwrap().grants_test_administrators());
+        let agent = json!({"audience":"Agent","project":"Lobby","instance":"paper-agent","profile":"paper-26.3"});
+        assert!(!Request::parse(&agent.to_string()).unwrap().grants_test_administrators());
+        let mut opted = agent;
+        opted["testAdministrators"] = json!(true);
+        assert!(Request::parse(&opted.to_string()).unwrap().grants_test_administrators());
     }
 }

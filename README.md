@@ -16,7 +16,7 @@ InstanceHarbor is a Windows desktop app and command-line tool for running Minecr
 - **Settings and game rules.** Edit `server.properties` and game rules. Changes apply live through the console, or are written into the world after a normal stop.
 - **Core updates.** Check for newer builds of the same version line, optionally download them in advance, and update one server or many. Each update keeps a backup you can restore.
 - **Verified cores, offline friendly.** Cores are checked by SHA-256 against the official PaperMC list. Without a network connection, or for cores PaperMC does not publish, the server still works and InstanceHarbor shows a warning.
-- **Desktop integration.** A system tray icon, and an English or Traditional Chinese interface that follows your Windows language.
+- **Desktop integration.** A notification-area icon that shows while the background Manager runs and can quit it, and an English or Traditional Chinese interface that follows your Windows language.
 
 ## Requirements
 
@@ -55,6 +55,8 @@ $workspace = "$env:LOCALAPPDATA\InstanceHarbor\workspaces\default"
 & $ihctl $workspace status lobby
 ```
 
+`& $ihctl --version` prints the version and the Git commit of the build, for example `InstanceHarbor CLI 1.0.0 (33dfd35)`. The same values, with links to this repository, are under **Application settings** → **About**.
+
 See the [development guide](docs/development.md) for the full set of commands.
 
 ## Build from source
@@ -85,7 +87,7 @@ Release builds need the pinned console runtime and license notices; see [Windows
 The full documentation is in Traditional Chinese:
 
 - [Development guide](docs/development.md): features in detail, build, test, isolated acceptance, storage locations and rollback.
-- [1.0.1 release notes](docs/windows-1.0.1.md). The earlier [1.0.0 release notes](docs/windows-1.0.0.md) and [1.0.0-rc2 pre-release notes](docs/windows-rc2.md) remain for reference.
+- [1.1.0 release notes](docs/windows-1.1.0.md). The earlier [1.0.1 release notes](docs/windows-1.0.1.md), [1.0.0 release notes](docs/windows-1.0.0.md) and [1.0.0-rc2 pre-release notes](docs/windows-rc2.md) remain for reference.
 - [Windows distribution and licenses](docs/windows-distribution-licenses.md) (English): how to build a distribution, plus the third-party notices and corresponding MPL sources.
 
 Report problems and ideas in [GitHub Issues](https://github.com/Command1264/InstanceHarbor/issues).

@@ -3,6 +3,7 @@ import { tr, type LanguagePreference, type MessageId, type TimeFormat } from './
 import type { SelectionColorPreference } from './theme'
 import type { ConsoleChoice } from './console-tier.ts'
 import { javaStartErrorId } from './java-start-error.ts'
+import type { RegistryIssue, StateIssue } from './registry-issues.ts'
 export { consoleFallbackReason, consoleSummary, type ConsoleChoice, type ConsolePlan } from './console-tier.ts'
 
 export interface Instance {
@@ -19,13 +20,14 @@ export interface Instance {
   autoRestartStatus?: AutoRestartStatus | null
   stopPhase?: string
   stopToken: string | null
+  stateIssue?: StateIssue
   run?: { id: string; java: { pid: number }; host: { pid: number } }
 }
-export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean }
-export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity }
-export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean; closeToTray?: boolean }
+export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean; offline?: boolean }
+export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity; managementDiscovered?: boolean }
+export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }
-export interface RegistryIssue { file: string; reason: 'FileInUse' | 'AccessDenied' | 'InvalidRecord' | 'Unconfirmed' | 'ObservationUnconfirmed'; osError: number | null }
+export type { RegistryIssue } from './registry-issues.ts'
 export interface InstanceSnapshot extends Omit<Presentation, 'preferences'> { rows: Instance[]; issues: RegistryIssue[] }
 export interface Presentation {
   preferences: Preferences
@@ -59,6 +61,7 @@ export function canCancelCoreBatchItem(item: CoreBatch['items'][number]): boolea
 export function coreBatchJob(batch: CoreBatch): Job {
   return {...batch, instance: '', items: batch.items.map(item=>({...item,runId:null,canCancel:canCancelCoreBatchItem(item)}))}
 }
+export interface RemovedInstance { name: string; port: number; path: string | null; folderPresent: boolean; java: string | null; managementDiscovered: boolean }
 export interface JavaCandidate { path: string; version: string | null; valid: boolean; source: string; architecture?: string | null; vendor?: string | null }
 export interface Jvm { minMib: number | null; maxMib: number | null; gc: 'g1' | 'parallel' | 'serial' | null; advanced?: string[] }
 export interface LifecycleTiming { stopSeconds: number | null; readySeconds: number | null; restartDelayMs: number | null }
@@ -110,7 +113,7 @@ export function manage<T>(arguments_: string[],origin:'manual'|'background'='man
 }
 const stateMessageIds: Record<string, MessageId> = {
   Stopped: 'instance.state.stopped', Listening: 'instance.state.listening', Starting: 'instance.state.starting', Stopping: 'instance.state.stopping',
-  PortOccupied: 'instance.state.portOccupied', RunUnconfirmed: 'instance.state.runUnconfirmed',
+  PortOccupied: 'instance.state.portOccupied', RunUnconfirmed: 'instance.state.runUnconfirmed', StateUnconfirmed: 'instance.state.stateUnconfirmed',
 }
 export function stateName(state: string) { return Object.hasOwn(stateMessageIds, state) ? tr(stateMessageIds[state]) : state }
 const actionMessageIds: Record<string, MessageId> = {
@@ -130,6 +133,7 @@ const actionMessageIds: Record<string, MessageId> = {
   'core-restore': 'manager.action.coreRestore',
   'core-reconcile': 'manager.action.coreReconcile',
   'remove-management': 'manager.action.removeManagement',
+  'delete-server': 'manager.action.deleteServer',
   adopt: 'manager.action.adopt',
 }
 export function actionName(action: string) { return Object.hasOwn(actionMessageIds, action) ? tr(actionMessageIds[action]) : action }
@@ -141,6 +145,17 @@ export function canRestart(row?: Instance) { return !row?.outsideManagement && (
 export function rawError(error: unknown) { return error instanceof Error ? error.message : String(error) }
 export function errorText(error: unknown) {
   const raw = rawError(error)
+  if (raw.includes('TestAdministratorNotFound')) return tr('manager.error.testAdminNotFound')
+  if (raw.includes('TestAdministratorLookupRateLimited')) return tr('manager.error.testAdminLookupRateLimited')
+  if (raw.includes('TestAdministratorLookupFailed')) return tr('manager.error.testAdminLookupFailed')
+  if (raw.includes('InvalidTestAdministratorName')) return tr('manager.error.testAdminInvalidName')
+  if (raw.includes('InvalidTestAdministratorUuid')) return tr('manager.error.testAdminInvalidUuid')
+  if (raw.includes('DuplicateTestAdministrator')) return tr('manager.error.testAdminDuplicate')
+  if (raw.includes('TooManyTestAdministratorPermissions')) return tr('manager.error.testAdminTooManyPermissions')
+  if (raw.includes('TooManyTestAdministrators')) return tr('manager.error.testAdminTooMany')
+  if (raw.includes('InvalidTestAdministratorGroup')) return tr('manager.error.testAdminInvalidGroup')
+  if (raw.includes('InvalidTestAdministratorPermission')) return tr('manager.error.testAdminInvalidPermission')
+  if (raw.includes('EmptyTestAdministratorPermissions')) return tr('manager.error.testAdminEmptyPermissions')
   if (raw.includes('RegistryConflictUnconfirmed')) return tr('manager.error.registryConflictUnconfirmed')
   if (raw.includes('InstanceSnapshotChanged')) return tr('manager.error.instanceSnapshotChanged')
   if (raw.startsWith('FileAccess[')) {
@@ -161,6 +176,18 @@ export function errorText(error: unknown) {
   if (raw.includes('InvalidBatchTargets')) return tr('manager.error.invalidBatchTargets')
   if (raw.includes('ManagerBusy')) return tr('manager.error.managerBusy')
   if (raw.includes('StopTimeout') || raw.includes('HostUnavailable')) return tr('manager.error.stopTimeout')
+  if (raw.includes('DeleteServerRecycledButRegistered')) return tr('manager.error.deleteServerRecycledButRegistered')
+  if (raw.includes('DeleteServerRecycledButPathListed')) return tr('manager.error.deleteServerRecycledButPathListed')
+  if (raw.includes('DeleteServerNameMismatch')) return tr('manager.error.deleteServerNameMismatch')
+  if (raw.includes('DeleteServerProtectedFolder')) return tr('manager.error.deleteServerProtectedFolder')
+  if (raw.includes('DeleteServerNetworkPath')) return tr('manager.error.deleteServerNetworkPath')
+  if (raw.includes('DeleteServerContainsLink')) return tr('manager.error.deleteServerContainsLink')
+  if (raw.includes('DeleteServerContainsOtherInstance')) return tr('manager.error.deleteServerContainsOtherInstance')
+  if (raw.includes('DeleteServerOtherInstanceUnconfirmed')) return tr('manager.error.deleteServerOtherInstanceUnconfirmed')
+  if (raw.includes('DeleteServerCancelled')) return tr('manager.error.deleteServerCancelled')
+  if (raw.includes('DeleteServerIncomplete')) return tr('manager.error.deleteServerIncomplete')
+  if (raw.includes('DeleteServerRecycleFailed')) return tr('manager.error.deleteServerRecycleFailed')
+  if (raw.includes('ServerPortRegistryMismatch')) return tr('manager.error.serverPortRegistryMismatch')
   if (raw.includes('InstanceMustBeStopped')) return tr('manager.error.instanceMustBeStopped')
   if (raw.includes('WorldGenerationOnly')) return tr('manager.error.worldGenerationOnly')
   if (raw.includes('WorldSettingsReadbackMismatch')) return tr('manager.error.worldSettingsReadbackMismatch')

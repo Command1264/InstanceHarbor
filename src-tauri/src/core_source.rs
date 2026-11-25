@@ -144,11 +144,28 @@ fn system_curl() -> Result<PathBuf> {
 }
 
 fn fetch_json(url: &str, user_agent: &str) -> Result<Value> {
-    let mut child = Command::new(system_curl()?)
-        // --disable has to be first to prevent loading a user's curl config.
+    let (code, body) = fetch_status(url, user_agent, true)?;
+    if code != 200 {
+        return Err("CoreSourceHttpError".into());
+    }
+    serde_json::from_slice(&body).map_err(|_| "CoreSourceInvalidJson".into())
+}
+
+/// One public JSON lookup that reports the HTTP status instead of failing on
+/// it, so the caller can tell "not found" from "rate limited". No retries.
+pub(super) fn fetch_profile(url: &str) -> Result<(u16, Vec<u8>)> {
+    fetch_status(url, &configured_paper_user_agent()?, false)
+}
+
+fn fetch_status(url: &str, user_agent: &str, fail_on_http: bool) -> Result<(u16, Vec<u8>)> {
+    let mut command = Command::new(system_curl()?);
+    // --disable has to be first to prevent loading a user's curl config.
+    command.arg("--disable");
+    if fail_on_http {
+        command.arg("--fail");
+    }
+    let mut child = command
         .args([
-            "--disable",
-            "--fail",
             "--silent",
             "--globoff",
             "--proto",
@@ -205,8 +222,13 @@ fn fetch_json(url: &str, user_agent: &str) -> Result<Value> {
         }
         .into());
     }
-    let body = body.strip_suffix(b"\n200").ok_or("CoreSourceHttpError")?;
-    serde_json::from_slice(body).map_err(|_| "CoreSourceInvalidJson".into())
+    let split = body.iter().rposition(|&byte| byte == b'\n').ok_or("CoreSourceHttpError")?;
+    let code = std::str::from_utf8(&body[split + 1..])
+        .ok()
+        .and_then(|text| text.parse::<u16>().ok())
+        .ok_or("CoreSourceHttpError")?;
+    body.truncate(split);
+    Ok((code, body))
 }
 
 fn sha256(text: &str) -> bool {
@@ -641,7 +663,7 @@ fn check_with_agent(
     names: &[String],
     paper_agent: std::result::Result<&str, &str>,
 ) -> Result<Value> {
-    if names.is_empty() || names.len() > MAX_TARGETS || names.iter().any(|name| !token(name)) {
+    if names.is_empty() || names.len() > MAX_TARGETS || names.iter().any(|name| !instance_name(name)) {
         return Err("InvalidCoreCheckTargets".into());
     }
     let mut observed = Vec::with_capacity(names.len());
@@ -709,7 +731,7 @@ pub(super) fn install_latest(
     expected_current: &str,
     expected_candidate: &str,
 ) -> Result<Value> {
-    if !token(name) || !token(request) {
+    if !instance_name(name) || !token(request) {
         return Err("InvalidCoreMaintenanceRequest".into());
     }
     let registration = registration_revision(root, name)?;
@@ -725,7 +747,7 @@ pub(super) fn install_latest_guarded(
     registration: &str,
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
-    if !token(name) || !token(request) {
+    if !instance_name(name) || !token(request) {
         return Err("InvalidCoreMaintenanceRequest".into());
     }
     let store = core_prefetch::Store::enabled(root)?;
@@ -822,6 +844,15 @@ pub(super) fn install_latest_guarded(
 pub(super) fn download_prefetch(url: &str, path: &Path, expected: &str) -> Result<()> {
     if !sha256(expected) || !candidate_url(url, expected) {
         return Err("CoreCandidateUnverified".into());
+    }
+    download_verified(url, &configured_paper_user_agent()?, path, expected)
+}
+
+/// Downloads a pinned plugin artifact. The caller supplies the policy's
+/// official URL; the file is accepted only with the exact SHA-256.
+pub(super) fn download_pinned(url: &str, path: &Path, expected: &str) -> Result<()> {
+    if !sha256(expected) || !url.starts_with("https://") {
+        return Err("TestPermissionArtifactUnverified".into());
     }
     download_verified(url, &configured_paper_user_agent()?, path, expected)
 }
@@ -1016,7 +1047,7 @@ pub(super) fn create_download(root: &Path, args: &[String]) -> Result<Value> {
     let [name, request, java_path, port, family, minecraft] = args else {
         return Err("InvalidProvisionArguments".into());
     };
-    if !token(name) || !token(request) || !port.parse::<u16>().is_ok_and(|port| port != 0) {
+    if !instance_name(name) || !token(request) || !port.parse::<u16>().is_ok_and(|port| port != 0) {
         return Err("InvalidProvisionArguments".into());
     }
     let (profile, mojang_url) = fixed_creation_target(family, minecraft)?;

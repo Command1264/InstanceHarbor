@@ -120,6 +120,65 @@ struct State {
     core_in_flight: bool,
     exiting: bool,
     fault: bool,
+    /// GUI processes that asked to close with the Manager (tray Quit).
+    gui: Vec<AttachedGui>,
+}
+
+/// A GUI process that asked to close with the Manager. A PID alone is not enough:
+/// Windows reuses PIDs, so Quit checks the creation time and executable again.
+struct AttachedGui {
+    process: Identity,
+    /// Canonical path of the accepted GUI executable it was running at attach.
+    image: PathBuf,
+}
+
+/// What a PID refers to now: the process identity and its canonical executable.
+type GuiProbe = (io::Result<Option<Identity>>, Option<PathBuf>);
+
+fn probe_gui(pid: u32) -> GuiProbe {
+    // The image is read first. A matching identity afterwards proves the recorded process
+    // was alive the whole time, so the image belonged to it and not to a PID reuse.
+    let image = process_image(pid).and_then(|image| image.canonicalize().ok());
+    (identity(pid), image)
+}
+
+/// The PIDs of attached GUIs that are still the recorded process running the recorded
+/// executable. Any other process at such a PID must never receive WM_CLOSE.
+fn verified_guis(recorded: &[AttachedGui], probe: impl Fn(u32) -> GuiProbe) -> Vec<u32> {
+    recorded
+        .iter()
+        .filter(|gui| {
+            let (current, image) = probe(gui.process.pid);
+            recorded_alive(&gui.process, current).unwrap_or(false) && image.as_ref() == Some(&gui.image)
+        })
+        .map(|gui| gui.process.pid)
+        .collect()
+}
+
+/// Tray Quit and `app-exit`: ends the Manager and closes the windows of attached GUIs
+/// that are still the same processes. `Ok(false)` while batch or core-update work would
+/// be cut off.
+#[cfg_attr(test, allow(dead_code))]
+fn exit_app(state: &Mutex<State>) -> Result<bool> {
+    exit_app_locked(state.lock().map_err(fail)?)
+}
+
+fn exit_app_locked(mut state: std::sync::MutexGuard<'_, State>) -> Result<bool> {
+    if active_work(&state) {
+        return Ok(false);
+    }
+    state.exiting = true;
+    let gui = std::mem::take(&mut state.gui);
+    drop(state);
+    manager_tray::close_gui_windows(&verified_guis(&gui, probe_gui));
+    Ok(true)
+}
+
+/// Work the Manager must finish before it may exit; servers themselves never count.
+fn active_work(state: &State) -> bool {
+    state.batches.iter().any(|batch| batch.items.iter().any(|item| item.phase.pending()))
+        || state.core_in_flight
+        || state.core_batches.as_ref().is_ok_and(core_batch::Journal::active)
 }
 
 fn now() -> u64 {
@@ -242,6 +301,7 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
                         | "console-open"
                         | "host-control"
                         | "host-recover"
+                        | "gui-attach"
                 ) =>
         {
             launch_detached(&executable()?, root, "manager-serve")?;
@@ -264,6 +324,35 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
         }
     }
     Err("ManagerUnavailable".into())
+}
+
+/// Servers the list shows as running: the same rule as the GUI's `canStop`.
+fn running_servers(snapshot: &Value) -> u32 {
+    snapshot["rows"].as_array().map_or(0, |rows| {
+        rows.iter()
+            .filter(|row| !row["run"].is_null() && matches!(row["state"].as_str(), Some("Listening" | "Starting")))
+            .count() as u32
+    })
+}
+
+/// What tray Quit asks about: every server not confirmed `Stopped` (starting, running,
+/// undecided or unreadable), and how many of those rely on the Manager's automatic restart.
+fn servers_not_stopped(snapshot: &Value, auto_restart: impl Fn(&str) -> bool) -> (u32, u32) {
+    let rows = snapshot["rows"].as_array().map(Vec::as_slice).unwrap_or_default();
+    rows.iter()
+        .filter(|row| row["state"].as_str() != Some("Stopped"))
+        .fold((0, 0), |(count, guarded), row| {
+            let restarts = row["name"].as_str().is_some_and(&auto_restart);
+            (count + 1, guarded + u32::from(restarts))
+        })
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn restarts_automatically(root: &Path, name: &str) -> bool {
+    instance_name(name)
+        && instance(root, name).is_ok_and(|config| {
+            !config.removed && config.auto_restart.as_ref().is_some_and(|policy| policy.valid() && policy.enabled())
+        })
 }
 
 fn batch_path(directory: &Path, id: &str) -> PathBuf {
@@ -294,7 +383,7 @@ fn load(directory: &Path) -> Result<Vec<Batch>> {
             || batch
                 .items
                 .iter()
-                .any(|item| !token(&item.target.name) || !token(&item.request))
+                .any(|item| !instance_name(&item.target.name) || !token(&item.request))
         {
             return Err("InvalidBatchJournal".into());
         }
@@ -371,7 +460,7 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
         let [name, expected, trailing @ ..] = args.as_slice() else {
             return Err("InvalidHostArguments".into());
         };
-        if !token(name) || !token(expected) {
+        if !instance_name(name) || !token(expected) {
             return Err("InvalidHostIdentity".into());
         }
         let stopping = matches!(trailing, [request] if verb == "host-control"
@@ -473,7 +562,7 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
             let mut names = HashSet::new();
             let mut items = Vec::new();
             for target in targets {
-                if !token(&target.name)
+                if !instance_name(&target.name)
                     || target.guard.registration.is_some()
                     || target.guard.previous_identity.is_some()
                     || !names.insert(target.name.clone())
@@ -553,17 +642,35 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
             Ok(view(batch))
         }
         ("manager-exit", []) => {
-            if state
-                .batches
-                .iter()
-                .any(|batch| batch.items.iter().any(|item| item.phase.pending()))
-                || state.core_in_flight
-                || state.core_batches.as_ref().is_ok_and(core_batch::Journal::active)
-            {
+            if active_work(&state) {
                 return Err("ManagerHasActiveWork".into());
             }
             state.exiting = true;
             Ok(json!({"exiting":true}))
+        }
+        // The same flow as tray Quit, without its question; Setup uses it to update.
+        ("app-exit", []) => {
+            if !exit_app_locked(state)? {
+                return Err("ManagerHasActiveWork".into());
+            }
+            Ok(json!({"exiting":true}))
+        }
+        ("gui-attach", [pid]) => {
+            let pid: u32 = pid.parse().map_err(|_| "InvalidManagerRequest")?;
+            let (current, image) = probe_gui(pid);
+            let exe = executable()?;
+            let image = [crate::desktop_channel::GUI_EXECUTABLE, "instanceharbor-acceptance.exe"]
+                .iter()
+                .filter_map(|name| exe.with_file_name(name).canonicalize().ok())
+                .find(|gui| image.as_ref() == Some(gui))
+                .ok_or("PeerMismatch")?;
+            let process = current.map_err(fail)?.ok_or("PeerMismatch")?;
+            let live = verified_guis(&state.gui, probe_gui);
+            state.gui.retain(|known| live.contains(&known.process.pid));
+            if !state.gui.iter().any(|known| known.process == process) {
+                state.gui.push(AttachedGui { process, image });
+            }
+            Ok(json!({"attached":true}))
         }
         _ => Err("InvalidManagerRequest".into()),
     }
@@ -1174,7 +1281,7 @@ fn process_auto_restart(root: &Path, state: &Mutex<State>) -> Result<()> {
     for item in fs::read_dir(root.join("registry")).map_err(fail)? {
         let path = item.map_err(fail)?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else { continue };
-        if path.extension().is_some_and(|ext| ext == "json") && token(name) {
+        if path.extension().is_some_and(|ext| ext == "json") && instance_name(name) {
             match auto_restart_one(root, name) {
                 Ok(true) => break,
                 Ok(false) => (),
@@ -1191,7 +1298,7 @@ fn recover_deferred_settings(root: &Path) -> Result<()> {
     for entry in fs::read_dir(root.join("registry")).map_err(fail)? {
         let path = entry.map_err(fail)?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else { continue };
-        if path.extension().is_none_or(|ext| ext != "json") || !token(name) {
+        if path.extension().is_none_or(|ext| ext != "json") || !instance_name(name) {
             continue;
         }
         let config = instance(root, name)?;
@@ -1283,6 +1390,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
         core_in_flight: false,
         exiting: false,
         fault: false,
+        gui: Vec::new(),
     }));
     let identity = identity(std::process::id())
         .map_err(fail)?
@@ -1324,6 +1432,37 @@ pub(super) fn run(root: &Path) -> Result<Value> {
     if ready_receive.recv_timeout(Duration::from_secs(3)).is_err() {
         return Err("ManagerPipeUnavailable".into());
     }
+    // Dropped on every return below, which removes the icon before the process ends.
+    #[cfg(not(test))]
+    let _tray = {
+        let (count_root, check_root) = (root.to_path_buf(), root.to_path_buf());
+        let (check_state, exit_state, exiting_state) = (Arc::clone(&state), Arc::clone(&state), Arc::clone(&state));
+        manager_tray::start(
+            root,
+            exe.with_file_name(crate::desktop_channel::GUI_EXECUTABLE),
+            manager_tray::Hooks {
+                running: Box::new(move || {
+                    let snapshot = instance_snapshot::read(&count_root, false)?;
+                    Ok(running_servers(&snapshot))
+                }),
+                check_exit: Box::new(move || {
+                    if active_work(&*check_state.lock().map_err(fail)?) {
+                        return Ok(manager_tray::ExitCheck::Busy);
+                    }
+                    // Unreadable states are treated as possibly running: ask instead of quitting.
+                    let Ok(snapshot) = instance_snapshot::read(&check_root, false) else {
+                        return Ok(manager_tray::ExitCheck::Confirm(None));
+                    };
+                    Ok(match servers_not_stopped(&snapshot, |name| restarts_automatically(&check_root, name)) {
+                        (0, _) => manager_tray::ExitCheck::Clear,
+                        servers => manager_tray::ExitCheck::Confirm(Some(servers)),
+                    })
+                }),
+                request_exit: Box::new(move || exit_app(&exit_state)),
+                exiting: Box::new(move || exiting_state.lock().map_or(true, |state| state.exiting)),
+            },
+        )
+    };
     let prefetch_root = root.to_path_buf();
     thread::spawn(move || core_prefetch::supervise(&prefetch_root));
     let management_root = root.to_path_buf();
@@ -1451,5 +1590,77 @@ mod start_rejection_tests {
         // An empty path means the instance inherits Java; that is checked at dispatch.
         assert_eq!(queued_start_problem(std::path::Path::new("")), None);
         std::fs::remove_dir_all(&parent).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tray_count_tests {
+    use super::{running_servers, servers_not_stopped};
+    use serde_json::json;
+
+    #[test]
+    fn tray_counts_only_servers_the_list_can_stop() {
+        let snapshot = json!({"rows":[
+            {"state":"Listening","run":{"id":"a"}},
+            {"state":"Starting","run":{"id":"b"}},
+            {"state":"Listening","run":null},
+            {"state":"Stopped","run":{"id":"c"}},
+        ]});
+        assert_eq!(running_servers(&snapshot), 2);
+        assert_eq!(running_servers(&json!({})), 0);
+    }
+
+    #[test]
+    fn quit_counts_every_server_not_known_to_be_stopped() {
+        // Anything short of a confirmed stop counts, including a run still being decided.
+        let snapshot = json!({"rows":[
+            {"name":"guarded","state":"Listening","run":{"id":"a"}},
+            {"name":"launching","state":"Starting","run":null},
+            {"name":"undecided","state":"RunUnconfirmed","run":null},
+            {"name":"occupied","state":"PortOccupied","run":null},
+            {"name":"unreadable"},
+            {"name":"stopped","state":"Stopped","run":{"id":"d"}},
+        ]});
+        let policy = |name: &str| matches!(name, "guarded" | "undecided" | "stopped");
+        assert_eq!(servers_not_stopped(&snapshot, policy), (5, 2));
+        assert_eq!(servers_not_stopped(&json!({"rows":[{"state":"Stopped"}]}), |_| true), (0, 0));
+        assert_eq!(servers_not_stopped(&json!({}), |_| true), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod gui_identity_tests {
+    use super::*;
+
+    fn gui(pid: u32, created: u64, image: &str) -> AttachedGui {
+        AttachedGui { process: Identity { pid, created }, image: PathBuf::from(image) }
+    }
+
+    #[test]
+    fn quit_closes_only_guis_that_are_still_the_attached_process() {
+        let exe = r"X:\InstanceHarbor\instanceharbor.exe";
+        let recorded = [gui(10, 100, exe), gui(11, 200, exe), gui(12, 300, exe), gui(13, 400, exe), gui(14, 500, exe)];
+        let probe = |pid: u32| -> GuiProbe {
+            match pid {
+                // Still the attached GUI.
+                10 => (Ok(Some(Identity { pid, created: 100 })), Some(PathBuf::from(exe))),
+                // The PID was reused by a later process of the same executable name.
+                11 => (Ok(Some(Identity { pid, created: 999 })), Some(PathBuf::from(exe))),
+                // Same creation time reported, but another executable now owns the PID.
+                12 => (Ok(Some(Identity { pid, created: 300 })), Some(PathBuf::from(r"X:\Other\editor.exe"))),
+                // The GUI has ended.
+                13 => (Ok(None), None),
+                // Access denied: the PID now belongs to a process of another user or level.
+                _ => (Err(io::Error::from_raw_os_error(5)), None),
+            }
+        };
+        assert_eq!(verified_guis(&recorded, probe), vec![10]);
+    }
+
+    #[test]
+    fn quit_sends_nothing_when_no_gui_is_verified() {
+        let recorded = [gui(20, 1, r"X:\InstanceHarbor\instanceharbor.exe")];
+        assert!(verified_guis(&recorded, |_| (Ok(None), None)).is_empty());
+        assert!(verified_guis(&[], |_| unreachable!("no GUI is probed")).is_empty());
     }
 }

@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { errorText, manage, type CoreSource } from '../manager'
 import { formatDisplayTime, useAppLanguage, type TimeFormat } from '../i18n'
-import { coreDiagnosticText } from '../core-diagnostics'
+import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
+import { coreBuildText, coreVersionText } from '../core-display'
 import OperationButton from './OperationButton.vue'
 import PathPickerButton from './PathPickerButton.vue'
 const props = defineProps<{
@@ -13,7 +14,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 type Profile = { family: string; minecraft: string; build: string }
-type State = { installed: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile }[]; canWrite: boolean; reason?: string | null }
+type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile }[]; canWrite: boolean; reason?: string | null }
 type Action = 'core-install-latest' | 'core-install' | 'core-restore' | 'core-reconcile'
 const dialog = ref<HTMLDialogElement>()
 const confirm = ref<HTMLDialogElement>()
@@ -28,6 +29,13 @@ const source = computed(() => {
 const candidate = computed(() => source.value?.candidate ?? state.value?.prepared)
 const prepared = computed(() => !!candidate.value && candidate.value.sha256 === state.value?.prepared?.sha256)
 const path = ref('')
+// An unverified core shows the version its JAR states, marked as an offline reading.
+const currentVersion = computed(() => {
+  const core = state.value?.installed ?? state.value?.identified
+  if (!core) return t('components.coreMaintenance.notChecked')
+  const text = coreVersionText(core)
+  return state.value?.installed ? text : text + t('components.coreMaintenance.offline')
+})
 const sha = ref('')
 const result = ref('')
 const error = ref('')
@@ -73,6 +81,15 @@ function sourceStatus(value: CoreSource | undefined) {
 const statusText = computed(() => (prepared.value ? t('core.source.prepared') : result.value) || sourceStatus(source.value) || t('components.coreMaintenance.notChecked'))
 const primaryEnabled = computed(() => state.value?.canWrite === true
   && (!!candidate.value || !source.value || state.value.installed?.family==='SPIGOT'))
+// Why Update core is disabled, shown in the dialog itself and not only as a tooltip.
+const reasonText = computed(() => {
+  const reason = state.value?.reason
+  if (!reason) return ''
+  const id = coreBlockedMessage(reason)
+  return id ? t(id) : errorText(reason)
+})
+const blockedText = computed(() => primaryEnabled.value || !reasonText.value ? ''
+  : t('components.coreMaintenance.blockedReason', { reason: reasonText.value }))
 const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
@@ -171,14 +188,15 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   <dialog ref="dialog" class="compact" aria-labelledby="core-dialog-title" @cancel.prevent="close">
     <h2 id="core-dialog-title">{{ t('components.coreMaintenance.title', { name }) }}</h2>
     <dl class="import-preview">
-      <dt>{{ t('components.coreMaintenance.currentVersion') }}</dt><dd>{{ state?.installed ? [state.installed.family,state.installed.minecraft,'build',state.installed.build].join(' ') : t('components.coreMaintenance.notChecked') }}</dd>
-      <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ source?.remoteBuild ?? candidate?.build ?? t('components.coreMaintenance.notChecked') }}</dd>
+      <dt>{{ t('components.coreMaintenance.currentVersion') }}</dt><dd>{{ currentVersion }}</dd>
+      <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ (source?.remoteBuild ?? candidate?.build) ? coreBuildText(source?.remoteBuild ?? candidate?.build ?? '') : t('components.coreMaintenance.notChecked') }}</dd>
       <dt>{{ t('components.coreMaintenance.checkedAt') }}</dt><dd>{{ sourceTime }}</dd>
       <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
     </dl>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <p v-if="blockedText" id="core-update-blocked" class="hint" role="status">{{ blockedText }}</p>
     <div class="core-dialog-actions">
-      <button class="primary" :disabled="!primaryEnabled" :title="state?.reason ? errorText(state.reason) : undefined"
+      <button class="primary" :disabled="!primaryEnabled" :title="blockedText || undefined" :aria-describedby="blockedText ? 'core-update-blocked' : undefined"
         @click="primaryAction">{{ candidate ? t('components.coreMaintenance.update') : t('components.coreMaintenance.chooseLocal') }}</button>
       <OperationButton :label="t('components.coreMaintenance.check')" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
       <button @click="diagnostics?.showModal()">{{ t('components.coreMaintenance.diagnostics') }}</button>
@@ -187,7 +205,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   </dialog>
   <dialog ref="diagnostics" aria-labelledby="core-diagnostics-title">
       <h2 id="core-diagnostics-title">{{ t('components.coreMaintenance.diagnostics') }}</h2>
-      <p v-if="state?.reason" class="hint">{{ errorText(state.reason) }}</p>
+      <p v-if="reasonText" class="hint">{{ reasonText }}</p>
       <p v-if="result" role="status">{{ result }}</p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <div class="field">
@@ -200,7 +218,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       </div>
       <div class="field"><label for="local-core-sha256">SHA-256</label><input id="local-core-sha256" v-model.trim="sha" name="local-core-sha256" autocomplete="off" spellcheck="false"></div>
       <button :disabled="!state?.canWrite || !path || !/^[0-9a-f]{64}$/i.test(sha)" @click="ask('core-install')">{{ t('components.coreMaintenance.update') }}</button>
-      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">Build {{ backup.profile.build }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
+      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">{{ coreBuildText(backup.profile.build) }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
       <details v-if="state" class="detail-section">
         <summary>{{ t('core.diagnostics.show') }}</summary>
         <pre class="selectable" tabindex="0" :aria-label="t('core.diagnostics.show')" translate="no">{{ diagnosticText }}</pre>

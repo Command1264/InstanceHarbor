@@ -7,21 +7,28 @@ import { test } from 'node:test'
 // Always-visible hint and notice lines must be listed below on purpose.
 const ALLOWED_ALWAYS_VISIBLE = [
   "InstancesPage.vue: {{ t('instances.selectHint') }}",
-  "SettingsPage.vue: {{ t('appearance.closeToTrayHelp') }}",
   "SettingsPage.vue: {{ t('settings.javaCheckHelp') }}",
   "SettingsPage.vue: {{ t('settings.restartScheduleHelp') }}",
   "SettingsPage.vue: {{ t('settingsPage.jvmFlagsHelp') }}",
-  "SettingsPage.vue: {{ world.profile ? world.profile.family + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}",
+  "SettingsPage.vue: {{ world.profile ? coreFamilyName(world.profile.family) + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}",
   "SettingsPage.vue: {{ t('settingsPage.worldApplyNotice') }}",
   "SettingsPage.vue: {{ t('settingsPage.yamlChangedFiles') }}",
   "SettingsPage.vue: {{ t('settingsPage.scanHelp') }}",
   "App.vue: {{ selectedLog?.path ?? logs?.path ?? t('app.logs.noPath') }}",
   // Starting in a console window needs this consequence stated before the user decides.
   "App.vue: {{ t('console.confirm.warning') }}",
+  // Each removal option states what it keeps and what it deletes (#26); the other two hints are computed.
+  "App.vue: {{ t('app.remove.retainHint') }}",
+  // Windows may offer permanent deletion; the user needs to know that No cancels before choosing.
+  "App.vue: {{ t('app.remove.nukeWarning') }}",
+  // The exact folder that deleting server data moves to the Recycle Bin.
+  "App.vue: {{ t('app.remove.folder',{path:removeMeta?.path?displayPath(removeMeta.path,visiblePreferences.pathSeparator):'--'}) }}",
   "components/DisplayPreferencesFields.vue: {{ t('appearance.preview') }} · {{ formatDisplayTime(sampleTime, locale, timeFormat) }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.jarHelp') }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.source', { source: sourceText(signal.source) }) }}",
   "components/JavaSearchScope.vue: {{ t('management.javaSearchHelp') }}",
+  // Existing instances are never granted automatically; the manual steps must stay visible.
+  "components/TestAdminFields.vue: {{ t('components.testAdmins.existingHelp') }}",
   "components/ManagementFolderDialog.vue: {{ t('management.summary', { selected: selectedCount, excluded: excluded.length, blocked: pendingRows.length, }) }}",
   "components/WorldLiveControls.vue: {{ t('components.worldTime.unsupportedHelp') }} {{ t('components.worldTime.notReadyHelp') }} {{ t('components.worldTime.readyHelp') }}",
 ]
