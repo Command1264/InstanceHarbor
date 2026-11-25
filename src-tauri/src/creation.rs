@@ -265,7 +265,7 @@ fn inspect(root: &Path, draft: &Draft) -> Result<Inspection> {
 }
 
 fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Inspection> {
-    if !token(&draft.name) {
+    if !instance_name(&draft.name) {
         return Err("InvalidCreationName".into());
     }
     if draft.port == 0 || draft.parent.len() > 4096 {
@@ -612,7 +612,7 @@ fn confirm(root: &Path, work: &str, raw: &str, progress: &dyn Fn(CreationPhase))
     progress(CreationPhase::Checking);
     let confirmation: Confirmation = parse(raw)?;
     let Confirmation { draft, revision } = confirmation;
-    if !token(&draft.name) {
+    if !instance_name(&draft.name) {
         return Err("InvalidCreationName".into());
     }
     if !token(work) || draft.port == 0 {
@@ -962,6 +962,21 @@ mod tests {
         assert_eq!(revision, original_revision);
         assert!(policy.management_roots().is_empty());
         assert!(scan_policy::admitted(root, &draft.name).unwrap());
+    }
+
+    #[test]
+    fn a_name_with_an_inner_period_is_created_under_its_own_folder_and_a_trailing_period_is_refused() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let mut draft = draft(Source::Download { family: "PAPER".into(), minecraft: "26.3".into() });
+        draft.name = "paper-1.14.4".into();
+        let inspected = inspect(root, &draft).unwrap();
+        let parent = root.join("instances").join("existing");
+        assert_eq!(report(&inspected)["target"], path_format::display(&parent.join("paper-1.14.4")));
+        for refused in ["paper.", ".", "..", "con.1"] {
+            draft.name = refused.into();
+            assert_eq!(inspect(root, &draft).err().as_deref(), Some("InvalidCreationName"), "{refused}");
+        }
     }
 
     #[test]

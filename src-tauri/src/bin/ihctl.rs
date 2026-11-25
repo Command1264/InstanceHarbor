@@ -54,7 +54,7 @@ fn main() {
             if plain_list {
                 if let Some(issues) = result["issues"].as_array() {
                     for issue in issues {
-                        eprintln!("Instance registration unavailable: {issue}");
+                        eprintln!("Instance registration or state unavailable: {issue}");
                     }
                 }
                 println!("{}", result["rows"]);

@@ -727,7 +727,7 @@ impl WorldSnapshot {
         name: &str,
         diagnostic_core: Option<&CoreProfile>,
     ) -> Result<Self> {
-        if !token(name) || !admitted(root, name)? {
+        if !instance_name(name) || !admitted(root, name)? {
             return Err("InstanceExcludedOrInvalid".into());
         }
         let instance = instance(root, name)?;

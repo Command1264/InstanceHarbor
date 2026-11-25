@@ -1088,7 +1088,7 @@ fn endpoint(run: &str) -> String {
 }
 
 pub(super) fn call(root: &Path, name: &str, expected_run: &str, request: Request) -> Result<Value> {
-    if !token(name) || !token(expected_run) || !admitted(root, name)? {
+    if !instance_name(name) || !token(expected_run) || !admitted(root, name)? {
         return Err("ConsoleRunChanged".into());
     }
     let config = instance(root, name)?;

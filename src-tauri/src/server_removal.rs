@@ -140,7 +140,7 @@ fn registered_names(root: &Path) -> Result<Vec<String>> {
     for entry in fs::read_dir(root.join("registry")).map_err(fail)? {
         let path = entry.map_err(fail)?.path();
         if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("json")) {
-            if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()).filter(|name| token(name)) {
+            if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()).filter(|name| instance_name(name)) {
                 names.push(name.to_owned());
             }
         }
@@ -277,7 +277,7 @@ fn removed_instances(root: &Path) -> Result<Value> {
 }
 
 fn open_server_folder(root: &Path, name: &str) -> Result<Value> {
-    if !token(name) || !admitted(root, name)? {
+    if !instance_name(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
     let folder = instance_path(root, name)?;

@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { errorText, manage, type CoreSource } from '../manager'
 import { formatDisplayTime, useAppLanguage, type TimeFormat } from '../i18n'
-import { coreDiagnosticText } from '../core-diagnostics'
+import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
 import OperationButton from './OperationButton.vue'
 import PathPickerButton from './PathPickerButton.vue'
 const props = defineProps<{
@@ -73,6 +73,15 @@ function sourceStatus(value: CoreSource | undefined) {
 const statusText = computed(() => (prepared.value ? t('core.source.prepared') : result.value) || sourceStatus(source.value) || t('components.coreMaintenance.notChecked'))
 const primaryEnabled = computed(() => state.value?.canWrite === true
   && (!!candidate.value || !source.value || state.value.installed?.family==='SPIGOT'))
+// Why Update core is disabled, shown in the dialog itself and not only as a tooltip.
+const reasonText = computed(() => {
+  const reason = state.value?.reason
+  if (!reason) return ''
+  const id = coreBlockedMessage(reason)
+  return id ? t(id) : errorText(reason)
+})
+const blockedText = computed(() => primaryEnabled.value || !reasonText.value ? ''
+  : t('components.coreMaintenance.blockedReason', { reason: reasonText.value }))
 const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
@@ -177,8 +186,9 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
     </dl>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <p v-if="blockedText" id="core-update-blocked" class="hint" role="status">{{ blockedText }}</p>
     <div class="core-dialog-actions">
-      <button class="primary" :disabled="!primaryEnabled" :title="state?.reason ? errorText(state.reason) : undefined"
+      <button class="primary" :disabled="!primaryEnabled" :title="blockedText || undefined" :aria-describedby="blockedText ? 'core-update-blocked' : undefined"
         @click="primaryAction">{{ candidate ? t('components.coreMaintenance.update') : t('components.coreMaintenance.chooseLocal') }}</button>
       <OperationButton :label="t('components.coreMaintenance.check')" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
       <button @click="diagnostics?.showModal()">{{ t('components.coreMaintenance.diagnostics') }}</button>
@@ -187,7 +197,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   </dialog>
   <dialog ref="diagnostics" aria-labelledby="core-diagnostics-title">
       <h2 id="core-diagnostics-title">{{ t('components.coreMaintenance.diagnostics') }}</h2>
-      <p v-if="state?.reason" class="hint">{{ errorText(state.reason) }}</p>
+      <p v-if="reasonText" class="hint">{{ reasonText }}</p>
       <p v-if="result" role="status">{{ result }}</p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <div class="field">

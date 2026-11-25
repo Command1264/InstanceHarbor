@@ -374,7 +374,7 @@ const baseMessages = {
   'batchImport.reason.BatchImportNotFound': ['找不到此工作 ID 的匯入紀錄。', 'No import record matches this work ID.'],
   'batchImport.reason.RequestConflict': ['工作 ID 已用於不同內容。請使用原工作 ID 查詢紀錄，或重新預覽。', 'This work ID belongs to different inputs. Look up the original record or preview again.'],
   'batchImport.reason.ManagerBusy': ['管理服務正在處理其他工作。請查詢結果，並在確認後重新預覽。', 'The management service is busy. Look up the result before starting another preview.'],
-  'batchImport.reason.InvalidInstanceName': ['管理名稱請使用小寫英文字母、數字及連字號，並以英文字母或數字開頭。', 'Start the registration name with a lowercase letter or digit. Use lowercase letters, digits, and hyphens.'],
+  'batchImport.reason.InvalidInstanceName': ['管理名稱請使用小寫英文字母、數字、連字號或句點，以英文字母或數字開頭，不以句點結尾。', 'Start the registration name with a lowercase letter or digit. Use lowercase letters, digits, hyphens, or periods, and do not end it with a period.'],
   'batchImport.reason.AlreadyManaged': ['已有同名實例登記。', 'An instance with this name is already registered.'],
   'batchImport.reason.InstanceMustBeStopped': ['請先正常停止這台伺服器。', 'Stop this server gracefully before importing.'],
   'batchImport.reason.ImportPathAlreadyRegistered': ['這個目錄與既有登記的目錄重疊。', 'This folder overlaps a registered folder.'],
@@ -624,6 +624,7 @@ const baseMessages = {
   'instance.state.stopping': ['停止中', 'Stopping'],
   'instance.state.portOccupied': ['Port 已被占用', 'Port in use'],
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
+  'instance.state.stateUnconfirmed': ['狀態無法核對', 'State unverified'],
 } as const satisfies Record<string, readonly [string, string]>
 
 const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages, consoleMessages] as const

@@ -1,3 +1,6 @@
+import type { MessageId } from './i18n.ts'
+import { isInstanceName } from './instance-name.ts'
+
 type Profile = { family: string; minecraft: string; build: string }
 type Diagnostics = {
   instance: string
@@ -26,7 +29,7 @@ export function coreDiagnosticText(value: Diagnostics): string {
     : undefined
   return JSON.stringify({
     schemaVersion: 1,
-    instance: token(value.instance),
+    instance: isInstanceName(value.instance) ? value.instance : undefined,
     installed: value.installed ? {
       family: profilePart(value.installed.family),
       minecraft: profilePart(value.installed.minecraft),
@@ -42,4 +45,20 @@ export function coreDiagnosticText(value: Diagnostics): string {
     lastRequest: token(value.lastRequest),
     backupIds: value.backupIds?.slice(0, 64).flatMap(id => token(id) ?? []),
   }, null, 2)
+}
+
+const coreBlocked: Record<string, MessageId> = {
+  CoreMaintenancePending: 'manager.error.coreMaintenancePending',
+  CoreProfileUnverified: 'components.coreMaintenance.blocked.profileUnverified',
+  InstanceNotConfirmedStopped: 'manager.error.instanceNotConfirmedStopped',
+  CoreStopEvidenceMissing: 'components.coreMaintenance.blocked.stopEvidenceMissing',
+  PortChanged: 'components.coreMaintenance.blocked.portChanged',
+  PortOccupied: 'components.coreMaintenance.blocked.portOccupied',
+  PortOccupiedOrUnavailable: 'components.coreMaintenance.blocked.portOccupied',
+}
+
+/** Why `core-state` does not allow a core update, when the reason has dedicated text. */
+export function coreBlockedMessage(reason?: string | null): MessageId | undefined {
+  const known = typeof reason === 'string' ? reason.split(/[\s:([]/)[0] : ''
+  return Object.hasOwn(coreBlocked, known) ? coreBlocked[known] : undefined
 }

@@ -273,7 +273,7 @@ fn inspect_candidate(
     row: &mut PreviewRow,
     management: Option<&scan_policy::Policy>,
 ) -> Result<Checked> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidInstanceName".into());
     }
     if management.is_some() && raw_entry(&record_path(root, name))?.is_some() {
@@ -411,7 +411,7 @@ fn similar_path(a: &Path, b: &Path) -> bool {
 }
 
 fn discovered_name(root: &Path, path: &Path, name: &str) -> Result<String> {
-    if token(name) {
+    if instance_name(name) {
         return Ok(name.to_owned());
     }
     let slug = name
@@ -748,7 +748,7 @@ fn read_journal(path: &Path) -> Result<Journal> {
         || journal.rows.len() != journal.selection.rows.len()
         || journal.rows.is_empty()
         || journal.rows.len() > selection_limit(&journal.selection)
-        || journal.selection.rows.iter().any(|row| !token(&row.name))
+        || journal.selection.rows.iter().any(|row| !instance_name(&row.name))
     {
         return Err("BatchImportResultUnconfirmed".into());
     }
@@ -841,7 +841,7 @@ fn validate_selection(root: &Path, selection: &Selection) -> Result<Vec<PathBuf>
     let mut names = BTreeSet::new();
     let mut paths: Vec<PathBuf> = Vec::new();
     for row in &selection.rows {
-        if !token(&row.name)
+        if !instance_name(&row.name)
             || row.java.len() > 1024
             || row.listen_address.as_ref().is_some_and(|ip| ip.len() > 64)
             || row.revision.len() != 64
@@ -1189,6 +1189,28 @@ mod tests {
             f.call("management-folder-save", &[request.to_string()]).unwrap_err(),
             "SettingsConflict"
         );
+    }
+
+    #[test]
+    fn a_folder_named_with_inner_periods_is_imported_under_its_own_name_and_stays_manageable() {
+        let f = Fixture::new();
+        f.server("instances/paper-1.14.4", ports(1)[0]);
+        let report = f.preview();
+        assert_eq!(report["rows"][0]["name"], "paper-1.14.4", "{report}");
+        let selection = f.select(&["paper-1.14.4"]);
+        f.apply("dotted", &selection).unwrap();
+        assert!(record_path(&f.root, "paper-1.14.4").is_file());
+        assert_eq!(
+            instance_path(&f.root, "paper-1.14.4").unwrap(),
+            safe_directory(&f.root.join("instances").join("paper-1.14.4")).unwrap()
+        );
+        let listed = f.call("list", &[]).unwrap();
+        assert!(listed.to_string().contains("\"paper-1.14.4\""), "{listed}");
+        assert_eq!(f.call("status", &["paper-1.14.4".into()]).unwrap()["state"], "Stopped");
+        // A registration whose name Windows would silently shorten is never accepted.
+        let mut refused = selection.clone();
+        refused.rows[0].name = "paper.".into();
+        assert!(f.apply("trailing", &refused).is_err());
     }
 
     #[test]

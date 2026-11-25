@@ -356,7 +356,7 @@ impl Policy {
     ) -> Result<Self> {
         let canonical = managed_path(root, &path_format::display(parent))?;
         if !target.parent().is_some_and(|path| same_path(path, &canonical))
-            || !target.file_name().and_then(|name| name.to_str()).is_some_and(token)
+            || !target.file_name().and_then(|name| name.to_str()).is_some_and(instance_name)
         {
             return Err("InvalidInstancePath".into());
         }
@@ -490,7 +490,7 @@ pub(super) fn preview(root: &Path, current: &Policy, proposed: &Policy) -> Resul
         let name = path
             .file_stem()
             .and_then(|name| name.to_str())
-            .filter(|name| token(name))
+            .filter(|name| instance_name(name))
             .ok_or("InvalidInstanceName")?;
         let item = instance(root, name)?;
         if item.removed {
