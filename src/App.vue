@@ -19,6 +19,7 @@ import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
 import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
+import { ScopeCache } from './creation-scope-cache'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
@@ -314,7 +315,7 @@ function validateCreationName(){
   return false
 }
 const createPath=(path:string)=>displayPath(path,visiblePreferences.value.pathSeparator)
-function creationInput() {
+function creationInput(management: ManagementChoice | undefined = creationManagement.value) {
   const build = creationBuild.value?.value
   if (!canPreviewCreation.value || (draft.source && !build)) return
   return {
@@ -323,28 +324,60 @@ function creationInput() {
     port:draft.port,
     source: draft.source && build ? { kind: 'official', ...build } : { kind: 'local', path: draft.core },
     ...(draft.testAdministrators === 'default' ? {} : { testAdministrators: draft.testAdministrators === 'grant' }),
-    ...(creationManagement.value ? { managementFolder: creationManagement.value } : {}),
+    ...(management ? { managementFolder: management } : {}),
   }
 }
-const creationRescoping=ref(0)
+const creationRescoping=ref(false)
+let creationRescopeRequest=0
+// One preview per management folder option of the open confirmation, so switching back is instant.
+const creationScopes=new ScopeCache<CreationPreview>()
+function startCreationScopes(preview: CreationPreview) {
+  const generation=creationScopes.reset()
+  creationScopes.set(generation,selectedManagementFolder(creationManagement.value,preview.managementOptions),preview)
+  void prefetchCreationScopes(generation,preview.managementOptions)
+}
+async function prefetchCreationScopes(generation: number, options: readonly string[]) {
+  for(const selected of [...options,NO_MANAGEMENT_FOLDER]){
+    if(generation!==creationScopes.generation)return
+    if(creationScopes.get(selected))continue
+    const input=creationInput(managementChoice(selected,options))
+    if(!input)return
+    try{
+      creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+    }catch{
+      // A failed background preview is fetched again when that option is chosen.
+    }
+  }
+}
 async function chooseManagementFolder(selected: string) {
   const preview = creationPreview.value
   if (!preview || modalBusy.value) return
-  creationManagement.value = managementChoice(selected, preview.managementOptions)
+  const options = preview.managementOptions
+  creationManagement.value = managementChoice(selected, options)
   const input = creationInput()
   if (!input) return
-  // Keep the checked preview on screen and replace it once; a later choice wins.
-  const request = ++creationRescoping.value
   modalError.value=''
+  const generation=creationScopes.generation
+  const cached=creationScopes.get(selected)
+  // A newer choice supersedes any request still in flight.
+  const request = ++creationRescopeRequest
+  if(cached){
+    creationRescoping.value=false
+    creationPreview.value=cached
+    previewedCreation.value=input
+    return
+  }
+  // Keep the checked preview on screen and replace it once.
+  creationRescoping.value=true
   try{
     const next=await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)])
-    if(request!==creationRescoping.value||creationPreview.value!==preview)return
+    if(!creationScopes.set(generation,selected,next)||request!==creationRescopeRequest)return
     creationPreview.value=next
     previewedCreation.value=input
   }catch(e){
-    if(request===creationRescoping.value)modalError.value=creationError(e)
+    if(request===creationRescopeRequest)modalError.value=creationError(e)
   }finally{
-    if(request===creationRescoping.value)creationRescoping.value=0
+    if(request===creationRescopeRequest)creationRescoping.value=false
   }
 }
 const creationTestAdmins = computed(() => {
@@ -361,6 +394,7 @@ function pickerFailed() {
   void showModalError(t('management.pickFailed'))
 }
 function cancelCreationPreview() {
+  creationScopes.reset()
   creationPreview.value=undefined
   previewedCreation.value=undefined
   creationManagement.value=undefined
@@ -928,6 +962,7 @@ async function previewCreation(){
   try{
     creationPreview.value=await manage<CreationPreview>(['gui-create-preview',JSON.stringify(input)])
     previewedCreation.value=input
+    startCreationScopes(creationPreview.value)
   }catch(e){
     const reason = rawError(e)
     if (/CreationPreviewChanged|CoreNoStableBuild|CreationNoStableBuild/.test(reason)) refreshCreationBuild()
@@ -1168,9 +1203,10 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
               </label>
             </dd>
           </template>
-          <template v-if="creationPreview.managementCandidates.length">
+          <template v-if="creationPreview.managementOptions.length">
             <dt>{{ t('app.create.alsoRegistered') }}</dt>
-            <dd><ul class="create-candidates">
+            <dd v-if="!creationPreview.managementCandidates.length">{{ t('app.create.noCandidates') }}</dd>
+            <dd v-else><ul class="create-candidates">
               <li v-for="candidate in creationPreview.managementCandidates" :key="candidate.directory">
                 <strong class="selectable" translate="no">{{ candidate.name }}</strong>
                 <span class="create-candidate-core">{{ candidate.core || t(`batchImport.${candidate.kind}`) }}</span>
@@ -1197,7 +1233,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="creationUnconfirmedWork" class="hint selectable">{{ t('app.create.workId') }} <bdi class="mono" translate="no">{{ creationUnconfirmedWork }}</bdi></p>
         <div class="dialog-actions">
           <button ref="createBackButton" type="button" :disabled="modalBusy" @click="cancelCreationPreview">{{ t('app.create.back') }}</button>
-          <button type="button" class="primary" :disabled="modalBusy || creationRescoping > 0" @click="provision">{{ t('app.create.submit') }}</button>
+          <button type="button" class="primary" :disabled="modalBusy || creationRescoping" @click="provision">{{ t('app.create.submit') }}</button>
         </div>
       </template>
       <form v-else @submit.prevent="previewCreation">
