@@ -112,7 +112,7 @@ export const appMessages = {
   'app.create.allowedFolder': ['新增管理資料夾', 'New management folder'],
   'app.create.noManagementFolder': ['不加入管理資料夾', 'Do not add a management folder'],
   'app.create.noFolderHint': ['這台實例仍會受管理，管理資料夾清單維持不變。', 'This instance stays managed. The management folder list stays unchanged.'],
-  'app.create.alsoRegistered': ['也會自動登記', 'Also registered automatically'],
+  'app.create.alsoRegistered': ['也會自動登記為實例', 'Also registered as instances'],
   'app.create.scanIncomplete': ['無法完整掃描這個資料夾，可能還有其他伺服器會被自動登記。可改選實例資料夾本身，或不加入管理資料夾。', 'This folder could not be fully scanned, so other servers may also be registered. Choose the instance folder itself or do not add a management folder.'],
   'app.create.managementFolderNotAncestor': ['管理資料夾只能是實例資料夾本身或它的上層資料夾。', 'The management folder must be the instance folder itself or one of its parent folders.'],
   'app.create.builtinDefaults': ['此版本使用核心內建預設值。', 'This version uses the core’s built-in defaults.'],

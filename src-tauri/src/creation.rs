@@ -304,7 +304,8 @@ fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Ins
                         .map(|row| {
                             let directory = row["directory"].as_str().ok_or("BatchImportEvidenceUnavailable")?;
                             let directory = path_format::display(&scan_policy::rule_path(root, directory)?);
-                            Ok(json!({"name":row["name"],"directory":directory}))
+                            Ok(json!({"name":row["name"],"directory":directory,"core":row["core"],
+                                "kind":row["kind"],"port":row["port"],"listenAddress":row["listenAddress"]}))
                         })
                         .collect::<Result<_>>()?;
                 }
@@ -790,6 +791,10 @@ mod tests {
         let candidates = default["managementCandidates"].as_array().unwrap();
         assert_eq!(candidates.len(), 1, "{default}");
         assert_eq!(candidates[0]["directory"], path_format::display(&parent.join("neighbor")));
+        assert_eq!(candidates[0]["name"], "neighbor");
+        assert!(candidates[0]["kind"].is_string(), "{default}");
+        assert!(candidates[0]["port"].is_u64(), "{default}");
+        assert!(candidates[0].get("core").is_some(), "{default}");
         assert_eq!(default["managementScanComplete"], true);
 
         draft.management_folder = ManagementChoice::None;

@@ -267,7 +267,7 @@ type CreationPreview = {
   parent: string
   whitelist: string | null
   managementOptions: string[]
-  managementCandidates: { name: string; directory: string }[]
+  managementCandidates: { name: string; directory: string; core: string | null; kind: 'Minecraft' | 'Velocity' | 'Unknown'; port: number | null; listenAddress: string | null }[]
   managementScanComplete: boolean
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
@@ -1155,8 +1155,14 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           </template>
           <template v-if="creationPreview.managementCandidates.length">
             <dt>{{ t('app.create.alsoRegistered') }}</dt>
-            <dd><ul class="create-candidates selectable">
-              <li v-for="candidate in creationPreview.managementCandidates" :key="candidate.directory" translate="no">{{ createPath(candidate.directory) }}</li>
+            <dd><ul class="create-candidates">
+              <li v-for="candidate in creationPreview.managementCandidates" :key="candidate.directory">
+                <strong class="selectable" translate="no">{{ candidate.name }}</strong>
+                <span class="create-candidate-core">{{ candidate.core || t(`batchImport.${candidate.kind}`) }}</span>
+                <span v-if="candidate.port !== null" class="create-candidate-core">{{ t('batchImport.port', { port: candidate.port }) }}</span>
+                <bdi v-if="candidate.listenAddress" class="create-candidate-core selectable" translate="no">{{ candidate.listenAddress }}</bdi>
+                <span class="hint selectable create-candidate-path" translate="no">{{ createPath(candidate.directory) }}</span>
+              </li>
             </ul></dd>
           </template>
         </dl>
@@ -1283,5 +1289,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 .create-folder-choices { display: grid; gap: .375rem; }
 .create-folder-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; align-items: start; cursor: pointer; }
 .create-folder-choice input { margin: .2rem 0 0; }
-.create-candidates { margin: 0; padding-left: 1.1rem; }
+.create-candidates { margin: 0; padding: 0; list-style: none; display: grid; gap: .5rem; }
+.create-candidate-core { margin-inline-start: .5rem; }
+.create-candidate-path { display: block; }
 </style>
