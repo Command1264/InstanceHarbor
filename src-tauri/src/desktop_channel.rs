@@ -117,7 +117,7 @@ pub fn app_user_model_id(workspace: Option<&str>) -> String {
     app_user_model_id_for(DEVELOPMENT, workspace)
 }
 
-fn webview_profile_for(development: bool, local_app_data: &Path, workspace: Option<&str>) -> PathBuf {
+pub fn webview_profile_for(development: bool, local_app_data: &Path, workspace: Option<&str>) -> PathBuf {
     let app = local_app_data.join(if development { TITLE_DEVELOPMENT } else { TITLE_STABLE });
     match workspace.filter(|_| development) {
         Some(name) => app.join("webviews").join(name),
@@ -164,16 +164,36 @@ fn starts_with(path: &Path, base: &Path) -> bool {
     })
 }
 
+/// Only in this crate's unit tests: whether `path` is a fixture workspace in the
+/// system temporary folder. The development channel validates such a workspace by the
+/// stable rules, so the shared fixtures can run under `development-channel`. No
+/// shipped binary compiles `cfg(test)`, so this never relaxes the real restriction.
+#[cfg(test)]
+fn test_fixture_workspace(path: &Path) -> bool {
+    let temp = env::temp_dir();
+    starts_with(path, &temp) || temp.canonicalize().is_ok_and(|resolved| starts_with(path, &resolved))
+}
+
 pub fn validate_workspace(path: &Path, initializing: bool) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("ExpectedAbsoluteWorkspace".into());
+    }
+    #[cfg(test)]
+    let development = DEVELOPMENT && !test_fixture_workspace(path);
+    #[cfg(not(test))]
+    let development = DEVELOPMENT;
+    validate_workspace_for(development, &local_app_data()?, path, initializing)
+}
+
+fn validate_workspace_for(development: bool, local: &Path, path: &Path, initializing: bool) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("ExpectedAbsoluteWorkspace".into());
     }
     // Resolve the parent for a new workspace and the workspace itself for an existing one.
     // Validate the target before initialization can create any files.
-    let local = local_app_data()?;
     let dev = local.join("InstanceHarbor Dev");
     let base = dev.join("workspaces");
-    if DEVELOPMENT {
+    if development {
         if path.components().any(|part| matches!(part, Component::ParentDir))
             || !path.file_name().is_some_and(|name| {
                 let name = name.to_string_lossy();
@@ -189,7 +209,7 @@ pub fn validate_workspace(path: &Path, initializing: bool) -> Result<(), String>
         let local_parent = app.parent().ok_or("DevelopmentWorkspaceOutsideChannel")?;
         if !parent.file_name().is_some_and(|name| name.eq_ignore_ascii_case("workspaces"))
             || !app.file_name().is_some_and(|name| name.eq_ignore_ascii_case("InstanceHarbor Dev"))
-            || local_parent.canonicalize().ok().as_ref() != Some(&local)
+            || local_parent.canonicalize().ok().as_deref() != Some(local)
         {
             return Err("DevelopmentWorkspaceOutsideChannel".into());
         }
@@ -263,6 +283,83 @@ mod tests {
         let id = app_user_model_id_for(true, Some(&"x".repeat(200)));
         assert!(id.starts_with("local.instanceharbor.dev.") && id.len() <= 128, "{id}");
         assert_ne!(app_user_model_id_for(true, Some("agent-a")), app_user_model_id_for(true, Some("agent-b")));
+    }
+
+    /// A canonical stand-in for LocalAppData, so the channel rules can be checked
+    /// without touching the real development folder.
+    fn fake_local_app_data(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path = env::temp_dir().join(format!("ih-channel-{label}-{}-{nanos}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn development_accepts_only_direct_children_of_its_workspaces_folder() {
+        let local = fake_local_app_data("dev");
+        let base = local.join("InstanceHarbor Dev").join("workspaces");
+        validate_workspace_for(true, &local, &base.join("agent-77"), true).unwrap();
+        assert!(base.is_dir(), "initialization creates the reserved folders");
+        assert!(
+            validate_workspace_for(true, &local, &base.join("agent-77"), false).is_err(),
+            "an existing workspace must already be a plain folder"
+        );
+        fs::create_dir(base.join("agent-77")).unwrap();
+        validate_workspace_for(true, &local, &base.join("agent-77"), false).unwrap();
+        // Users pass ordinary paths; `local` is canonical like `local_app_data`.
+        let plain = env::temp_dir().join(local.file_name().unwrap()).join("InstanceHarbor Dev").join("workspaces");
+        validate_workspace_for(true, &local, &plain.join("agent-77"), false).unwrap();
+
+        let other = fake_local_app_data("other");
+        let outside = [
+            local.join("agent-77"),
+            local.join("InstanceHarbor Dev").join("agent-77"),
+            local.join("InstanceHarbor").join("workspaces").join("agent-77"),
+            base.join("nested").join("agent-77"),
+            base.join("bad name"),
+            // Joining onto a verbatim path would fold `..`, so use the ordinary form.
+            plain.join("..").join("workspaces").join("agent-77"),
+            other.join("InstanceHarbor Dev").join("workspaces").join("agent-77"),
+        ];
+        for path in outside {
+            for initializing in [true, false] {
+                assert_eq!(
+                    validate_workspace_for(true, &local, &path, initializing),
+                    Err("DevelopmentWorkspaceOutsideChannel".into()),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
+        assert!(!other.join("InstanceHarbor Dev").exists(), "a rejected target creates nothing");
+        fs::remove_dir_all(&local).unwrap();
+        fs::remove_dir_all(&other).unwrap();
+    }
+
+    #[test]
+    fn stable_rejects_workspaces_inside_the_development_folder() {
+        let local = fake_local_app_data("stable");
+        let base = local.join("InstanceHarbor Dev").join("workspaces");
+        fs::create_dir_all(&base).unwrap();
+        assert_eq!(
+            validate_workspace_for(false, &local, &base.join("agent-77"), true),
+            Err("StableWorkspaceOutsideChannel".into())
+        );
+        validate_workspace_for(false, &local, &local.join("InstanceHarbor").join("workspace"), true).unwrap();
+        fs::remove_dir_all(&local).unwrap();
+    }
+
+    #[test]
+    fn the_fixture_exemption_covers_only_the_temporary_folder() {
+        assert!(test_fixture_workspace(&env::temp_dir().join("ih-fixture")));
+        assert!(test_fixture_workspace(&env::temp_dir().canonicalize().unwrap().join("ih-fixture")));
+        let outside = Path::new(r"C:\InstanceHarbor-outside-channel\agent-77");
+        assert!(!test_fixture_workspace(outside));
+        if DEVELOPMENT {
+            // The real entry point still applies the development rules outside it.
+            assert_eq!(validate_workspace(outside, true), Err("DevelopmentWorkspaceOutsideChannel".into()));
+            assert!(!outside.exists());
+        }
     }
 
     #[test]
