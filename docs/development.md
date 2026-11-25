@@ -7,6 +7,8 @@
 
 ## 建置與隔離驗證
 
+`build-product.ps1` 經 `resolve-npm.ps1` 在 PATH 上尋找 npm，`npm.cmd`（官方安裝）與 `npm.exe`（mise 等版本管理工具的 shim）都可用；找不到時會提示安裝 Node.js 或檢查 PATH，腳本不會修改 PATH。解析邏輯的測試：`Invoke-Pester ./tests/resolve-npm.Tests.ps1`。
+
 在 repository 根目錄執行下列命令。驗證腳本使用 SHA-256 核對 Paper 26.3 build 205 和 Mojang 依賴，唯讀取用既有 JAR 快取。所有新工作區和證據寫入根目錄的 .evidence。
 
 ```powershell
