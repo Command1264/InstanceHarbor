@@ -46,13 +46,17 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   其中開啟自動重啟的伺服器會另外說明：自動重啟由 Manager 執行，
   結束後這些伺服器當機或意外結束不會自動重啟，要等 Manager 下次啟動才恢復。按「是」後會再核對一次批次工作。
   CLI 的 `manager-exit` 不詢問，只套用批次工作的條件。
+  CLI 的 `app-exit` 與「結束」同一套流程（結束 Manager 並關閉已登記的 GUI 視窗），同樣不詢問、只套用批次工作的條件；Setup 更新時使用它。
+- 「結束」只關閉仍是原登記程序的 GUI：`gui-attach` 記下 PID、Windows 程序建立時間與 GUI 執行檔路徑，
+  送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
+- 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
 - 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。
 - 結束看門狗：主視窗關閉後，GUI 暫停向 Manager 登記，避免重新啟動使用者剛結束的 Manager。
   10 秒後程序仍在、且已沒有任何可見視窗時，記錄 `gui-exit-watchdog` 並直接結束程序；仍有可見視窗代表關閉被取消，看門狗解除。
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
 - 回退相容：`preferences.json` 仍保留舊的 `closeToTray` 值但不再使用。值為預設時不寫入檔案；若曾在 1.0.0 關閉此設定，
   回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
-- 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512）。`muda` 需要 comctl32 第 6 版，
+- 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512；正式版藍色、開發版紅色，見「開發版紅色圖示」）。`muda` 需要 comctl32 第 6 版，
   執行檔已帶對應 manifest；程式庫的單元測試執行檔沒有，所以系統匣程式碼不編進測試建置。
 
 ## 視窗開啟大小
@@ -270,12 +274,16 @@ ZIP 目錄記錄每個項目的 CRC，任一項目內容改變都會使目錄改
   自己的資料夾也會列為管理資料夾；這種資料夾底下沒有其他伺服器時可以刪除。
 - 資料夾在網路路徑（UNC）上、路徑或內容含有 reparse point（junction、symbolic link 等），
   或資料夾內還有其他受管理的實例。
+- 任一其他實例的登記檔讀不到或資料夾路徑無法解析（`DeleteServerOtherInstanceUnconfirmed`）。
+  這時無法確認那台實例的資料夾不在要刪除的資料夾裡，所以不略過它，先處理清單上方列出的登記問題再重試。
 
 移到資源回收筒後，程式也會從管理資料夾清單移除這個資料夾的路徑。清單中留著不存在的路徑時，
 之後建立實例或變更管理資料夾都會回報「找不到可使用的上層資料夾」。
 
 移動期間不顯示 Windows 的進度視窗，由 InstanceHarbor 顯示進度文字。資料夾太大而無法放進資源回收筒時，Windows 會先詢問是否永久刪除；選「否」會取消，資料與登記都不變。
 資料夾移走後才清除登記；清除失敗時回報 `DeleteServerRecycledButRegistered`，可再從右鍵選單移除管理。
+「移除管理」不需要伺服器資料夾存在：資料夾已移到資源回收筒或在檔案總管被刪掉時，派送前的核心維護檢查改為核對登記的路徑確實不存在
+（連結也算存在），再照常檢查實例已停止與選項；資料夾還在但無法讀取或被重新導向時仍會拒絕。
 
 CLI 對應：
 
@@ -406,7 +414,8 @@ LuckPerms 開、授予所有權限、OP 關。
   才會清空（欄位有內容時才能按）。
 - **OP**：建立實例時寫入 `ops.json`（`uuid`、`name`、`level` 為 4、`bypassesPlayerLimit` 為 `false`），
   使用同一份管理員清單。關閉時不寫 `ops.json`，由伺服器自行建立空的清單。OP 與 LuckPerms
-  無關，只開 OP 時不需要也不會安裝 LuckPerms。Velocity 代理沒有 OP，只開 OP 會停止建立並說明原因。
+  無關，只開 OP 時不需要也不會安裝 LuckPerms。Velocity 代理沒有 OP：只開 OP 時，建立 Velocity 的預設是不授權，
+  確認畫面說明原因；只有明確選「授權」才會停止建立並回報 `UnsupportedTestPermissionPlatform`。
 
 LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方來源與 SHA-256：
 
@@ -421,7 +430,8 @@ LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方�
 不會下載；快取缺少或雜湊不符時停止建立並說明原因，不改用其他版本。
 
 建立實例的「測試管理員權限」預設依位置決定：`instances/Agent/` 底下的 Agent 隔離實例不授權，
-其他位置授權。可在建立時改為「授權」或「不授權」，兩個開關都適用；確認畫面列出將套用的內容，
+其他位置授權；但開啟的方式都不適用這個核心時（例如 Velocity 只開 OP），預設改為不授權，預覽回傳的
+`testAdministrators.skipped` 帶原因代碼（`ProxyHasNoOp` 或 `UnsupportedCore`）。LuckPerms 尚未下載不算不適用，仍會停止建立。可在建立時改為「授權」或「不授權」，兩個開關都適用；確認畫面列出將套用的內容，
 例如「授權 1 位 · LuckPerms · OP」。LuckPerms 開啟時，新實例的 `plugins/` 會有核對過的
 LuckPerms JAR，`plugins/LuckPerms/`（Velocity 為 `plugins/luckperms/`）寫入 `storage-method: json` 的
 `config.yml`、每位管理員的 `json-storage/users/<uuid>.json`，以及讓 `lp user <名稱>` 在首次登入前
@@ -565,7 +575,24 @@ Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本
 Setup 的對話框用同一條系統語言規則。
 已安裝時，Setup 比較版本：較舊時詢問是否更新，相同時詢問是否修復（重新安裝程式檔案），
 較新時預設拒絕並詢問是否確定退回舊版。工作區資料一律保留；InstanceHarbor 仍在執行時，Setup 不替換檔案。
-使用者取消時退出碼為 4。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
+使用者取消時退出碼為 4。
+
+已安裝的程式仍在執行時（更新或修復），Setup 會先關閉它，不再要求使用者自行關閉：
+
+- 能否繼續只看安裝標記檔 `instanceharbor.install`：GUI、CLI、Manager 與每台伺服器的 Host 都持有它直到結束，
+  Setup 能以不共用的方式開啟它時才替換檔案，並持有到替換完成。伺服器台數只用來說明為何等待。
+- Setup 把自己的 `ihctl.exe` 解到暫存資料夾，以 `ihctl setup-probe servers|close ...`（`src-tauri/src/setup_probe.rs`）
+  呼叫**已安裝版本**的 `ihctl`：用 `list` 讀取預設正式工作區（`%LOCALAPPDATA%/InstanceHarbor/workspaces/default`）
+  不是「已停止」的伺服器台數（規則與系統匣「結束」相同）；台數為 0 時請已安裝版本結束 GUI 與 Manager。
+  1.1.0 起用 `ihctl <工作區> app-exit`，與系統匣「結束」同一套流程（不詢問，有批次工作或核心更新時回報 `ManagerHasActiveWork`）。
+  1.0.0／1.0.1 沒有這個指令，Setup 依已安裝的版本號改用 `manager-exit`，並請使用者自行關閉 GUI 視窗；不會對舊版送出未知指令，也不以視窗標題送關閉訊息。
+  2026-11-25 在 Windows Sandbox 實測 1.0.1：Manager 結束後 GUI 不會自行結束，按視窗關閉後縮到系統匣，仍持有標記檔，所以等待頁請使用者從系統匣結束。
+- 互動安裝在歡迎頁後顯示「正在關閉 InstanceHarbor」等待頁，每 1.5 秒重新檢查：有伺服器沒有停止時顯示「還有 N 台伺服器沒有停止」；
+  台數為 0 但標記檔仍被占用時，說明可能是其他工作區或已不在管理範圍的伺服器。Setup 不替使用者停止伺服器，
+  等待頁只提供「開啟 InstanceHarbor」與「取消」；取消時退出碼為 4，不改動已安裝的檔案。標記檔釋放後自動進入安裝頁。
+- 靜默安裝（`/S`）不等待伺服器：有伺服器沒有停止或狀態讀不到時立即失敗，退出碼為 5，不改動已安裝的檔案。
+  伺服器都已停止時自動關閉 GUI 與 Manager，最多等 30 秒標記檔釋放，仍被占用時退出碼為 2。
+- 等待頁各狀態的文字對應（`windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
 Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
 Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
@@ -600,6 +627,7 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 | 伺服器後台視窗 | 原標題 | 原標題後加上 `[InstanceHarbor Dev — <工作區名稱>]` |
 | 側欄名稱、「關於」 | `InstanceHarbor` | 側欄第一行 `InstanceHarbor Dev`，第二行工作區名稱；「關於」另列「開發工作區」與 Git commit |
 | GUI 診斷紀錄 | `InstanceHarbor\logs` | `InstanceHarbor Dev\logs\<工作區名稱>`，同時開著的 GUI 不會互搶寫入鎖與 16 MiB 容量上限 |
+| 應用程式圖示（執行檔、工作列、Alt+Tab、標題列、系統匣、側欄） | 藍色 | 紅色，形狀相同 |
 
 `<工作區名稱>` 是工作區資料夾名稱；`<工作區鍵>` 是名稱轉小寫後的 FNV-1a 64 位元雜湊（16 位十六進位），
 讓鎖名稱與 AppUserModelID 長度固定。實作集中在 `src-tauri/src/desktop_channel.rs`。
@@ -628,6 +656,43 @@ cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features de
 任何執行檔都不編譯這段，所以實際執行時的開發版限制不變。位置規則本身由 `desktop_channel` 的測試以假的 LocalAppData 在兩種設定下驗證，
 不會建立或改動真正的 `InstanceHarbor Dev` 資料夾。
 兩版同時啟動伺服器時，請為各工作區使用獨立副本，並為每台伺服器指派不同的系統連接埠。
+
+#### 開發版紅色圖示
+
+開發版的圖示由正式版的藍色圖示只轉動色相（+140°）產生，飽和度、亮度、透明度與 ICO 內每個尺寸都不變：
+
+| 正式版（藍） | 開發版（紅） | 使用位置 |
+|---|---|---|
+| `src-tauri/icons/icon.ico` | `src-tauri/icons/icon-dev.ico` | 執行檔資源 32512：檔案總管、工作列、Alt+Tab、標題列、系統匣 |
+| `src/assets/instanceharbor-brand.png` | `src/assets/instanceharbor-brand-dev.png` | 側欄品牌圖 |
+
+建置時自動選用，不需要手動切換：`build.rs` 依 `development-channel` feature 選 ICO（`src-tauri/src/app_icon.rs`），
+`build-product.ps1 -Development` 以 Vite mode `development-channel` 建置前端，`vite.config.ts` 據此選側欄圖。
+系統匣圖示讀取執行檔資源，所以跟著執行檔切換。
+
+更換藍色圖示後，在 repository 根目錄重新產生紅色版並一起提交（只用 Python 標準函式庫）：
+
+```powershell
+python generate-development-icons.py
+python generate-development-icons.py --check
+```
+
+`--check` 確認紅色檔只改了色相、尺寸與目錄欄位相同，並確認藍色版仍是藍色、紅色版是紅色。
+要調整紅色深淺，修改腳本的 `HUE_SHIFT_DEGREES` 後重新產生。
+
+防止正式版誤用紅色圖示的檢查：
+
+- `cargo test` 的 `app_icon` 測試：正式版設定必須嵌入 `icons/icon.ico`，開發版必須嵌入 `icons/icon-dev.ico`，兩檔尺寸相同但內容不同。
+- `build-product.ps1` 建置後以 `verify-app-icon.ps1` 讀出 `InstanceHarbor.exe`（或 `InstanceHarborDev.exe`）與 `ihctl.exe` 內嵌的圖示，
+  逐位元組比對該版本應使用的 ICO；並確認前端只含該版本的側欄圖。不符時建置失敗。
+
+讀出執行檔內嵌的圖示並另存為 ICO，再產生紅藍對照圖：
+
+```powershell
+./verify-app-icon.ps1 -Binary <正式版 exe> -Export $env:TEMP/product.ico
+./verify-app-icon.ps1 -Binary <開發版 exe> -Export $env:TEMP/development.ico
+python generate-development-icons.py --comparison $env:TEMP/icon-comparison.png --product $env:TEMP/product.ico --development $env:TEMP/development.ico
+```
 
 ### 版本與 commit
 

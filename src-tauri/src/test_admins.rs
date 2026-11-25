@@ -513,11 +513,30 @@ pub(super) fn plan(root: &Path, profile: &CoreProfile, requested: bool) -> Resul
     } else {
         None
     };
-    let op = settings.op && profile.family != "VELOCITY";
+    let op = op_applies(&settings, profile);
     if luckperms.is_none() && !op {
         return Err("UnsupportedTestPermissionPlatform".into());
     }
     Ok((configured, Some(Grant { luckperms, op, settings, revision })))
+}
+
+/// A proxy has no `ops.json`, so OP applies to every core except Velocity.
+fn op_applies(settings: &Settings, profile: &CoreProfile) -> bool {
+    settings.op && profile.family != "VELOCITY"
+}
+
+/// Why the default grants nothing although administrators are configured:
+/// none of the enabled methods works on this core. Only an explicit grant
+/// then reaches `plan` and fails with `UnsupportedTestPermissionPlatform`.
+/// A missing or mismatched LuckPerms download is not a reason to skip; it is
+/// reported by `plan`, as for any other core.
+pub(super) fn default_skip_reason(root: &Path, profile: &CoreProfile) -> Result<Option<&'static str>> {
+    let (settings, _, _) = load(root)?;
+    let luckperms = settings.luckperms && Platform::for_core(profile).is_ok();
+    if !settings.enabled() || luckperms || op_applies(&settings, profile) {
+        return Ok(None);
+    }
+    Ok(Some(if profile.family == "VELOCITY" { "ProxyHasNoOp" } else { "UnsupportedCore" }))
 }
 
 /// Copies the verified plugin into a new instance and seeds its data.
@@ -669,7 +688,7 @@ pub(super) mod tests {
     }
 
     /// Saves the two fake administrators with extra fields merged in.
-    fn save_fake(root: &Path, extra: Value) {
+    pub(in super::super) fn save_fake(root: &Path, extra: Value) {
         let (_, revision, _) = load(root).unwrap();
         let mut raw = json!({
             "administrators":[{"name":"Fake_Admin","uuid":FAKE_UUID},{"name":"OtherFake","uuid":OTHER_UUID}],
@@ -855,6 +874,29 @@ pub(super) mod tests {
         cache_stand_in(root, Platform::Bukkit);
         assert_eq!(plan(root, &paper, true).err().unwrap(), "TestPermissionArtifactMismatch");
         assert_eq!(artifacts(root).unwrap()[0]["state"], "Mismatch");
+    }
+
+    #[test]
+    fn default_skips_cores_that_none_of_the_enabled_methods_supports() {
+        let workspace = Workspace::new();
+        let root = &workspace.0;
+        let velocity = profile("VELOCITY", "3.4.0");
+        let forge = profile("FORGE", "1.20.1");
+        // Nothing configured: there is nothing to skip.
+        assert_eq!(default_skip_reason(root, &velocity).unwrap(), None);
+        // A proxy has no ops.json, so OP alone cannot apply.
+        save_fake(root, json!({"luckperms":false,"op":true}));
+        assert_eq!(default_skip_reason(root, &velocity).unwrap(), Some("ProxyHasNoOp"));
+        assert_eq!(default_skip_reason(root, &profile("PAPER", "26.3")).unwrap(), None);
+        assert_eq!(default_skip_reason(root, &forge).unwrap(), None);
+        // LuckPerms works on Velocity; a missing download is reported later, not skipped.
+        save_fake(root, json!({"luckperms":true,"op":true}));
+        assert_eq!(default_skip_reason(root, &velocity).unwrap(), None);
+        save_fake(root, json!({"luckperms":true,"op":false}));
+        assert_eq!(default_skip_reason(root, &velocity).unwrap(), None);
+        assert_eq!(default_skip_reason(root, &forge).unwrap(), Some("UnsupportedCore"));
+        save_fake(root, json!({"luckperms":false,"op":false}));
+        assert_eq!(default_skip_reason(root, &velocity).unwrap(), None);
     }
 
     #[test]

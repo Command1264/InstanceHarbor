@@ -151,7 +151,7 @@ fn handle_quit(hooks: &Hooks, chinese: bool) {
         Ok(ExitCheck::Busy) => return message_box(active_work_message(chinese), false),
         Ok(ExitCheck::Confirm(servers)) => confirm(&exit_confirmation(servers, chinese)),
         Ok(ExitCheck::Clear) => true,
-        Err(error) => return message_box(&error, true),
+        Err(error) => return quit_failed(&error, chinese),
     };
     if !confirmed {
         return;
@@ -160,7 +160,29 @@ fn handle_quit(hooks: &Hooks, chinese: bool) {
     match (hooks.request_exit)() {
         Ok(true) => {}
         Ok(false) => message_box(active_work_message(chinese), false),
-        Err(error) => message_box(&error, true),
+        Err(error) => quit_failed(&error, chinese),
+    }
+}
+
+/// The raw error may name user paths: it goes to the diagnostic log as a code only.
+#[cfg(not(test))]
+fn quit_failed(error: &str, chinese: bool) {
+    if let Ok(log) = crate::diagnostics::global() {
+        let _ = log.record(quit_failure_event(error));
+    }
+    message_box(&quit_failed_message(chinese, &crate::diagnostics::log_folder()), true);
+}
+
+pub(super) fn quit_failure_event(error: &str) -> Value {
+    json!({"type":"manager-quit-failed","error":crate::diagnostics::safe_error(error)})
+}
+
+/// `folder` is the log folder as messages show it, without the user profile path.
+pub(super) fn quit_failed_message(chinese: bool, folder: &str) -> String {
+    if chinese {
+        format!("Manager 無法結束，GUI 與系統匣圖示維持開啟。伺服器不受影響，會繼續執行。\n\n請再試一次。如果持續發生，請回報診斷紀錄（{folder}）。")
+    } else {
+        format!("The Manager could not quit; the GUI and the tray icon stay open. Servers are not affected and keep running.\n\nTry again. If this keeps happening, report the diagnostic log ({folder}).")
     }
 }
 
@@ -411,5 +433,27 @@ mod tests {
         let builder = builder.expect("run() builds the tray icon");
         assert!(!builder.contains(".with_tooltip("), "the refresh loop sets the tooltip after registration");
         assert!(source.contains("tray.set_tooltip(Some(tooltip("));
+    }
+}
+
+#[cfg(test)]
+mod quit_failure_tests {
+    use super::*;
+
+    #[test]
+    fn quit_failure_message_is_translated_and_omits_the_raw_error() {
+        let folder = "%LOCALAPPDATA%/InstanceHarbor/logs";
+        let chinese = quit_failed_message(true, folder);
+        assert!(chinese.contains("無法結束") && chinese.contains(folder));
+        let english = quit_failed_message(false, folder);
+        assert!(english.contains("could not quit") && english.contains(folder));
+    }
+
+    #[test]
+    fn quit_failure_is_logged_as_a_code_without_paths() {
+        let event = quit_failure_event(r"FileAccess[read] path=C:\Users\someone\workspace\preferences.json: denied (os error 5)");
+        assert_eq!(event["type"], "manager-quit-failed");
+        assert_eq!(event["error"]["code"], "FileAccess");
+        assert!(!event.to_string().contains("someone"), "{event}");
     }
 }
