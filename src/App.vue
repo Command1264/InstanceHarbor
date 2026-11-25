@@ -25,6 +25,7 @@ import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
 import { startupListRendered, startupMark, startupWindowPresented } from './startup-timing'
+import { registryDiagnosticText, registryIssueMessage } from './registry-issues'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
@@ -113,9 +114,16 @@ async function refreshAfterCoreChange() {
   await checkCoreUpdates(presentation.value.instances.map(item=>item.name),false)
 }
 const registryIssues=ref<RegistryIssue[]>([])
-const registryIssueLabels=computed<Record<RegistryIssue['reason'],string>>(()=>({
-  FileInUse:t('app.registry.fileInUse'), AccessDenied:t('app.registry.accessDenied'), InvalidRecord:t('app.registry.invalidRecord'), Unconfirmed:t('app.registry.unconfirmed'), ObservationUnconfirmed:t('app.registry.observationUnconfirmed'),
-}))
+function registryIssueLabel(issue:RegistryIssue){const message=registryIssueMessage(issue);return t(message.id,message.values)}
+const registryStateIssues=computed(()=>rows.value.some(row=>!!row.stateIssue))
+const registryCopy=ref<'copied'|'failed'>()
+let registryCopyTimer:ReturnType<typeof setTimeout>|undefined
+async function copyRegistryDiagnostics(){
+  clearTimeout(registryCopyTimer)
+  try{await navigator.clipboard.writeText(registryDiagnosticText(registryIssues.value));registryCopy.value='copied'}
+  catch{registryCopy.value='failed'}
+  registryCopyTimer=setTimeout(()=>{registryCopy.value=undefined},2000)
+}
 const listUnavailable=ref('')
 const preferencesRevision=ref('')
 function applyPreferences(snapshot:PreferencesSnapshot){
@@ -1064,7 +1072,10 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="listUnavailable">{{ listUnavailable }}</p>
         <template v-else>
           <p>{{ t('app.registry.intro') }}</p>
-          <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="issue in registryIssues" :key="issue.file">{{ issue.file }} · {{ registryIssueLabels[issue.reason] }}</li></ul></OverlayScroll>
+          <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="(issue,index) in registryIssues" :key="`${issue.file}-${index}`">{{ issue.file }} · {{ registryIssueLabel(issue) }}</li></ul></OverlayScroll>
+          <p v-if="registryStateIssues" class="hint">{{ t('app.registry.stillListed') }}</p>
+          <div class="registry-actions"><button type="button" @click="copyRegistryDiagnostics">{{ t('app.registry.copyDiagnostics') }}</button>
+            <span v-if="registryCopy" :class="registryCopy==='copied'?'hint':'form-error'" role="status">{{ t(registryCopy==='copied'?'app.registry.copied':'app.registry.copyFailed') }}</span></div>
         </template>
       </aside>
       <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :console-available="presentation.capabilities?.nativeConsole===true" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @open-folder="openServerFolder" @removed="removedInstancesDialog?.open()" @create="open('create')" @refresh="refresh(true)"/>
@@ -1232,6 +1243,8 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 .registry-notice p { margin: 0; }
 .registry-notice ul { margin: .25rem 0 0; padding-inline-start: 1.125rem; }
 .registry-notice li { overflow-wrap: anywhere; }
+.registry-actions { display: flex; align-items: center; gap: .5rem; margin-top: .375rem; }
+.registry-actions .form-error { margin: 0; }
 .create-name-row .form-error { margin: .375rem 0 0; font-size: .8125rem; }
 .create-path-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; margin-block: .375rem 1rem; }
 .create-path-editor input { width: 100%; }

@@ -268,7 +268,7 @@ impl Diagnostics {
         let issues: Vec<_> = result.as_ref().ok().filter(|_| action == "instance-snapshot")
             .and_then(|value| value["issues"].as_array())
             .into_iter().flatten()
-            .map(|issue| json!({"reason":issue["reason"],"osError":issue["osError"]}))
+            .map(|issue| json!({"stage":issue["stage"],"reason":issue["reason"],"code":issue["code"],"osError":issue["osError"]}))
             .collect();
         let outcome = json!({"rowCount":count,"error":error,"issues":issues});
         if sample
