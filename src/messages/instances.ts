@@ -1,6 +1,13 @@
 // Messages for InstancesPage.vue. Each entry is [zh-TW, en]; keys start with 'instances.'.
 export const instancesMessages = {
   'instances.pin': ['釘選', 'Pin'],
+  'instances.stateProblem': ['狀態問題', 'State problem'],
+  'instances.stateIssue.fileInUse': ['檔案被占用', 'File in use'],
+  'instances.stateIssue.accessDenied': ['拒絕存取', 'Access denied'],
+  'instances.stateIssue.pathRedirected': ['路徑被重新導向', 'Path redirected'],
+  'instances.stateIssue.invalidStateFile': ['執行紀錄檔損壞', 'Run record damaged'],
+  'instances.stateIssue.code': ['錯誤代碼 {code}', 'Error code {code}'],
+  'instances.stateIssue.unconfirmed': ['無法核對', 'Could not verify'],
   'instances.pinUp': ['釘選上移', 'Move pin up'],
   'instances.pinDown': ['釘選下移', 'Move pin down'],
   'instances.unpin': ['取消釘選', 'Unpin'],

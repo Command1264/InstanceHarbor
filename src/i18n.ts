@@ -624,6 +624,7 @@ const baseMessages = {
   'instance.state.stopping': ['停止中', 'Stopping'],
   'instance.state.portOccupied': ['Port 已被占用', 'Port in use'],
   'instance.state.runUnconfirmed': ['工作階段未確認', 'Session unconfirmed'],
+  'instance.state.stateUnconfirmed': ['狀態無法核對', 'State unverified'],
 } as const satisfies Record<string, readonly [string, string]>
 
 const messageGroups = [baseMessages, appMessages, instancesMessages, settingsMessages, managerMessages, componentsMessages, policyMessages, consoleMessages] as const
