@@ -22,6 +22,23 @@ try {
     if ($failures.Count) { throw "Version order mismatch (installed setup expected actual):`n$($failures -join "`n")" }
     "Setup version order: $(@(Get-Content -LiteralPath $results).Count) cases passed."
 
+    # What the update wait page says for each probe result.
+    $wait = Join-Path $work 'wait-status.exe'
+    $statuses = Join-Path $work 'wait-status.txt'
+    Push-Location $PSScriptRoot
+    try {
+        & $Compiler /NOCONFIG /V2 "/DOUTPUT=$wait" "/DRESULTS=$statuses" windows-setup-close.nsi
+        if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE." }
+    } finally { Pop-Location }
+    $run = Start-Process -FilePath $wait -ArgumentList '/S' -Wait -PassThru
+    if ($run.ExitCode -ne 0) { throw "The wait status test installer exited with $($run.ExitCode)." }
+    $failures = @(Get-Content -LiteralPath $statuses | Where-Object {
+        $parts = $_ -split ' '
+        $parts.Count -ne 4 -or $parts[2] -cne $parts[3]
+    })
+    if ($failures.Count) { throw "Wait status mismatch (servers close expected actual):`n$($failures -join "`n")" }
+    "Setup wait status: $(@(Get-Content -LiteralPath $statuses).Count) cases passed."
+
     # Setup must find the same runtime that InstanceHarbor uses on this computer.
     $detect = Join-Path $work 'webview2.exe'
     $found = Join-Path $work 'webview2.txt'
