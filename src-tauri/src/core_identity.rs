@@ -6,12 +6,18 @@
 //! not checked against the built-in table or an official source.
 use super::*;
 use std::{
+    collections::HashMap,
     io::{Seek, SeekFrom},
     sync::{Mutex, OnceLock},
 };
 
 const MAX_DIRECTORY: u64 = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
+/// An old Spigot JAR bundles the whole server: 1.8.8 has about 12,000 entries
+/// and 1.13 about 26,000. `MAX_DIRECTORY` still bounds the read.
+const MAX_CORE_ENTRIES: usize = u16::MAX as usize;
+/// Instances whose identity is kept between list refreshes.
+const MAX_CACHED: usize = 32;
 const MAX_TAIL: u64 = 22 + u16::MAX as u64;
 const MAX_ENTRY_NAME: usize = 1024;
 /// The library folder, artifact name and family of each core that names its build.
@@ -33,7 +39,6 @@ pub(super) struct CoreIdentity {
 }
 
 struct CachedIdentity {
-    path: PathBuf,
     file_length: u64,
     directory: Vec<u8>,
     identity: Option<CoreIdentity>,
@@ -51,7 +56,7 @@ struct PaperCandidate {
     method: u16,
 }
 
-static CACHE: OnceLock<Mutex<Option<CachedIdentity>>> = OnceLock::new();
+static CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedIdentity>>> = OnceLock::new();
 
 /// Returns `None` for unknown or malformed cores. I/O failures remain errors.
 /// Every call reads the current bounded ZIP directory, so a replacement with the
@@ -70,7 +75,7 @@ pub(super) fn read_identity(jar: &Path) -> Result<Option<CoreIdentity>> {
 pub(super) fn read_open_identity(jar: &Path, mut file: File) -> Result<Option<CoreIdentity>> {
     let file_length = file.metadata().map_err(fail)?.len();
     let Some((directory, directory_offset)) =
-        read_directory(&mut file, file_length).map_err(fail)?
+        read_directory_with(&mut file, file_length, MAX_CORE_ENTRIES).map_err(fail)?
     else {
         return Ok(None);
     };
@@ -100,13 +105,11 @@ pub(super) fn read_open_identity(jar: &Path, mut file: File) -> Result<Option<Co
 }
 
 fn cached(jar: &Path, file_length: u64, directory: &[u8]) -> Result<Option<Option<CoreIdentity>>> {
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let cache = CACHE.get_or_init(Default::default);
     let guard = cache.lock().map_err(|_| "CoreIdentityCacheUnavailable")?;
     Ok(guard
-        .as_ref()
-        .filter(|saved| {
-            saved.path == jar && saved.file_length == file_length && saved.directory == directory
-        })
+        .get(jar)
+        .filter(|saved| saved.file_length == file_length && saved.directory == directory)
         .map(|saved| saved.identity.clone()))
 }
 
@@ -116,14 +119,19 @@ fn remember(
     directory: Vec<u8>,
     identity: Option<CoreIdentity>,
 ) -> Result<()> {
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let cache = CACHE.get_or_init(Default::default);
     let mut guard = cache.lock().map_err(|_| "CoreIdentityCacheUnavailable")?;
-    *guard = Some(CachedIdentity {
-        path: jar.to_path_buf(),
-        file_length,
-        directory,
-        identity,
-    });
+    if guard.len() >= MAX_CACHED && !guard.contains_key(jar) {
+        guard.clear();
+    }
+    guard.insert(
+        jar.to_path_buf(),
+        CachedIdentity {
+            file_length,
+            directory,
+            identity,
+        },
+    );
     Ok(())
 }
 
@@ -573,6 +581,14 @@ mod tests {
             b"groupId=org.spigotmc\nartifactId=spigot\nversion=1.8.8-R0.1-SNAPSHOT\n",
         )]);
         assert_eq!(summary(identity_of(&legacy)), Some(("Spigot", "1.8.8".into(), String::new())));
+        // BuildTools writes `<hash> *<file>`; an old Spigot JAR holds far more
+        // entries than a plugin (1.8.8 has about 12,000).
+        let buildtools = zip_with(&[("META-INF/versions.list", b"0 *spigot-1.21.11-R0.2-SNAPSHOT.jar\r\n")]);
+        assert_eq!(summary(identity_of(&buildtools)), Some(("Spigot", "1.21.11".into(), String::new())));
+        let classes: Vec<String> = (0..5000).map(|index| format!("net/minecraft/server/C{index}.class")).collect();
+        let mut fat: Vec<(&str, &[u8])> = classes.iter().map(|name| (name.as_str(), &b""[..])).collect();
+        fat.push(("META-INF/maven/org.spigotmc/spigot/pom.properties", b"version=1.12.2-R0.1-SNAPSHOT\n"));
+        assert_eq!(summary(identity_of(&zip_with(&fat))), Some(("Spigot", "1.12.2".into(), String::new())));
         // A bundler list that names another family is not Spigot.
         let other = zip_with(&[("META-INF/versions.list", b"0\tcraftbukkit-1.21-R0.1-SNAPSHOT.jar\n")]);
         assert_eq!(identity_of(&other), None);

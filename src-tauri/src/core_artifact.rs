@@ -131,8 +131,10 @@ pub(super) fn claim_file(file: &mut File) -> Option<Claim> {
         return Some(Claim { family: "VELOCITY".into(), minecraft: version, java });
     }
     if let Some(list) = text(file, b"META-INF/versions.list") {
-        // For example `<sha256>\tspigot-26.2-R0.1-SNAPSHOT.jar`.
-        let name = list.lines().next()?.rsplit('\t').next()?.strip_suffix(".jar")?;
+        // For example `<sha256>\tspigot-26.2-R0.1-SNAPSHOT.jar`, or as BuildTools
+        // writes it, `<sha256> *spigot-26.2-R0.1-SNAPSHOT.jar`.
+        let last = list.lines().next()?.rsplit(['\t', ' ']).next()?;
+        let name = last.strip_prefix('*').unwrap_or(last).strip_suffix(".jar")?;
         let mut parts = name.split('-');
         let family = family_name(parts.next()?)?;
         let minecraft = token(parts.next()?)?;
@@ -504,6 +506,13 @@ mod tests {
             ("META-INF/versions.list", b"0c45\tspigot-26.2-R0.1-SNAPSHOT.jar\n"),
         ]);
         assert_eq!(claim(&dir.join("spigot-bundler.jar")), claimed("SPIGOT", "26.2", Some(21)));
+        // BuildTools writes the list like `sha256sum`: `<hash> *<file>` with CRLF (#48).
+        jar_with(&dir.join("spigot-buildtools.jar"), &[
+            ("META-INF/MANIFEST.MF", b"Main-Class: org.bukkit.craftbukkit.bootstrap.Main\r\n"),
+            ("org/bukkit/craftbukkit/bootstrap/Main.class", &main),
+            ("META-INF/versions.list", b"0c45 *spigot-1.21.11-R0.2-SNAPSHOT.jar\r\n"),
+        ]);
+        assert_eq!(claim(&dir.join("spigot-buildtools.jar")), claimed("SPIGOT", "1.21.11", Some(21)));
 
         // Old Spigot keeps its Maven coordinates.
         let main = class(8);
