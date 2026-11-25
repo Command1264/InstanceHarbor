@@ -183,6 +183,7 @@ export function errorText(error: unknown) {
   if (raw.includes('DeleteServerNetworkPath')) return tr('manager.error.deleteServerNetworkPath')
   if (raw.includes('DeleteServerContainsLink')) return tr('manager.error.deleteServerContainsLink')
   if (raw.includes('DeleteServerContainsOtherInstance')) return tr('manager.error.deleteServerContainsOtherInstance')
+  if (raw.includes('DeleteServerOtherInstanceUnconfirmed')) return tr('manager.error.deleteServerOtherInstanceUnconfirmed')
   if (raw.includes('DeleteServerCancelled')) return tr('manager.error.deleteServerCancelled')
   if (raw.includes('DeleteServerIncomplete')) return tr('manager.error.deleteServerIncomplete')
   if (raw.includes('DeleteServerRecycleFailed')) return tr('manager.error.deleteServerRecycleFailed')

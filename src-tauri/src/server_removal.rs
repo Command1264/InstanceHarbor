@@ -149,6 +149,21 @@ fn registered_names(root: &Path) -> Result<Vec<String>> {
     Ok(names)
 }
 
+/// Folders of every other registered instance. A record that cannot be read
+/// or resolved could name a folder inside the one being deleted, so it stops
+/// the deletion instead of being skipped.
+fn other_instance_folders(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
+    registered_names(root)?
+        .into_iter()
+        .filter(|other| other != name)
+        .map(|other| {
+            instance(root, &other)
+                .and_then(|record| scan_policy::registered_path(root, &other, record.directory.as_deref()))
+                .map_err(|_| "DeleteServerOtherInstanceUnconfirmed".to_owned())
+        })
+        .collect()
+}
+
 fn delete_server(root: &Path, name: &str, confirmation: &str) -> Result<Value> {
     if confirmation != name {
         return Err("DeleteServerNameMismatch".into());
@@ -162,14 +177,7 @@ fn delete_server(root: &Path, name: &str, confirmation: &str) -> Result<Value> {
         .iter()
         .map(|rule| scan_policy::rule_path(root, rule))
         .collect::<Result<Vec<_>>>()?;
-    let others = registered_names(root)?
-        .into_iter()
-        .filter(|other| other != name)
-        .filter_map(|other| {
-            let record = instance(root, &other).ok()?;
-            scan_policy::registered_path(root, &other, record.directory.as_deref()).ok()
-        })
-        .collect::<Vec<_>>();
+    let others = other_instance_folders(root, name)?;
     check_target(root, &folder, &management_roots, &others)?;
     check_no_links(&folder)?;
     let core = core_artifact::jar(&folder, &item);
@@ -416,6 +424,125 @@ mod tests {
             "DeleteServerContainsOtherInstance"
         );
         assert!(check_target(&root, &outer.join("inner"), &[], std::slice::from_ref(&outer)).is_ok());
+    }
+
+    /// A workspace made by `init`, with `alpha` registered in its default
+    /// folder and stopped (its port is not listening).
+    fn workspace(label: &str) -> (Fixture, PathBuf) {
+        let base = std::env::temp_dir().join(format!("ih-removal-{label}-{}-{}", std::process::id(), clock()));
+        fs::create_dir_all(&base).unwrap();
+        let base = fs::canonicalize(&base).unwrap();
+        let root = base.join("workspace");
+        super::super::dispatch(&[path_format::display(&root), "init".into()]).unwrap();
+        let free = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        fs::create_dir(root.join("instances/alpha")).unwrap();
+        fs::write(root.join("instances/alpha/server.properties"), format!("server-port={port}
+")).unwrap();
+        fs::write(
+            record_path(&root, "alpha"),
+            json!({"name":"alpha","java":"C:/isolated/java.exe","port":port}).to_string(),
+        )
+        .unwrap();
+        (Fixture(base), root)
+    }
+
+    #[test]
+    fn unreadable_or_unresolvable_record_of_another_instance_refuses_the_deletion() {
+        // beta's folder sits inside alpha's. If beta's record cannot be read,
+        // nothing proves that, so deleting alpha must stop and leave beta.
+        let (_guard, root) = workspace("unconfirmed");
+        let beta = root.join("instances/alpha/beta");
+        fs::create_dir_all(&beta).unwrap();
+        fs::write(beta.join("server.properties"), b"").unwrap();
+        fs::write(record_path(&root, "beta"), br#"{"name":"beta","java":"C:/isolated/java.exe","port":25"#).unwrap();
+        assert_eq!(
+            other_instance_folders(&root, "alpha").unwrap_err(),
+            "DeleteServerOtherInstanceUnconfirmed"
+        );
+        assert_eq!(
+            delete_server(&root, "alpha", "alpha").unwrap_err(),
+            "DeleteServerOtherInstanceUnconfirmed"
+        );
+        assert!(beta.join("server.properties").is_file());
+        assert!(record_path(&root, "alpha").is_file());
+
+        // A readable record whose folder cannot be resolved is refused too.
+        fs::write(
+            record_path(&root, "beta"),
+            json!({"name":"beta","java":"C:/isolated/java.exe","port":25,
+                "directory": path_format::display(&root)}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            other_instance_folders(&root, "alpha").unwrap_err(),
+            "DeleteServerOtherInstanceUnconfirmed"
+        );
+        assert!(beta.join("server.properties").is_file());
+
+        // A readable, resolvable record still reports its folder.
+        fs::write(
+            record_path(&root, "beta"),
+            json!({"name":"beta","java":"C:/isolated/java.exe","port":25,
+                "directory": path_format::display(&beta)}).to_string(),
+        )
+        .unwrap();
+        assert_eq!(other_instance_folders(&root, "alpha").unwrap(), vec![beta.clone()]);
+        assert_eq!(
+            delete_server(&root, "alpha", "alpha").unwrap_err(),
+            "DeleteServerContainsOtherInstance"
+        );
+        assert!(beta.join("server.properties").is_file());
+    }
+
+    #[test]
+    fn management_can_be_removed_after_the_folder_is_gone() {
+        // After "moved to the Recycle Bin but still registered", or after the
+        // user deleted the folder in File Explorer, the suggested remedy
+        // ("remove from management") must work without the folder.
+        for mode in ["retain", "delete"] {
+            let (_guard, root) = workspace(&format!("gone-{mode}"));
+            fs::remove_dir_all(root.join("instances/alpha")).unwrap();
+            let workspace = path_format::display(&root);
+            let removed = super::super::dispatch(&[
+                workspace.clone(),
+                "remove-management".into(),
+                "alpha".into(),
+                mode.into(),
+            ])
+            .unwrap();
+            assert_eq!(removed["mode"], mode);
+            if mode == "retain" {
+                assert_eq!(instance(&root, "alpha").unwrap().removed, true);
+            } else {
+                assert!(!record_path(&root, "alpha").exists());
+            }
+        }
+    }
+
+    #[test]
+    fn missing_folder_does_not_bypass_the_other_removal_checks() {
+        let (_guard, root) = workspace("gone-checks");
+        fs::remove_dir_all(root.join("instances/alpha")).unwrap();
+        let workspace = path_format::display(&root);
+        let run = |verb: &str, args: &[&str]| {
+            let mut arguments = vec![workspace.clone(), verb.to_owned()];
+            arguments.extend(args.iter().map(|arg| (*arg).to_owned()));
+            super::super::dispatch(&arguments)
+        };
+        // Other actions that need the folder still fail.
+        assert!(run("delete-server", &["alpha", "alpha"]).is_err());
+        // An invalid mode is still refused and changes nothing.
+        let before = fs::read(record_path(&root, "alpha")).unwrap();
+        assert_eq!(run("remove-management", &["alpha", "erase"]).unwrap_err(), "InvalidRemovalMode");
+        assert_eq!(fs::read(record_path(&root, "alpha")).unwrap(), before);
+        // A port still in use keeps the instance from being removed.
+        let port = instance(&root, "alpha").unwrap().port;
+        let busy = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).unwrap();
+        assert_eq!(run("remove-management", &["alpha", "retain"]).unwrap_err(), "InstanceMustBeStopped");
+        drop(busy);
+        assert_eq!(fs::read(record_path(&root, "alpha")).unwrap(), before);
     }
 
     #[test]

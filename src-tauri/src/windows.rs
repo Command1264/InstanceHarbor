@@ -886,6 +886,17 @@ fn instance_path(root: &Path, name: &str) -> Result<PathBuf> {
     managed_directory(root, name, instance.directory.as_deref())
 }
 
+/// The instance's registered folder does not exist (not even as a link).
+fn registered_folder_missing(root: &Path, name: &str) -> Result<bool> {
+    let record = instance(root, name)?;
+    let target = scan_policy::registered_path(root, name, record.directory.as_deref())?;
+    match fs::symlink_metadata(&target) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(fail(error)),
+    }
+}
+
 fn managed_directory(root: &Path, name: &str, directory: Option<&str>) -> Result<PathBuf> {
     child_directory(root, "instances")?;
     let target = scan_policy::registered_path(root, name, directory)?;
@@ -2893,7 +2904,14 @@ pub fn dispatch_with_creation_progress(
     }
     if matches!(verb.as_str(), "save-instance-settings" | "save-world-settings" | "remove-management" | "delete-server" | "adopt") {
         if let Some(name) = args.first().filter(|name| instance_name(name) && record_path(&root, name).exists()) {
-            core_maintenance::assert_start_allowed(&instance_path(&root, name)?)?;
+            match instance_path(&root, name) {
+                Ok(folder) => core_maintenance::assert_start_allowed(&folder)?,
+                // A pending core change lives in the server folder. Without the
+                // folder there is none, and removing management is how the user
+                // clears an instance whose folder was deleted or recycled.
+                Err(_) if verb == "remove-management" && registered_folder_missing(&root, name)? => {}
+                Err(error) => return Err(error),
+            }
         }
     }
     if let Some(result) = core_maintenance::dispatch(&root, verb, args) {
