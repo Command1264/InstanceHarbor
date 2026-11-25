@@ -29,12 +29,21 @@ pub(super) fn webview_profile(
     inherited: Option<&OsStr>,
     workspace: Option<&str>,
 ) -> Option<PathBuf> {
+    webview_profile_for(desktop_channel::DEVELOPMENT, local_app_data, inherited, workspace)
+}
+
+fn webview_profile_for(
+    development: bool,
+    local_app_data: &Path,
+    inherited: Option<&OsStr>,
+    workspace: Option<&str>,
+) -> Option<PathBuf> {
     // The development channel always isolates its profile, one per workspace; a stable
     // launcher such as launch-acceptance.ps1 may pick a per-workspace profile.
-    if !desktop_channel::DEVELOPMENT && inherited.is_some_and(|folder| !folder.is_empty()) {
+    if !development && inherited.is_some_and(|folder| !folder.is_empty()) {
         return None;
     }
-    Some(desktop_channel::webview_profile(local_app_data, workspace))
+    Some(desktop_channel::webview_profile_for(development, local_app_data, workspace))
 }
 
 /// The WebView2 profile folder chosen by `configure_desktop` or the launcher. Tauri on
@@ -198,9 +207,17 @@ mod tests {
     fn the_stable_webview_profile_sits_beside_the_workspaces_unless_a_launcher_chose_one() {
         let local = Path::new(r"C:\Users\someone\AppData\Local");
         let profile = Some(local.join("InstanceHarbor").join("webview"));
-        assert_eq!(webview_profile(local, None, None), profile);
-        assert_eq!(webview_profile(local, Some(OsStr::new("")), Some("agent-a")), profile);
-        assert_eq!(webview_profile(local, Some(OsStr::new(r"D:\evidence\manual-webview")), None), None);
+        assert_eq!(webview_profile_for(false, local, None, None), profile);
+        assert_eq!(webview_profile_for(false, local, Some(OsStr::new("")), Some("agent-a")), profile);
+        assert_eq!(webview_profile_for(false, local, Some(OsStr::new(r"D:\evidence\manual-webview")), None), None);
+    }
+
+    #[test]
+    fn the_development_webview_profile_ignores_a_launcher_folder() {
+        let local = Path::new(r"C:\Users\someone\AppData\Local");
+        let profile = Some(local.join("InstanceHarbor Dev").join("webviews").join("agent-a"));
+        let inherited = Some(OsStr::new(r"D:\evidence\manual-webview"));
+        assert_eq!(webview_profile_for(true, local, inherited, Some("agent-a")), profile);
     }
 
     #[test]

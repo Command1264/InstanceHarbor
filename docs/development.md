@@ -612,6 +612,17 @@ $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-fe
 開發工作區必須是 `%LOCALAPPDATA%/InstanceHarbor Dev/workspaces` 的直接子目錄，
 名稱可使用英數、連字號和底線。開發版 GUI 缺少 `IH_WORKSPACE` 或工作區不在此目錄時拒絕啟動。
 開發版 CLI 也要求明確傳入同範圍的工作區。正式版拒絕開發資料目錄，Manager 仍按工作區路徑區分。
+
+Rust 測試要在兩種設定下各跑一次，開發版專屬行為只在加上 feature 時編譯：
+
+```powershell
+cargo test --offline --locked --manifest-path src-tauri/Cargo.toml
+cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features development-channel
+```
+
+測試夾具把臨時工作區建在系統暫存資料夾。只有本 crate 的單元測試（`cfg(test)`）會讓開發版以正式版規則檢查暫存資料夾內的工作區；
+任何執行檔都不編譯這段，所以實際執行時的開發版限制不變。位置規則本身由 `desktop_channel` 的測試以假的 LocalAppData 在兩種設定下驗證，
+不會建立或改動真正的 `InstanceHarbor Dev` 資料夾。
 兩版同時啟動伺服器時，請為各工作區使用獨立副本，並為每台伺服器指派不同的系統連接埠。
 
 ### 版本與 commit
