@@ -36,3 +36,15 @@ test('core diagnostics keep a dotted instance name but job IDs stay strict', () 
   assert.deepEqual(output.backupIds, [])
   assert.equal(JSON.parse(coreDiagnosticText({ instance: 'paper.' })).instance, undefined)
 })
+
+test('registry diagnostics keep a dotted instance name and its registration file', async () => {
+  const { registryDiagnosticText } = await import('./registry-issues.ts')
+  const output = JSON.parse(registryDiagnosticText([
+    { file: 'paper-1.14.4.json', name: 'paper-1.14.4', reason: 'Unconfirmed', osError: null },
+    { file: 'paper..json', name: 'paper.', reason: 'Unconfirmed', osError: null },
+  ]))
+  assert.equal(output.issues[0].file, 'paper-1.14.4.json')
+  assert.equal(output.issues[0].name, 'paper-1.14.4')
+  assert.equal(output.issues[1].file, undefined)
+  assert.equal(output.issues[1].name, undefined)
+})
