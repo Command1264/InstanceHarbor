@@ -23,9 +23,10 @@ test('an unknown core reason falls back to a general message and no reason shows
   assert.equal(coreReasonId(''), undefined)
 })
 
-test('an offline reading of the core version is explained in both languages', () => {
-  for (const id of ['instances.coreOffline', 'components.coreMaintenance.offline']) {
-    assert.match(translate('zh-TW', id), /離線辨識/, id)
-    assert.match(translate('en', id), /offline/, id)
-  }
+test('an offline reading of the core version is labelled briefly and explained once', () => {
+  assert.equal(translate('zh-TW', 'components.coreMaintenance.offline'), '（離線辨識）')
+  assert.equal(translate('en', 'components.coreMaintenance.offline'), ' (read offline)')
+  // The explanation says what was not compared, not that a connection failed.
+  assert.match(translate('zh-TW', 'instances.coreOffline'), /核心檔.*未與內建清單或官方來源比對/)
+  assert.match(translate('en', 'instances.coreOffline'), /read from the core file.*built-in list or the official source/)
 })

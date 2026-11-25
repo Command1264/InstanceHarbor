@@ -18,7 +18,7 @@ export const componentsMessages = {
   'components.copy.done': ['已複製', 'Copied'],
   'components.copy.failed': ['無法複製', 'Could not copy'],
   'components.coreMaintenance.notChecked': ['尚未核對', 'Not checked yet'],
-  'components.coreMaintenance.offline': ['（離線辨識，尚未向官方來源核對）', ' (read offline, not checked against the official source)'],
+  'components.coreMaintenance.offline': ['（離線辨識）', ' (read offline)'],
   'components.coreMaintenance.changed': ['核心已變更，請重新核對更新', 'The core changed. Check for updates again.'],
   'components.coreMaintenance.sourceUnavailable': ['未能核對更新來源', 'Could not check the update source'],
   'components.coreMaintenance.checkFailed': ['更新核對失敗', 'Update check failed'],
