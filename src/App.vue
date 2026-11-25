@@ -18,6 +18,7 @@ import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
+import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
@@ -299,16 +300,8 @@ const createBackButton=ref<HTMLButtonElement>()
 const createNameInput=ref<HTMLInputElement>()
 const createNameChecked=ref(false)
 const createNameIssue=computed(()=>{
-  const {name}=draft
-  if(!name)return t('app.name.required')
-  if(name.length>64)return t('app.name.tooLong')
-  if(name.includes('.'))return t('app.name.period')
-  if(!/^[a-z0-9]/.test(name))return t('app.name.start')
-  if(!/^[a-z0-9-]+$/.test(name))return t('app.name.characters')
-  if(/^(?:con|prn|aux|nul|(?:com|lpt)[1-9])$/.test(name)){
-    return t('app.name.reserved')
-  }
-  return ''
+  const issue=instanceNameIssue(draft.name)
+  return issue?t(`app.name.${issue}`):''
 })
 function validateCreationName(){
   createNameChecked.value=true

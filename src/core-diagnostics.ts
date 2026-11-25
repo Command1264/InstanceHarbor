@@ -1,4 +1,5 @@
 import type { MessageId } from './i18n.ts'
+import { isInstanceName } from './instance-name.ts'
 
 type Profile = { family: string; minecraft: string; build: string }
 type Diagnostics = {
@@ -28,7 +29,7 @@ export function coreDiagnosticText(value: Diagnostics): string {
     : undefined
   return JSON.stringify({
     schemaVersion: 1,
-    instance: token(value.instance),
+    instance: isInstanceName(value.instance) ? value.instance : undefined,
     installed: value.installed ? {
       family: profilePart(value.installed.family),
       minecraft: profilePart(value.installed.minecraft),

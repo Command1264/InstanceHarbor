@@ -1,4 +1,5 @@
 import type { MessageId } from './i18n.ts'
+import { isInstanceName } from './instance-name.ts'
 
 /** Why a registration could not be read, or why a registered instance's state could not be read. */
 export type IssueReason = 'FileInUse' | 'AccessDenied' | 'InvalidRecord' | 'Unconfirmed' | 'ObservationUnconfirmed'
@@ -50,8 +51,8 @@ export function stateIssueMessage(issue: StateIssue): IssueMessage {
 
 /** Shareable diagnostics: only names, stable codes and OS error numbers, never paths. */
 export function registryDiagnosticText(issues: RegistryIssue[]): string {
-  const name = (value?: string) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(value) ? value : undefined
-  const file = (value?: string) => typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,63}\.json$/.test(value) ? value : undefined
+  const name = (value?: string) => isInstanceName(value) ? value : undefined
+  const file = (value?: string) => typeof value === 'string' && value.endsWith('.json') && isInstanceName(value.slice(0, -5)) ? value : undefined
   const word = (value?: string) => typeof value === 'string' && /^[a-z][a-z-]{0,31}$/.test(value) ? value : undefined
   return JSON.stringify({
     schemaVersion: 1,

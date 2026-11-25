@@ -171,7 +171,7 @@ struct Target {
 
 impl Target {
     fn get(root: &Path, name: &str, run: &str) -> Result<Self> {
-        if !token(name) || !token(run) || !admitted(root, name)? {
+        if !instance_name(name) || !token(run) || !admitted(root, name)? {
             return Err("WorldRunUnavailable".into());
         }
         let config = instance(root, name)?;
@@ -516,7 +516,7 @@ struct Journal {
 }
 
 fn journal_directory(root: &Path, name: &str) -> Result<PathBuf> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("WorldRunUnavailable".into());
     }
     Ok(child_directory(root, "history")?.join(format!("world-live-{name}")))
@@ -727,7 +727,7 @@ fn activity_row(journal: &Journal) -> Value {
 }
 
 fn current_clock(root: &Path, name: &str, run: &str) -> Result<Value> {
-    if !token(name) || !token(run) {
+    if !instance_name(name) || !token(run) {
         return Err("WorldRunUnavailable".into());
     }
     let _lock = instance_writer_lock(root, name)?;
@@ -742,7 +742,7 @@ fn current_clock(root: &Path, name: &str, run: &str) -> Result<Value> {
 }
 
 fn preview(root: &Path, name: &str, run: &str, key: &str, value: &str) -> Result<Value> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("WorldRunUnavailable".into());
     }
     let _lock = instance_writer_lock(root, name)?;
@@ -768,7 +768,7 @@ fn preview(root: &Path, name: &str, run: &str, key: &str, value: &str) -> Result
 }
 
 fn apply(root: &Path, name: &str, request: &str, raw: &str, confirmation: &str) -> Result<Value> {
-    if !token(name) || !token(request) || raw.len() > 4096 {
+    if !instance_name(name) || !token(request) || raw.len() > 4096 {
         return Err("InvalidWorldRequest".into());
     }
     let plan: Plan = serde_json::from_str(raw).map_err(fail)?;

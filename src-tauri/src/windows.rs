@@ -453,6 +453,20 @@ fn clock() -> u128 {
         .as_nanos()
 }
 
+/// An instance name may hold inner periods, such as `paper-1.14.4`, because it names folders and
+/// registration files. Windows drops a trailing period, so a name may not end with one, and a
+/// reserved device name stays reserved before any extension (`con.1` opens the console device).
+fn instance_name(value: &str) -> bool {
+    value.len() <= 64
+        && !value.ends_with('.')
+        && value.split('.').next().is_some_and(token)
+        && value.split('.').all(|part| part.is_empty() || dotted_part(part))
+}
+
+fn dotted_part(part: &str) -> bool {
+    part.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
 fn token(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
@@ -836,7 +850,7 @@ fn port_unassigned(root: &Path, port: u16, name: &str) -> Result<()> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or("InvalidInstanceName")?;
-        if !token(other) {
+        if !instance_name(other) {
             return Err("InvalidInstanceName".into());
         }
         let config = instance(root, other)?;
@@ -1029,7 +1043,7 @@ fn registration_path_available(root: &Path, name: &str, target: &Path) -> Result
             continue;
         }
         let other = path.file_stem().and_then(|stem| stem.to_str()).ok_or("InvalidInstanceName")?;
-        if !token(other) {
+        if !instance_name(other) {
             return Err("InvalidInstanceName".into());
         }
         if other != name {
@@ -1069,7 +1083,7 @@ fn checked_import_inner(
     listen_address: Option<&str>,
     policy: Option<&scan_policy::Policy>,
 ) -> Result<ImportSource> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidInstanceName".into());
     }
     let existing = if record_path(root, name).exists() {
@@ -1147,7 +1161,7 @@ fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
     let [verb, name, request, input, extra @ ..] = arguments else {
         return Err("Expected action, name, request ID and Java path".into());
     };
-    if !token(name) || !token(request) {
+    if !instance_name(name) || !token(request) {
         return Err("InstanceExcludedOrInvalid".into());
     }
     let mut prepared = if verb == "prepare" {
@@ -2484,7 +2498,7 @@ fn jobs(root: &Path) -> Result<Value> {
             continue;
         }
         let name = path.file_stem().and_then(|name| name.to_str()).ok_or("InvalidInstanceName")?;
-        if token(name) && admitted(root, name)? && !instance(root, name)?.removed {
+        if instance_name(name) && admitted(root, name)? && !instance(root, name)?.removed {
             rows.extend(core_maintenance::activity(root, name)?);
             rows.extend(world_live::activity(root, name)?);
             if !instance(root, name)?.removed {
@@ -2757,7 +2771,7 @@ pub fn dispatch_with_creation_progress(
         let [name, run] = args else {
             return Err("InvalidHostArguments".into());
         };
-        if !token(name) || !token(run) {
+        if !instance_name(name) || !token(run) {
             return Err("InvalidHostIdentity".into());
         }
         let result = host(&root, &instance(&root, name)?, run);
@@ -2860,7 +2874,7 @@ pub fn dispatch_with_creation_progress(
     } else if instance_writer {
         let name = args
             .first()
-            .filter(|name| token(name))
+            .filter(|name| instance_name(name))
             .ok_or("InvalidInstanceName")?;
         format!("instance-{name}.lock")
     } else {
@@ -2878,7 +2892,7 @@ pub fn dispatch_with_creation_progress(
         }
     }
     if matches!(verb.as_str(), "save-instance-settings" | "save-world-settings" | "remove-management" | "delete-server" | "adopt") {
-        if let Some(name) = args.first().filter(|name| token(name) && record_path(&root, name).exists()) {
+        if let Some(name) = args.first().filter(|name| instance_name(name) && record_path(&root, name).exists()) {
             core_maintenance::assert_start_allowed(&instance_path(&root, name)?)?;
         }
     }
@@ -2903,7 +2917,7 @@ pub fn dispatch_with_creation_progress(
     let [name, rest @ ..] = args else {
         return Err("MissingInstanceName".into());
     };
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InstanceExcludedOrInvalid".into());
     }
     let config = instance(&root, name)?;
@@ -2953,6 +2967,25 @@ pub fn dispatch_with_creation_progress(
 #[cfg(test)]
 mod transition_tests {
     use super::*;
+
+    #[test]
+    fn instance_names_allow_inner_periods_while_internal_ids_stay_strict() {
+        for name in ["paper-1.14.4", "a.b", "v1..2", "paper", "1.20"] {
+            assert!(instance_name(name), "{name}");
+        }
+        for name in [
+            "", ".", "..", ".paper", "paper.", "paper..", "paper 1", "paper-1.14.4 ", "Paper-1.14.4", "-paper",
+            "con", "con.1", "nul.json", "lpt9.paper", "paper/1", r"paper\1", "paper:1",
+        ] {
+            assert!(!instance_name(name), "{name}");
+        }
+        assert!(instance_name(&"a".repeat(64)));
+        assert!(!instance_name(&"a".repeat(65)));
+        assert!(instance_name("console.1"), "only an exact reserved stem is refused");
+        // Request, run and job IDs are not names a person types and keep the strict alphabet.
+        assert!(!token("paper-1.14.4"));
+        assert!(token("paper-1-14-4"));
+    }
 
     #[test]
     fn a_recorded_process_id_reused_by_a_process_we_cannot_open_is_not_alive() {

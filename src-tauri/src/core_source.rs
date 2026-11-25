@@ -663,7 +663,7 @@ fn check_with_agent(
     names: &[String],
     paper_agent: std::result::Result<&str, &str>,
 ) -> Result<Value> {
-    if names.is_empty() || names.len() > MAX_TARGETS || names.iter().any(|name| !token(name)) {
+    if names.is_empty() || names.len() > MAX_TARGETS || names.iter().any(|name| !instance_name(name)) {
         return Err("InvalidCoreCheckTargets".into());
     }
     let mut observed = Vec::with_capacity(names.len());
@@ -731,7 +731,7 @@ pub(super) fn install_latest(
     expected_current: &str,
     expected_candidate: &str,
 ) -> Result<Value> {
-    if !token(name) || !token(request) {
+    if !instance_name(name) || !token(request) {
         return Err("InvalidCoreMaintenanceRequest".into());
     }
     let registration = registration_revision(root, name)?;
@@ -747,7 +747,7 @@ pub(super) fn install_latest_guarded(
     registration: &str,
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
-    if !token(name) || !token(request) {
+    if !instance_name(name) || !token(request) {
         return Err("InvalidCoreMaintenanceRequest".into());
     }
     let store = core_prefetch::Store::enabled(root)?;
@@ -1047,7 +1047,7 @@ pub(super) fn create_download(root: &Path, args: &[String]) -> Result<Value> {
     let [name, request, java_path, port, family, minecraft] = args else {
         return Err("InvalidProvisionArguments".into());
     };
-    if !token(name) || !token(request) || !port.parse::<u16>().is_ok_and(|port| port != 0) {
+    if !instance_name(name) || !token(request) || !port.parse::<u16>().is_ok_and(|port| port != 0) {
         return Err("InvalidProvisionArguments".into());
     }
     let (profile, mojang_url) = fixed_creation_target(family, minecraft)?;
