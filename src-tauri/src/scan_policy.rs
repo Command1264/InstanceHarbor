@@ -249,6 +249,16 @@ impl Policy {
         }
     }
 
+    /// Whether a management folder contains `path`, so its scan would find it.
+    pub(super) fn manages_path(&self, root: &Path, path: &Path) -> Result<bool> {
+        for rule in self.management_roots() {
+            if contains(&rule_path(root, rule)?, path) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub(super) fn excludes_path(&self, root: &Path, path: &Path) -> Result<bool> {
         for rule in &self.exclude_paths {
             if contains(&rule_path(root, rule)?, path) {

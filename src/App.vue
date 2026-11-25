@@ -20,7 +20,7 @@ import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
 import {productTitle,type AboutInfo} from './about'
-import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
+import { managementChoice, NO_MANAGEMENT_FOLDER, previewedManagementChoice, selectedManagementFolder, type ManagementChoice } from './creation-management'
 import { ScopeCache } from './creation-scope-cache'
 import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
@@ -379,7 +379,11 @@ async function chooseManagementFolder(selected: string) {
     creationPreview.value=next
     previewedCreation.value=input
   }catch(e){
-    if(request===creationRescopeRequest)modalError.value=creationError(e)
+    // Select the option of the preview still on screen again, so "Create" sends what is shown.
+    if(request===creationRescopeRequest){
+      creationManagement.value=previewedManagementChoice(previewedCreation.value)
+      modalError.value=t('app.create.rescopeFailed',{error:creationError(e)})
+    }
   }finally{
     if(request===creationRescopeRequest)creationRescoping.value=false
   }

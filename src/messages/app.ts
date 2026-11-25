@@ -125,6 +125,7 @@ export const appMessages = {
   'app.create.alsoRegistered': ['自動登記為實例', 'Registered as instances'],
   'app.create.noCandidates': ['無', 'None'],
   'app.create.scanIncomplete': ['無法完整掃描這個資料夾，可能還有其他伺服器會被自動登記。可改選實例資料夾本身，或不加入管理資料夾。', 'This folder could not be fully scanned, so other servers may also be registered. Choose the instance folder itself or do not add a management folder.'],
+  'app.create.rescopeFailed': ['無法預覽這個管理資料夾選項，已改回原本的選項：{error}', 'Could not preview this management folder option, so the previous option is selected again: {error}'],
   'app.create.managementFolderNotAncestor': ['管理資料夾只能是實例資料夾本身或它的上層資料夾。', 'The management folder must be the instance folder itself or one of its parent folders.'],
   'app.create.builtinDefaults': ['此版本使用核心內建預設值。', 'This version uses the core’s built-in defaults.'],
   'app.create.workId': ['工作 ID', 'Job ID'],
