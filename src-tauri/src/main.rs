@@ -39,7 +39,7 @@ fn report_startup_timing(marks: std::collections::BTreeMap<String, f64>) -> Resu
 fn diagnostic_status() -> serde_json::Value {
     match diagnostics::global() {
         Ok(log) => log.status(),
-        Err(error) => json!({"available":false,"error":error}),
+        Err(error) => json!({"available":false,"error":error,"folder":diagnostics::log_folder()}),
     }
 }
 #[tauri::command]

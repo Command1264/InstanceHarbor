@@ -1,4 +1,8 @@
 //! Bounded, value-free GUI/IPC diagnostics. Never records command arguments or replies.
+//!
+//! One GUI launch writes `gui-<local start yyyyMMdd-HHmmss>-<pid>-<segment>.jsonl`. A full
+//! segment continues in the next one. The folder keeps a total budget by removing the oldest
+//! GUI logs of earlier launches; files of the current launch are never removed.
 use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -14,20 +18,27 @@ use std::{
 
 const FILE_LIMIT: u64 = 2 * 1024 * 1024;
 const DIRECTORY_LIMIT: u64 = 16 * 1024 * 1024;
+/// Room kept in every segment for the line that names the next segment.
+const SEGMENT_RESERVE: u64 = 256;
 pub struct Diagnostics {
-    path: PathBuf,
+    directory: PathBuf,
+    /// The folder as shown to the user, without the user profile path.
+    folder: String,
     state: Mutex<LogState>,
     limit: u64,
     budget: u64,
 }
 struct LogState {
     file: File,
+    path: PathBuf,
     bytes: u64,
-    capped: bool,
     reads: HashSet<String>,
     outcomes: HashMap<String, Value>,
     failure: Option<String>,
 }
+/// Segment numbers are shared by the whole process, so every file of one launch is distinct.
+static SEGMENT: AtomicU64 = AtomicU64::new(1);
+#[cfg(test)]
 static FILE_ID: AtomicU64 = AtomicU64::new(1);
 fn io_trace(stage: &str, error: std::io::Error) -> String {
     match error.raw_os_error() {
@@ -40,6 +51,56 @@ fn now() -> u128 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis()
+}
+/// Calendar fields of a Unix time in seconds (proleptic Gregorian, no leap seconds).
+#[cfg(any(test, not(windows)))]
+fn civil(seconds: u64) -> (u64, u64, u64, u64, u64, u64) {
+    let days = (seconds / 86_400) as i64;
+    let rest = seconds % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year as u64, month as u64, day as u64, rest / 3600, rest / 60 % 60, rest % 60)
+}
+#[cfg(windows)]
+fn local_stamp() -> String {
+    #[repr(C)]
+    #[derive(Default)]
+    struct SystemTimeFields {
+        year: u16,
+        month: u16,
+        day_of_week: u16,
+        day: u16,
+        hour: u16,
+        minute: u16,
+        second: u16,
+        milliseconds: u16,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetLocalTime(time: *mut SystemTimeFields);
+    }
+    let mut t = SystemTimeFields::default();
+    // SAFETY: GetLocalTime only fills the SYSTEMTIME structure it is given.
+    unsafe { GetLocalTime(&mut t) };
+    format!("{:04}{:02}{:02}-{:02}{:02}{:02}", t.year, t.month, t.day, t.hour, t.minute, t.second)
+}
+#[cfg(not(windows))]
+fn local_stamp() -> String {
+    let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let (y, mo, d, h, mi, s) = civil(seconds);
+    format!("{y:04}{mo:02}{d:02}-{h:02}{mi:02}{s:02}")
+}
+/// `gui-<local start time>-<pid>`, fixed for the whole launch so its segments sort together.
+fn launch_prefix() -> &'static str {
+    static PREFIX: OnceLock<String> = OnceLock::new();
+    PREFIX.get_or_init(|| format!("gui-{}-{}", local_stamp(), std::process::id()))
 }
 fn plain_path(path: &Path) -> Result<(), String> {
     let meta = fs::symlink_metadata(path).map_err(|e| io_trace("DiagnosticInspectPath", e))?;
@@ -55,43 +116,76 @@ fn plain_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+fn create_segment(directory: &Path) -> Result<(File, PathBuf), String> {
+    let mut attempts = 0;
+    loop {
+        let path = directory.join(format!(
+            "{}-{}.jsonl",
+            launch_prefix(),
+            SEGMENT.fetch_add(1, Ordering::Relaxed)
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((file, path)),
+            // A segment left by an earlier process with the same pid and second.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempts < 64 => {
+                attempts += 1
+            }
+            Err(e) => return Err(io_trace("DiagnosticCreateSession", e)),
+        }
+    }
+}
+/// Background queries that the GUI repeats on a timer. Their unchanged results are written once.
+fn periodic_read(action: &str) -> bool {
+    matches!(
+        action,
+        "list"
+            | "presentation"
+            | "presentation-metadata"
+            | "instance-snapshot"
+            | "preferences-snapshot"
+            | "status"
+            | "jobs"
+            | "batch-list"
+            | "instance-settings"
+            | "discover-java"
+            | "preview-java-discovery"
+            | "java-discovery-settings"
+            | "validate-java-discovery-settings"
+            | "world-settings"
+            | "world-batch-preview"
+            | "get-initialization"
+            | "logs"
+            | "core-batch-list"
+            | "core-batch-status"
+            | "core-state"
+            | "core-check"
+            | "core-catalog-versions"
+            | "core-catalog-build"
+            | "manager-connect"
+            | "world-live-values"
+            | "world-live-clock"
+            | "recovery-key-status"
+            | "scan-policy"
+            | "validate-scan-policy"
+    )
+}
 impl Diagnostics {
-    pub fn open(directory: &Path) -> Result<Self, String> {
-        Self::with_limit(directory, FILE_LIMIT, DIRECTORY_LIMIT)
+    /// Opens a new launch log in `directory`. `folder` is how messages name that folder.
+    pub fn open(directory: &Path, folder: String) -> Result<Self, String> {
+        let mut log = Self::with_limit(directory, FILE_LIMIT, DIRECTORY_LIMIT)?;
+        log.folder = folder;
+        Ok(log)
     }
     fn with_limit(directory: &Path, limit: u64, budget: u64) -> Result<Self, String> {
         plain_path(directory)?;
-        let used = fs::read_dir(directory)
-            .map_err(|e| io_trace("DiagnosticReadDirectory", e))?
-            .try_fold(0u64, |sum, entry| {
-                let entry = entry.map_err(|e| io_trace("DiagnosticReadEntry", e))?;
-                let meta = fs::symlink_metadata(entry.path()).map_err(|e| io_trace("DiagnosticInspectEntry", e))?;
-                Ok::<_, String>(sum.saturating_add(if meta.is_file() { meta.len() } else { 0 }))
-            })?;
-        // Reserve one whole session without deleting any previous diagnostic evidence.
-        if used.saturating_add(limit) > budget {
-            return Err("DiagnosticDirectoryBudgetReached".into());
-        }
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let path = directory.join(format!(
-            "gui-{}-{stamp}-{}.jsonl",
-            std::process::id(),
-            FILE_ID.fetch_add(1, Ordering::Relaxed)
-        ));
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|e| io_trace("DiagnosticCreateSession", e))?;
+        let (file, path) = create_segment(directory)?;
         Ok(Self {
-            path,
+            directory: directory.to_path_buf(),
+            folder: directory.to_string_lossy().into_owned(),
             state: Mutex::new(LogState {
                 file,
+                path,
                 bytes: 0,
-                capped: false,
                 reads: HashSet::new(),
                 outcomes: HashMap::new(),
                 failure: None,
@@ -100,34 +194,18 @@ impl Diagnostics {
             budget,
         })
     }
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// The segment written now.
+    pub fn path(&self) -> PathBuf {
+        match self.state.lock() {
+            Ok(state) => state.path.clone(),
+            Err(poisoned) => poisoned.into_inner().path.clone(),
+        }
     }
     pub fn runtime_result(&self, result: &Result<(), String>) -> Result<(), String> {
         self.record(json!({"type":"gui-exit","ok":result.is_ok(),"error":result.as_ref().err().map(|e|safe_error(e))}))
     }
     pub fn begin(&self, id: u64, action: &str, origin: &str) -> Result<(), String> {
-        let read = matches!(
-            action,
-            "list"
-                | "presentation"
-                | "presentation-metadata"
-                | "instance-snapshot"
-                | "preferences-snapshot"
-                | "status"
-                | "jobs"
-                | "batch-list"
-                | "instance-settings"
-                | "discover-java"
-                | "preview-java-discovery"
-                | "java-discovery-settings"
-                | "validate-java-discovery-settings"
-                | "world-settings"
-                | "world-batch-preview"
-                | "get-initialization"
-                | "logs"
-        );
-        let sample = read && origin != "manual";
+        let sample = periodic_read(action) && origin != "manual";
         let key = format!("begin:{action}");
         if sample
             && self
@@ -152,9 +230,9 @@ impl Diagnostics {
     pub fn status(&self) -> Value {
         match self.state.lock() {
             Ok(s) => {
-                json!({"path":self.path,"available":!s.capped&&s.failure.is_none(),"error":s.failure})
+                json!({"path":s.path,"folder":self.folder,"available":s.failure.is_none(),"error":s.failure})
             }
-            Err(_) => json!({"available":false,"error":"DiagnosticLockPoisoned"}),
+            Err(_) => json!({"folder":self.folder,"available":false,"error":"DiagnosticLockPoisoned"}),
         }
     }
     pub fn record(&self, event: Value) -> Result<(), String> {
@@ -168,16 +246,12 @@ impl Diagnostics {
     }
     fn write(&self, event: Value) -> Result<(), String> {
         let mut state = self.state.lock().map_err(|_| "DiagnosticLockPoisoned")?;
-        if state.capped {
-            return Err("DiagnosticSessionLimitReached".into());
-        }
         let mut bytes = serde_json::to_vec(
             &json!({"schema":"ih-gui-diagnostic/v1","timeUnixMs":now(),"event":event}),
         )
         .map_err(|e| e.to_string())?;
         bytes.push(b'\n');
-        let directory = self.path.parent().ok_or("InvalidDiagnosticDirectory")?;
-        let lock_path = directory.join(".budget.lock");
+        let lock_path = self.directory.join(".budget.lock");
         if lock_path.exists() {
             plain_path(&lock_path)?
         }
@@ -199,27 +273,67 @@ impl Diagnostics {
                 }
             }
         }
-        let used = fs::read_dir(directory)
-            .map_err(|e| io_trace("DiagnosticReadDirectory", e))?
-            .try_fold(0u64, |sum, entry| {
-                let meta = fs::symlink_metadata(entry.map_err(|e| io_trace("DiagnosticReadEntry", e))?.path())
-                    .map_err(|e| io_trace("DiagnosticInspectEntry", e))?;
-                Ok::<_, String>(sum.saturating_add(if meta.is_file() { meta.len() } else { 0 }))
-            })?;
-        if used.saturating_add(bytes.len() as u64 + 256) > self.budget {
-            return Err("DiagnosticDirectoryBudgetReached".into());
+        // An event larger than a whole segment still gets a segment of its own.
+        let rotate = state.bytes > 0 && state.bytes + bytes.len() as u64 + SEGMENT_RESERVE > self.limit;
+        let mut needed = bytes.len() as u64;
+        if rotate {
+            needed += SEGMENT_RESERVE
         }
-        if state.bytes + bytes.len() as u64 + 256 > self.limit {
-            let marker=b"{\"schema\":\"ih-gui-diagnostic/v1\",\"event\":{\"type\":\"session-limit-reached\"}}\n";
-            state.file.write_all(marker).map_err(|e| io_trace("DiagnosticWriteSession", e))?;
-            state.file.flush().map_err(|e| io_trace("DiagnosticFlushSession", e))?;
-            state.bytes += marker.len() as u64;
-            state.capped = true;
-            return Err("DiagnosticSessionLimitReached".into());
+        self.make_room(needed)?;
+        if rotate {
+            let (file, path) = create_segment(&self.directory)?;
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            let marker = serde_json::to_vec(&json!({"schema":"ih-gui-diagnostic/v1","timeUnixMs":now(),"event":{"type":"segment-full","next":name}}))
+                .map_err(|e| e.to_string())?;
+            state.file.write_all(&marker).and_then(|()| state.file.write_all(b"\n"))
+                .and_then(|()| state.file.flush())
+                .map_err(|e| io_trace("DiagnosticWriteSession", e))?;
+            state.file = file;
+            state.path = path;
+            state.bytes = 0;
         }
         state.file.write_all(&bytes).map_err(|e| io_trace("DiagnosticWriteSession", e))?;
         state.file.flush().map_err(|e| io_trace("DiagnosticFlushSession", e))?;
         state.bytes += bytes.len() as u64;
+        Ok(())
+    }
+    /// Keeps the folder within its budget. Only GUI logs (`gui-*.jsonl`, both the current and
+    /// the pre-1.1 name format) of other launches are removed, the least recently written first.
+    fn make_room(&self, needed: u64) -> Result<(), String> {
+        let own = format!("{}-", launch_prefix());
+        let mut used = 0u64;
+        let mut removable = Vec::new();
+        for entry in fs::read_dir(&self.directory).map_err(|e| io_trace("DiagnosticReadDirectory", e))? {
+            let entry = entry.map_err(|e| io_trace("DiagnosticReadEntry", e))?;
+            let meta = match fs::symlink_metadata(entry.path()) {
+                Ok(meta) => meta,
+                // Another GUI of this folder removed it meanwhile.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(io_trace("DiagnosticInspectEntry", e)),
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            used = used.saturating_add(meta.len());
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("gui-") && name.ends_with(".jsonl") && !name.starts_with(&own) {
+                let modified = meta.modified().unwrap_or(UNIX_EPOCH);
+                removable.push((modified, name, meta.len()));
+            }
+        }
+        removable.sort();
+        let mut oldest = removable.into_iter();
+        while used.saturating_add(needed) > self.budget {
+            let Some((_, name, length)) = oldest.next() else {
+                return Err("DiagnosticDirectoryBudgetReached".into());
+            };
+            match fs::remove_file(self.directory.join(&name)) {
+                Ok(()) => used = used.saturating_sub(length),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => used = used.saturating_sub(length),
+                // A file another GUI still holds stays; the next oldest one is tried.
+                Err(_) => {}
+            }
+        }
         Ok(())
     }
     pub fn ipc(
@@ -230,35 +344,19 @@ impl Diagnostics {
         elapsed: u128,
         result: &Result<Value, String>,
     ) -> Result<(), String> {
-        let read = matches!(
-            action,
-            "list"
-                | "presentation"
-                | "presentation-metadata"
-                | "instance-snapshot"
-                | "preferences-snapshot"
-                | "status"
-                | "jobs"
-                | "batch-list"
-                | "instance-settings"
-                | "discover-java"
-                | "preview-java-discovery"
-                | "java-discovery-settings"
-                | "validate-java-discovery-settings"
-                | "world-settings"
-                | "get-initialization"
-                | "logs"
-        );
+        let read = periodic_read(action);
         let tracked_failure = matches!(action, "instance-snapshot" | "preferences-snapshot")
             || (action == "jobs" && result.as_ref().is_err_and(|error| {
                 error.starts_with("InvalidInstanceRecord") || error.starts_with("FileAccess[")
             }));
         let sample = (result.is_ok() || tracked_failure) && read && origin == "background";
         let count = result.as_ref().ok().and_then(|v| {
-            if action == "list" {
+            if matches!(action, "list" | "batch-list" | "jobs" | "core-batch-list") {
                 v.as_array().map(Vec::len)
             } else if matches!(action, "presentation" | "presentation-metadata" | "instance-snapshot") {
                 v.get("instances").and_then(Value::as_array).map(Vec::len)
+            } else if action == "core-check" {
+                v.get("rows").and_then(Value::as_array).map(Vec::len)
             } else {
                 None
             }
@@ -479,21 +577,34 @@ pub fn path_fingerprint(path: &Path) -> String {
 fn log_folder_parts<'a>(app_directory: &'a str, workspace: Option<&'a str>) -> Vec<&'a str> {
     [app_directory, "logs"].into_iter().chain(workspace).collect()
 }
+/// How messages name a log folder: `%LOCALAPPDATA%/<parts>`, never the user profile path.
+fn display_folder(parts: &[&str]) -> String {
+    format!("%LOCALAPPDATA%/{}", parts.join("/"))
+}
+fn channel_log_parts() -> (&'static str, Option<String>) {
+    #[cfg(windows)]
+    {
+        (crate::desktop_channel::APP_DIRECTORY, crate::desktop_channel::workspace_name())
+    }
+    #[cfg(not(windows))]
+    {
+        ("InstanceHarbor", None)
+    }
+}
+/// The GUI log folder of this channel and workspace, as messages show it.
+pub fn log_folder() -> String {
+    let (app_directory, workspace) = channel_log_parts();
+    display_folder(&log_folder_parts(app_directory, workspace.as_deref()))
+}
 static GLOBAL: OnceLock<Result<Diagnostics, String>> = OnceLock::new();
 pub fn global() -> Result<&'static Diagnostics, String> {
     GLOBAL
         .get_or_init(|| {
             let mut root =
                 PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("MissingLocalAppData")?);
-            #[cfg(windows)]
-            let app_directory = crate::desktop_channel::APP_DIRECTORY;
-            #[cfg(not(windows))]
-            let app_directory = "InstanceHarbor";
-            #[cfg(windows)]
-            let workspace = crate::desktop_channel::workspace_name();
-            #[cfg(not(windows))]
-            let workspace: Option<String> = None;
-            for part in log_folder_parts(app_directory, workspace.as_deref()) {
+            let (app_directory, workspace) = channel_log_parts();
+            let parts = log_folder_parts(app_directory, workspace.as_deref());
+            for part in &parts {
                 root.push(part);
                 match fs::create_dir(&root) {
                     Ok(()) => {}
@@ -502,7 +613,7 @@ pub fn global() -> Result<&'static Diagnostics, String> {
                 }
                 plain_path(&root)?;
             }
-            Diagnostics::open(&root)
+            Diagnostics::open(&root, display_folder(&parts))
         })
         .as_ref()
         .map_err(Clone::clone)
@@ -543,7 +654,7 @@ mod tests {
     #[test]
     fn records_os_code_and_context_without_argument_or_response_values() {
         let p = folder();
-        let d = Diagnostics::open(&p).unwrap();
+        let d = Diagnostics::open(&p, String::new()).unwrap();
         d.ipc(1,"save-preferences","manual",5,&Err("FileAccess[replace] path=C:/SECRET_TEST_VALUE/preferences.json: Access denied (os error 5)".into())).unwrap();
         d.ipc(
             2,
@@ -569,7 +680,7 @@ mod tests {
         assert!(s.contains("preferences.json"));
         assert!(s.contains("\"rowCount\":1"));
         assert!(s.contains("\"hresult\":\"80070005\""));
-        let file = d.path.clone();
+        let file = d.path();
         drop(d);
         cleanup(p, file);
     }
@@ -583,7 +694,7 @@ mod tests {
     #[test]
     fn background_success_is_sampled_but_errors_and_manual_results_are_kept() {
         let p = folder();
-        let d = Diagnostics::open(&p).unwrap();
+        let d = Diagnostics::open(&p, String::new()).unwrap();
         for _ in 0..5 {
             d.ipc(1, "list", "background", 1, &Ok(json!([]))).unwrap()
         }
@@ -591,14 +702,14 @@ mod tests {
         d.ipc(3, "list", "background", 1, &Err("ManagerBusy".into()))
             .unwrap();
         assert_eq!(fs::read_to_string(d.path()).unwrap().lines().count(), 3);
-        let f = d.path.clone();
+        let f = d.path();
         drop(d);
         cleanup(p, f);
     }
     #[test]
     fn background_row_count_changes_and_recovery_remain_visible() {
         let p = folder();
-        let d = Diagnostics::open(&p).unwrap();
+        let d = Diagnostics::open(&p, String::new()).unwrap();
         for (id, count) in [(1, 5), (2, 5), (3, 0), (4, 0), (5, 5)] {
             d.ipc(
                 id,
@@ -623,32 +734,169 @@ mod tests {
         assert_eq!(events[2]["rowCount"], 5);
         assert_eq!(events[3]["ok"], false);
         assert_eq!(events[4]["ok"], true);
-        let f = d.path.clone();
+        let f = d.path();
         drop(d);
         cleanup(p, f);
     }
-    #[test]
-    fn budgets_preserve_old_logs_and_cap_current_session() {
-        let p = folder();
-        let d = Diagnostics::with_limit(&p, 1024, 2048).unwrap();
-        for _ in 0..20 {
-            let _ = d.record(json!({"type":"test","padding":"x".repeat(90)}));
-        }
-        assert!(fs::metadata(d.path()).unwrap().len() <= 1024);
-        assert!(fs::read_to_string(d.path())
+    fn names(p: &Path) -> Vec<String> {
+        let mut names: Vec<_> = fs::read_dir(p)
             .unwrap()
-            .contains("session-limit-reached"));
-        assert!(Diagnostics::with_limit(&p, 2048, 2048).is_err());
-        assert_eq!(d.status()["available"], false);
-        let f = d.path.clone();
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".jsonl"))
+            .collect();
+        names.sort();
+        names
+    }
+    fn remove_folder(p: PathBuf) {
+        for entry in fs::read_dir(&p).unwrap() {
+            fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        fs::remove_dir(p).unwrap()
+    }
+    fn aged(path: &Path, bytes: usize, seconds_ago: u64) {
+        fs::write(path, vec![b'x'; bytes]).unwrap();
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        file.set_modified(SystemTime::now() - std::time::Duration::from_secs(seconds_ago))
+            .unwrap();
+    }
+    #[test]
+    fn launch_prefix_names_the_local_start_second_and_process() {
+        let prefix = launch_prefix();
+        let parts: Vec<_> = prefix.split('-').collect();
+        assert_eq!(parts[0], "gui");
+        assert!(parts[1].len() == 8 && parts[1].chars().all(|c| c.is_ascii_digit()));
+        assert!(parts[2].len() == 6 && parts[2].chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(parts[3], std::process::id().to_string());
+        assert_eq!(parts.len(), 4);
+        assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
+        assert_eq!(civil(1_795_586_655), (2026, 11, 25, 6, 4, 15));
+    }
+    #[test]
+    fn full_segment_continues_in_the_next_numbered_file() {
+        let p = folder();
+        let d = Diagnostics::with_limit(&p, 1024, 1024 * 1024).unwrap();
+        let first = d.path();
+        for id in 0..20 {
+            d.record(json!({"type":"test","id":id,"padding":"x".repeat(90)}))
+                .unwrap();
+        }
+        let files = names(&p);
+        assert!(files.len() >= 3, "{files:?}");
+        let prefix = format!("{}-", launch_prefix());
+        let mut segments: Vec<u64> = files
+            .iter()
+            .map(|n| {
+                n.strip_prefix(&prefix).unwrap().strip_suffix(".jsonl").unwrap().parse().unwrap()
+            })
+            .collect();
+        segments.sort();
+        assert!(segments.windows(2).all(|w| w[0] < w[1]));
+        assert_ne!(d.path(), first);
+        let mut ids = Vec::new();
+        for name in &files {
+            let path = p.join(name);
+            assert!(fs::metadata(&path).unwrap().len() <= 1024);
+            for line in fs::read_to_string(path).unwrap().lines() {
+                let event = &serde_json::from_str::<Value>(line).unwrap()["event"];
+                if event["type"] == "test" {
+                    ids.push(event["id"].as_u64().unwrap())
+                }
+            }
+        }
+        ids.sort();
+        assert_eq!(ids, (0..20).collect::<Vec<_>>());
+        assert_eq!(d.status()["available"], true);
         drop(d);
-        cleanup(p, f);
+        remove_folder(p);
+    }
+    #[test]
+    fn directory_budget_removes_the_oldest_logs_of_earlier_launches_only() {
+        let p = folder();
+        // An old-format log, a newer launch, and a file that is not a GUI log.
+        let legacy = p.join("gui-4242-1795400000000000000-1.jsonl");
+        let earlier = p.join("gui-20261124-210000-4343-1.jsonl");
+        let notes = p.join("notes.txt");
+        aged(&legacy, 1500, 7200);
+        aged(&earlier, 1500, 3600);
+        aged(&notes, 500, 10800);
+        let d = Diagnostics::with_limit(&p, 1024, 4096).unwrap();
+        for id in 0..8 {
+            d.record(json!({"type":"test","id":id,"padding":"x".repeat(90)}))
+                .unwrap();
+        }
+        assert!(!legacy.exists(), "the oldest earlier-launch log goes first");
+        assert!(earlier.exists());
+        assert!(notes.exists());
+        for id in 8..20 {
+            let _ = d.record(json!({"type":"test","id":id,"padding":"x".repeat(90)}));
+        }
+        assert!(!earlier.exists());
+        assert!(notes.exists());
+        // Files of the current launch are never removed, so every written event stays.
+        let prefix = format!("{}-", launch_prefix());
+        let own: Vec<_> = names(&p).into_iter().filter(|n| n.starts_with(&prefix)).collect();
+        let written = own
+            .iter()
+            .flat_map(|n| fs::read_to_string(p.join(n)).unwrap().lines().map(String::from).collect::<Vec<_>>())
+            .filter(|line| line.contains("\"type\":\"test\""))
+            .count();
+        let total: u64 = fs::read_dir(&p)
+            .unwrap()
+            .map(|e| e.unwrap().metadata().unwrap().len())
+            .sum();
+        assert!(total <= 4096, "{total}");
+        assert!(written >= 8);
+        if written < 20 {
+            assert_eq!(d.status()["error"], "DiagnosticDirectoryBudgetReached");
+        }
+        drop(d);
+        remove_folder(p);
+    }
+    #[test]
+    fn periodic_background_queries_are_written_only_when_their_result_changes() {
+        let p = folder();
+        let d = Diagnostics::open(&p, "%LOCALAPPDATA%/InstanceHarbor/logs".into()).unwrap();
+        let periodic = [
+            ("core-batch-list", json!([])),
+            ("core-state", json!({"reason":null})),
+            ("core-check", json!({"rows":[],"checkedAt":1})),
+            ("manager-connect", json!(null)),
+            ("world-live-values", json!({})),
+            ("world-live-clock", json!({"run":"r","value":"1"})),
+            ("recovery-key-status", json!({})),
+            ("core-catalog-versions", json!({"versions":[]})),
+            ("core-catalog-build", json!({})),
+            ("scan-policy", json!({"revision":"r"})),
+        ];
+        for id in 0..5 {
+            for (action, reply) in &periodic {
+                d.begin(id, action, "background").unwrap();
+                d.ipc(id, action, "background", 1, &Ok(reply.clone())).unwrap();
+            }
+        }
+        let lines = fs::read_to_string(d.path()).unwrap().lines().count();
+        assert_eq!(lines, periodic.len() * 2);
+        // A changed batch count is still evidence.
+        d.ipc(9, "core-batch-list", "background", 1, &Ok(json!([{"state":"Running"}])))
+            .unwrap();
+        assert_eq!(fs::read_to_string(d.path()).unwrap().lines().count(), lines + 1);
+        drop(d);
+        remove_folder(p);
+    }
+    #[test]
+    fn status_names_the_log_folder_of_this_channel_without_the_user_profile() {
+        let p = folder();
+        let d = Diagnostics::open(&p, display_folder(&["InstanceHarbor Dev", "logs", "agent-71"])).unwrap();
+        assert_eq!(d.status()["folder"], "%LOCALAPPDATA%/InstanceHarbor Dev/logs/agent-71");
+        assert_eq!(d.status()["available"], true);
+        drop(d);
+        remove_folder(p);
     }
     #[test]
     fn concurrent_sessions_keep_complete_json_and_distinct_files() {
         let p = folder();
-        let sessions: Vec<_> = (0..4).map(|_| Diagnostics::open(&p).unwrap()).collect();
-        let paths: Vec<_> = sessions.iter().map(|d| d.path.clone()).collect();
+        let sessions: Vec<_> = (0..4).map(|_| Diagnostics::open(&p, String::new()).unwrap()).collect();
+        let paths: Vec<_> = sessions.iter().map(|d| d.path()).collect();
         assert_eq!(paths.iter().collect::<HashSet<_>>().len(), 4);
         let threads: Vec<_> = sessions
             .into_iter()
@@ -680,18 +928,19 @@ mod tests {
         fs::remove_dir(p).unwrap();
     }
     #[test]
-    fn shared_directory_budget_does_not_overwrite_prior_evidence() {
+    fn files_that_are_not_gui_logs_are_never_removed_for_the_budget() {
         let p = folder();
         let old = p.join("old.jsonl");
         fs::write(&old, "prior evidence").unwrap();
         let d = Diagnostics::with_limit(&p, 1024, 2048).unwrap();
         let external = p.join("other-session.jsonl");
-        fs::write(&external, vec![b'x'; 1800]).unwrap();
+        fs::write(&external, vec![b'x'; 2000]).unwrap();
         assert!(d.begin(1, "list", "manual").is_err());
+        assert_eq!(d.status()["error"], "DiagnosticDirectoryBudgetReached");
         assert_eq!(d.status()["available"], false);
         assert_eq!(fs::read_to_string(&old).unwrap(), "prior evidence");
         assert_eq!(fs::metadata(d.path()).unwrap().len(), 0);
-        let f = d.path.clone();
+        let f = d.path();
         drop(d);
         fs::remove_file(old).unwrap();
         fs::remove_file(external).unwrap();
@@ -701,7 +950,7 @@ mod tests {
     fn bounded_wait_keeps_contended_event_and_failed_sample_can_retry() {
         use std::sync::Arc;
         let p = folder();
-        let d = Arc::new(Diagnostics::open(&p).unwrap());
+        let d = Arc::new(Diagnostics::open(&p, String::new()).unwrap());
         let lock = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -741,7 +990,7 @@ mod tests {
         .unwrap();
         assert_eq!(fs::read_to_string(d.path()).unwrap().lines().count(), 2);
         assert_eq!(d.status()["available"], false); // a lost event is never hidden by a later success
-        let f = d.path.clone();
+        let f = d.path();
         drop(d);
         cleanup(p, f);
     }

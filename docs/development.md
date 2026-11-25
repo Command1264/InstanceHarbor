@@ -644,6 +644,14 @@ GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 | WebView2 資料 | `<應用程式資料夾>\webview`（正式）、`InstanceHarbor Dev\webviews\<名稱>`（開發） | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
 | Setup 安裝位置 | `Programs\InstanceHarbor` | 解除安裝登錄 `InstanceHarbor-Desktop`，安裝租約檔 `instanceharbor.install` |
 
+GUI 診斷紀錄每次啟動寫一組檔案，檔名為 `gui-<GUI 啟動的本機時間 yyyyMMdd-HHmmss>-<PID>-<分段序號>.jsonl`，
+例如 `gui-20261125-060415-56824-1.jsonl`。單檔寫到 2 MiB 時，最後一行寫入 `segment-full` 事件與下一段的檔名，
+接著在 `-2.jsonl` 繼續記錄。資料夾總量超過 16 MiB 時，從最久沒有寫入、而且不屬於目前這次啟動的 `gui-*.jsonl`
+開始刪除，1.0.x 的舊檔名（`gui-<PID>-<奈秒>-<序號>.jsonl`）也一起計算；其他檔案只計入容量，不會被刪除。
+目前這次啟動本身寫滿 16 MiB 時，之後的事件不再記錄，GUI 顯示容量上限的提示。
+每隔幾秒重複的背景查詢（例如 `core-batch-list`、`jobs`、`core-state`、`world-live-values`）只在第一次與結果改變時寫入；
+比較的是筆數與錯誤代碼，不比較回傳值。真的無法寫入（磁碟已滿、沒有存取權）時，GUI 警告並顯示上表的資料夾。
+
 1.0 之前的版本把 WebView2 資料放在 `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`）。
 裡面只有介面快取，1.0 不再使用，可以手動刪除。`<應用程式資料夾>` 下的 `diagnostics` 與 `lifecycle` 屬於 V1，1.0 不讀寫它們。
 
