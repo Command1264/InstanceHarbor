@@ -6,6 +6,7 @@ pub use windows::{
     ConsoleRequest, ConsoleViewer, CreationPhase,
 };
 pub mod about;
+pub mod app_icon;
 pub mod build_commit;
 pub mod diagnostics;
 

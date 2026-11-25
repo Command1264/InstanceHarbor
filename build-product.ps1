@@ -25,7 +25,10 @@ try {
     $env:IH_BUILD_COMMIT=$commit
     $frontendDirectory=if($Development){'dist-dev'}else{'dist'}
     $npm=& (Join-Path $PSScriptRoot 'resolve-npm.ps1')
-    & $npm run build -- --outDir $frontendDirectory
+    $viteArgs=@('--outDir',$frontendDirectory)
+    # The development mode makes Vite use the red sidebar brand image (vite.config.ts).
+    if($Development){$viteArgs+=@('--mode','development-channel')}
+    & $npm run build -- @viteArgs
     $cargoArgs=@('build','--offline','--locked','--manifest-path','src-tauri/Cargo.toml')
     if($Development){
         $cargoArgs+=@('--profile','dev-channel','--target','x86_64-pc-windows-msvc','--features','development-channel')
@@ -53,6 +56,17 @@ try {
     $cliVersion=(& $builtCli --version|Out-String).Trim()
     if(!$cliVersion.EndsWith(" ($commit)")){throw "ihctl 未包含本次建置的 commit（$commit）：$cliVersion"}
     foreach($asset in $assets){if(!$binaryText.Contains($asset)){throw "原生候選未包含最新前端資產：$asset"}}
+    # Blue icons for the product and acceptance builds, red ones for development only.
+    $iconFiles=@{product='src-tauri/icons/icon.ico';development='src-tauri/icons/icon-dev.ico'}
+    $brandFiles=@{product='src/assets/instanceharbor-brand.png';development='src/assets/instanceharbor-brand-dev.png'}
+    $channel=if($Development){'development'}else{'product'}
+    $otherChannel=if($Development){'product'}else{'development'}
+    foreach($executable in @($builtBinary,$builtCli)){
+        & (Join-Path $PSScriptRoot 'verify-app-icon.ps1') -Binary $executable -Expected $iconFiles[$channel]|Out-Null
+    }
+    $brandHashes=@(Get-ChildItem -LiteralPath (Join-Path $frontendDirectory 'assets') -Filter '*.png'|ForEach-Object{(Get-FileHash -LiteralPath $_.FullName).Hash})
+    if($brandHashes -notcontains (Get-FileHash -LiteralPath $brandFiles[$channel]).Hash){throw "前端未包含 $($brandFiles[$channel]) 的側欄品牌圖。"}
+    if($brandHashes -contains (Get-FileHash -LiteralPath $brandFiles[$otherChannel]).Hash){throw "前端誤含 $($brandFiles[$otherChannel]) 的側欄品牌圖。"}
     $folder=Join-Path $PSScriptRoot $(if($Development){'.evidence/windows-x64-development'}elseif($Release){'.evidence/windows-x64-release'}else{'.evidence/vue-product-20261109'})
     $binary=$builtBinary
     $cli=$builtCli

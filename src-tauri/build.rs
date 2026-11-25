@@ -1,3 +1,5 @@
+#[path = "src/app_icon.rs"]
+mod app_icon;
 #[path = "src/build_commit.rs"]
 mod build_commit;
 
@@ -59,9 +61,13 @@ fn main() {
         Err(_) => commit_from_git(),
     };
     println!("cargo:rustc-env={}={commit}", build_commit::VARIABLE);
+    let development = std::env::var_os("CARGO_FEATURE_DEVELOPMENT_CHANNEL").is_some();
+    // Blue for the product, red for the development channel; see app_icon.rs.
+    let icon = app_icon::for_channel(development);
+    println!("cargo:rerun-if-changed={icon}");
+    println!("cargo:rustc-env={}={icon}", app_icon::VARIABLE);
     // The executable embeds Vite assets, including files whose hashed names change.
-    println!("cargo:rerun-if-changed=icons/icon.ico");
-    if std::env::var_os("CARGO_FEATURE_DEVELOPMENT_CHANNEL").is_some() {
+    if development {
         const DEV_CONFIG: &str = r#"{
             "productName":"InstanceHarbor Dev",
             "identifier":"local.instanceharbor.dev",
@@ -74,5 +80,8 @@ fn main() {
     } else {
         println!("cargo:rerun-if-changed=../dist");
     }
-    tauri_build::build();
+    let windows = tauri_build::WindowsAttributes::new().window_icon_path(icon);
+    if let Err(error) = tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows)) {
+        panic!("error while running the Tauri build helpers: {error:#}");
+    }
 }
