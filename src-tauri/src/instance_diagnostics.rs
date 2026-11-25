@@ -284,7 +284,7 @@ fn configured_endpoint(item: &Instance) -> SocketAddrV4 {
 }
 
 fn active(root: &Path, name: &str) -> Result<Instance> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidInstanceName".into());
     }
     child_directory(root, "registry")?;
@@ -320,7 +320,7 @@ fn select_proxy(root: &Path, explicit: Option<&str>) -> Result<Option<Instance>>
         let name = path
             .file_stem()
             .and_then(|name| name.to_str())
-            .filter(|name| token(name))
+            .filter(|name| instance_name(name))
             .ok_or("ProxyUnavailable")?;
         let item: Instance =
             serde_json::from_slice(&bounded(&path, CONFIG_LIMIT)?).map_err(fail)?;
@@ -856,7 +856,7 @@ pub(super) fn inspect(root: &Path, args: &[String]) -> Result<Value> {
         ),
         _ => return Err("InvalidDiagnosticArguments".into()),
     };
-    if options.proxy.as_deref().is_some_and(|value| !token(value))
+    if options.proxy.as_deref().is_some_and(|value| !instance_name(value))
         || options.route.as_deref().is_some_and(|value| !label(value))
         || options
             .plugin

@@ -78,7 +78,7 @@ fn doctor(root: &Path, name: Option<&str>) -> Result<Value> {
     );
     let mut observed = None;
     if let Some(name) = name {
-        if !token(name) {
+        if !instance_name(name) {
             return Err("InvalidInstanceName".into());
         }
         match instance(root, name) {
@@ -239,7 +239,7 @@ fn configured_drift(
 }
 
 fn defaults_diff(root: &Path, name: &str) -> Result<Value> {
-    if !token(name) || !admitted(root, name)? {
+    if !instance_name(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
     let config = instance(root, name)?;

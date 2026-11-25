@@ -13,7 +13,7 @@ fn directory(root: &Path, create: bool) -> Result<Option<PathBuf>> {
 }
 
 fn path(root: &Path, kind: &str, name: &str, create: bool) -> Result<Option<PathBuf>> {
-    if !matches!(kind, "instance" | "world") || !token(name) {
+    if !matches!(kind, "instance" | "world") || !instance_name(name) {
         return Err("InvalidDeferredSettingsTarget".into());
     }
     Ok(directory(root, create)?.map(|folder| folder.join(format!("{kind}-{name}.json"))))
