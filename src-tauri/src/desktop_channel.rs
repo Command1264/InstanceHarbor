@@ -53,7 +53,7 @@ pub fn workspace_of(root: &Path) -> Option<String> {
     channel_workspace(DEVELOPMENT, Some(root))
 }
 
-fn product_title_for(development: bool, workspace: Option<&str>) -> String {
+pub fn product_title_for(development: bool, workspace: Option<&str>) -> String {
     let title = if development { TITLE_DEVELOPMENT } else { TITLE_STABLE };
     match workspace.filter(|_| development) {
         Some(name) => format!("{title} \u{2014} {name}"),
@@ -104,7 +104,7 @@ pub fn gui_lock_name(workspace: Option<&str>) -> String {
     gui_lock_name_for(DEVELOPMENT, workspace)
 }
 
-fn app_user_model_id_for(development: bool, workspace: Option<&str>) -> String {
+pub fn app_user_model_id_for(development: bool, workspace: Option<&str>) -> String {
     match (development, workspace) {
         (false, _) => IDENTIFIER_STABLE.into(),
         (true, None) => IDENTIFIER_DEVELOPMENT.into(),

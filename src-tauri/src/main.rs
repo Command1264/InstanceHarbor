@@ -691,7 +691,12 @@ fn main() {
                     eprintln!("Could not fit the main window to the work area: {error}");
                 }
                 match window.hwnd() {
-                    Ok(handle) => exit_watchdog::watch(handle.0 as isize),
+                    Ok(handle) => {
+                        if let Err(error) = workspace_binding::name_taskbar_window(handle.0 as _) {
+                            eprintln!("Could not name the taskbar Jump List: {error}");
+                        }
+                        exit_watchdog::watch(handle.0 as isize)
+                    }
                     Err(error) => eprintln!("GUI exit watchdog cannot see the main window: {error}"),
                 }
                 window.on_window_event(|event| {

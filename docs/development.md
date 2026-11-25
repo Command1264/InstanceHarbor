@@ -562,6 +562,7 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 | 重複啟動 | 叫出原視窗 | 只叫出同一工作區的視窗（以執行檔與含工作區的視窗標題比對） |
 | WebView2 資料 | `InstanceHarbor\webview` | `InstanceHarbor Dev\webviews\<工作區名稱>` |
 | 工作列身分（AppUserModelID） | Windows 預設 | `local.instanceharbor.dev.<工作區鍵>`，每個工作區一個工作列按鈕 |
+| 工作列右鍵清單（Jump List）的程式名稱 | 安裝捷徑的名稱 | `InstanceHarbor Dev — <工作區名稱>`。主視窗以 `SHGetPropertyStoreForWindow` 設定 `System.AppUserModel.RelaunchDisplayNameResource` 與 `RelaunchCommand`，只存在視窗上，不寫登錄也不建捷徑；從清單點名稱重新開啟時沒有 `IH_WORKSPACE`，會提示改用啟動腳本 |
 | 主視窗、工作列、系統匣提示、訊息框 | `InstanceHarbor` | `InstanceHarbor Dev — <工作區名稱>` |
 | 伺服器後台視窗 | 原標題 | 原標題後加上 `[InstanceHarbor Dev — <工作區名稱>]` |
 | 側欄名稱、「關於」 | `InstanceHarbor` | 側欄第一行 `InstanceHarbor Dev`，第二行工作區名稱；「關於」另列「開發工作區」與 Git commit |
