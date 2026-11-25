@@ -26,5 +26,6 @@ export const stateTones = {
   Stopping: 'warn',
   PortOccupied: 'error',
   RunUnconfirmed: 'error',
+  StateUnconfirmed: 'error',
   Stopped: 'muted',
 } as const satisfies Record<string, 'ok' | 'warn' | 'error' | 'muted'>

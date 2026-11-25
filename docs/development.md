@@ -122,6 +122,17 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
   清單不建立或寫入 `manager.lock`。如果兩次檢查間資料仍變動，短暫重讀後回報清單尚未核對。
 - 清單有個別異常時，GUI 仍顯示其餘可核對的實例，並列出檔名和原因。
   若無法排除登記衝突，啟動會被拒絕。已核對的運行中實例仍可正常停止。
+- 每個 `issues` 項目帶 `stage`：`registration` 是登記檔本身無法讀取，`observation` 是登記可讀、但讀取狀態、
+  核對管理範圍或解析實例資料夾失敗。`observation` 另帶 `name`、`code`（錯誤開頭的穩定代碼，例如
+  `PathRedirected`、`FileAccess`、`OsError`、`InvalidStateFile`）與 `osError`，原因 `reason` 可能是
+  `FileInUse`、`AccessDenied`、`PathRedirected`、`InvalidStateFile` 或 `ObservationUnconfirmed`。原始錯誤可能含使用者路徑，
+  所以只保留代碼、結尾的 OS 錯誤碼與 `FileAccess` 的階段和檔案類別。
+- 狀態無法讀取的實例仍留在 `rows`，`state` 為 `StateUnconfirmed`，`stateIssue` 帶同樣的原因。GUI 在清單列與詳細資料
+  顯示原因，這台實例在狀態核對前不能啟動、停止或移除；系統匣「結束」把它算成不是已停止。只有實例資料夾無法解析時，
+  列保留讀到的狀態，只少了路徑資料，橫幅仍列出原因。
+- 橫幅的「複製診斷資料」複製上述欄位的 JSON（`registry-issues.ts` 的 `registryDiagnosticText`），不含路徑。
+- 「核心維護」的「更新核心」停用時，對話框在按鈕上方直接顯示 `core-state` 的 `reason`（`core-diagnostics.ts` 的
+  `coreBlockedMessage`），不只放在滑鼠提示。
 - 外觀設定、全域 Java 與掃描範圍的短暫共用違規會有限重試。
   無法讀取外觀設定時，GUI 保留最後讀到的設定，若沒有讀取紀錄則顯示尚未讀取。
   無法讀取或核對原檔時，設定儲存會保留原檔。
