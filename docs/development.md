@@ -207,6 +207,32 @@ $options = @{ proxy = 'diagnostics-velocity'; route = 'paper'; plugin = 'LuckPer
 
 Spigot 由 BuildTools 在本機建置，沒有官方檔案可比對，所以內建清單以外的 Spigot 一律是未核對。
 
+實例清單與詳細面板的核心版本（`presentation::core_metadata`）和「核心維護」用相同的來源。
+離線辨識（`core_identity`）只讀取 JAR 的 ZIP 目錄與幾個小型中繼資料檔，不啟動 Java：
+
+- Paper 與 Folia：`paper-api` 或 `folia-api` 函式庫的路徑，例如 `dev/folia/folia-api/26.3.build.28-stable/`，可讀出 Minecraft 版本與 build。
+  兩者同時出現時無法判斷，視為無法辨識。
+- Spigot：BuildTools 產生的 bundler JAR（1.18 起）讀 `META-INF/versions.list`，格式為 `<sha256> *spigot-<版本>-R0.1-SNAPSHOT.jar`；
+  較舊的 Spigot（1.8.8～1.17.1，含 1.14 起的 `version.json`）讀 Maven `pom.properties`。只有 Minecraft 版本，沒有 build。
+  舊版 JAR 內含整個伺服器，約有 12,000～26,000 個項目，所以核心的 ZIP 目錄上限為 65,535 個項目，大小仍限制在 4 MB。
+- 舊版 Paper（1.14、1.14.4）沒有 API 函式庫，只能靠內建清單的雜湊辨識。
+
+清單的判斷與「核心維護」相同：
+
+1. 目前 JAR 的 SHA-256 在內建清單，或與已核對的登記相符（`trusted_profile`）：顯示該版本，為已核對。
+2. 否則顯示離線辨識的結果；無法離線辨識時，顯示同雜湊的未核對登記。兩者都標示為離線辨識。
+3. 都沒有時顯示「尚未核對」。
+
+清單每隔幾秒刷新，核心檔有 40～90 MB，所以離線辨識成功的核心以「檔案長度與 ZIP 目錄不變」為條件沿用上次的 SHA-256。
+ZIP 目錄記錄每個項目的 CRC，任一項目內容改變都會使目錄改變並重新計算。無法離線辨識的核心每次都重新計算。
+
+清單中繼資料以 `offline: true` 標示離線辨識的版本，介面在滑鼠提示與詳細面板說明「版本由核心檔內容讀出，未與內建清單或官方來源比對。」。
+離線辨識與網路無關：清單刷新時不連線核對，所以網路正常時也可能出現。
+「核心維護」在核心未核對時以 `identified` 回傳離線辨識的版本，「目前版本」只加註「（離線辨識）」；核心更新是否可用仍依 `trusted_profile`，不因離線辨識而改變。
+
+都無法辨識時顯示「尚未核對」，不沿用登記中的舊版本。原因以代碼回傳（`CorePathUnverified`、`CoreUnreadable`、`CoreProfileUnverified`），
+由前端 `src/core-display.ts` 翻譯，顯示在清單儲存格的滑鼠提示與詳細面板。新增代碼時 `src/core-display.test.mjs` 會要求補上翻譯。
+
 每次啟動前，登記的檔名不存在時，會依上述規則重新尋找並更新登記，例如 Velocity 換成檔名帶有新 build 的 JAR。新核心的雜湊與登記不同時，同家族的核心會被接受（離線時以未核對方式接受）；遊戲伺服器另外要求 Minecraft 版本相同，避免世界被意外升級。其他情況維持原本的錯誤，例如 `CoreArtifactChanged`。
 
 登記、匯入預覽與 V1 移交都會用 Windows Restart Manager 查詢哪些程式開著核心 JAR。其他程式（通常是仍在執行的伺服器）開著時回報 `CoreInUse`，不檢查 Port 也不登記。查詢只讀取，不會要求程式關閉。

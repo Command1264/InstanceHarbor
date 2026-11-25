@@ -13,7 +13,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 type Profile = { family: string; minecraft: string; build: string }
-type State = { installed: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile }[]; canWrite: boolean; reason?: string | null }
+type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile }[]; canWrite: boolean; reason?: string | null }
 type Action = 'core-install-latest' | 'core-install' | 'core-restore' | 'core-reconcile'
 const dialog = ref<HTMLDialogElement>()
 const confirm = ref<HTMLDialogElement>()
@@ -28,6 +28,13 @@ const source = computed(() => {
 const candidate = computed(() => source.value?.candidate ?? state.value?.prepared)
 const prepared = computed(() => !!candidate.value && candidate.value.sha256 === state.value?.prepared?.sha256)
 const path = ref('')
+// An unverified core shows the version its JAR states, marked as an offline reading.
+const currentVersion = computed(() => {
+  const core = state.value?.installed ?? state.value?.identified
+  if (!core) return t('components.coreMaintenance.notChecked')
+  const text = [core.family, core.minecraft, ...(core.build ? ['build', core.build] : [])].join(' ')
+  return state.value?.installed ? text : text + t('components.coreMaintenance.offline')
+})
 const sha = ref('')
 const result = ref('')
 const error = ref('')
@@ -180,7 +187,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   <dialog ref="dialog" class="compact" aria-labelledby="core-dialog-title" @cancel.prevent="close">
     <h2 id="core-dialog-title">{{ t('components.coreMaintenance.title', { name }) }}</h2>
     <dl class="import-preview">
-      <dt>{{ t('components.coreMaintenance.currentVersion') }}</dt><dd>{{ state?.installed ? [state.installed.family,state.installed.minecraft,'build',state.installed.build].join(' ') : t('components.coreMaintenance.notChecked') }}</dd>
+      <dt>{{ t('components.coreMaintenance.currentVersion') }}</dt><dd>{{ currentVersion }}</dd>
       <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ source?.remoteBuild ?? candidate?.build ?? t('components.coreMaintenance.notChecked') }}</dd>
       <dt>{{ t('components.coreMaintenance.checkedAt') }}</dt><dd>{{ sourceTime }}</dd>
       <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
