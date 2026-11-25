@@ -1005,7 +1005,7 @@ mod tests {
             assets: Assets::Local { core, mojang: None },
             scope: Scope { original_revision, added_revision },
             revision: "fixture".into(),
-            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            test_admins: TestAdmins { requested: true, configured: 0, skipped: None, grant: None },
             management: Management::default(),
         };
         let (mut staged, publication) = stage(root, &inspection, draft, work, None).unwrap();

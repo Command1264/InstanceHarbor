@@ -353,6 +353,13 @@ async function prefetchCreationScopes(generation: number, options: readonly stri
     }
   }
 }
+async function retryCreationScope(generation: number, selected: string, input: NonNullable<ReturnType<typeof creationInput>>) {
+  try{
+    creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+  }catch{
+    // The option is read again in the foreground when it is chosen next time.
+  }
+}
 async function chooseManagementFolder(selected: string) {
   const preview = creationPreview.value
   if (!preview || modalBusy.value) return
@@ -384,6 +391,9 @@ async function chooseManagementFolder(selected: string) {
       creationManagement.value=previewedManagementChoice(previewedCreation.value)
       modalError.value=t('app.create.rescopeFailed',{error:creationError(e)})
     }
+      // Read the chosen option once more in the background; a reply is kept in the cache,
+      // so choosing that option again shows it at once.
+      void retryCreationScope(generation,selected,input)
   }finally{
     if(request===creationRescopeRequest)creationRescoping.value=false
   }
