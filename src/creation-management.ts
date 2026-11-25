@@ -12,3 +12,9 @@ export function managementChoice(selected: string, options: readonly string[]): 
   if (selected === options[1]) return undefined
   return { kind: 'folder', path: selected }
 }
+
+/** The option a draft field selects; the inverse of `managementChoice`. */
+export function selectedManagementFolder(choice: ManagementChoice | undefined, options: readonly string[]): string {
+  if (!choice) return options[1] ?? NO_MANAGEMENT_FOLDER
+  return choice.kind === 'none' ? NO_MANAGEMENT_FOLDER : choice.path
+}

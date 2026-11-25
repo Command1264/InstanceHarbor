@@ -578,15 +578,26 @@ fn finish(
         core_maintenance::move_durable(&stage, &target, false)?;
         verified_publication(&target, profile, &publication.hashes)?;
     }
+    let mut registration = (Value::Null, None);
     if let Some(proposed) = proposed {
         if scan_policy::managed_path(root, &path_format::display(&target))? != target {
             return Err("CreationRecoveryUnconfirmed".into());
         }
         scan_policy::persist(root, &proposed, &current)?;
+        // Register the other servers the new folder covers now, instead of waiting for the
+        // Manager's next scan. The instance itself is already created, so a failure here is
+        // reported and left for that scan rather than undoing the creation.
+        if let Some(folder) = folder.as_deref().filter(|folder| *folder != target) {
+            registration = match batch_import::register_management_folder(root, folder) {
+                Ok(value) => (value, None),
+                Err(error) => (Value::Null, Some(error)),
+            };
+        }
     }
     let result = json!({
         "workId":work,"replayed":replayed,"instance":draft.name,"path":path_format::display(&target),
         "whitelist":publication.scope.added_revision.and(folder.as_deref()).map(path_format::display),
+        "registration":registration.0,"registrationError":registration.1,
     });
     receipt.complete = true;
     receipt.output = Some(result.clone());
@@ -694,9 +705,12 @@ pub(super) fn dispatch(
 ) -> Option<Result<Value>> {
     Some(match (verb, args) {
         ("gui-create-preview", [raw]) => parse(raw).and_then(|draft| inspect(root, &draft)).map(|inspection| report(&inspection)),
+        // Changing only the management folder keeps the core the preview already checked
+        // against the official source; confirmation never repeats that check either.
+        ("gui-create-rescope", [raw]) => parse(raw).and_then(|draft| inspect_source(root, &draft, false)).map(|inspection| report(&inspection)),
         ("gui-create-confirm", [work, raw]) => confirm(root, work, raw, progress),
         ("gui-create-recover", [work]) => recover(root, work),
-        ("gui-create-preview" | "gui-create-confirm" | "gui-create-recover", _) => {
+        ("gui-create-preview" | "gui-create-rescope" | "gui-create-confirm" | "gui-create-recover", _) => {
             Err("InvalidGuiCreationArguments".into())
         }
         _ => return None,
@@ -837,6 +851,74 @@ mod tests {
             assert_eq!(covered["managementOptions"], json!([]));
             assert_eq!(covered["managementCandidates"], json!([]));
         }
+    }
+
+    #[test]
+    fn changing_the_management_folder_rescopes_without_rechecking_the_official_build() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let parent = root.join("instances").join("existing");
+        other_server(&parent.join("neighbor"));
+        // Not the newest stable build: a full preview would query the official source.
+        let mut draft = draft(Source::Official {
+            family: "FOLIA".into(), minecraft: "26.3".into(), build: "26".into(), sha256: "a".repeat(64),
+        });
+        let rescope = |draft: &Draft| dispatch(root, "gui-create-rescope", &[serde_json::to_string(draft).unwrap()], &|_| {}).unwrap();
+        let default = rescope(&draft).unwrap();
+        assert_eq!(default["whitelist"], path_format::display(&parent));
+        assert_eq!(default["managementCandidates"].as_array().unwrap().len(), 1);
+        draft.management_folder = ManagementChoice::None;
+        let none = rescope(&draft).unwrap();
+        assert_eq!(none["whitelist"], Value::Null);
+        assert_eq!(none["revision"], report(&inspect_source(root, &draft, false).unwrap())["revision"]);
+        assert_eq!(
+            dispatch(root, "gui-create-rescope", &[], &|_| {}).unwrap().unwrap_err(),
+            "InvalidGuiCreationArguments"
+        );
+    }
+
+    #[test]
+    fn creation_registers_the_servers_the_added_folder_discovers_before_it_reports_done() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let draft = draft(Source::Local { path: path_format::display(&core) });
+        let parent = root.join("instances").join("existing");
+        let target = parent.join(&draft.name);
+        other_server(&parent.join("neighbor"));
+        let (policy, original_revision) = scan_policy::load(root).unwrap();
+        let added_revision = Some(scope_revision(&policy.with_folder(root, &parent, &[]).unwrap()).unwrap());
+        let profile = CoreProfile { unverified: false, java: None,
+            family: "SPIGOT".into(), minecraft: "1.8.8".into(), build: "fixture".into(),
+            sha256: content_revision::file_revision(&core).unwrap(),
+        };
+        let inspection = Inspection {
+            parent: parent.clone(), target: target.clone(), core: profile,
+            assets: Assets::Local { core, mojang: None },
+            scope: Scope { original_revision, added_revision },
+            revision: "fixture".into(),
+            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            management: Management::default(),
+        };
+        let work = "register-neighbors";
+        let raw = json!({"draft":draft,"revision":inspection.revision}).to_string();
+        let (mut staged, publication) = stage(root, &inspection, &draft, work, None).unwrap();
+        let receipt = Receipt {
+            arguments: vec!["gui-create-confirm".into(), draft.name.clone(), work.into(), raw.clone()],
+            complete: false, output: Some(serde_json::to_value(&publication).unwrap()), created_at: None,
+        };
+        reserve_receipt(root, &root.join("jobs").join(format!("{work}.json")), &receipt).unwrap();
+        staged.journaled = true;
+        core_maintenance::write_durable(&pending_path(root, &draft.name), &work, false).unwrap();
+
+        let result = confirm(root, work, &raw, &|_| {}).unwrap();
+        assert_eq!(result["whitelist"], path_format::display(&parent));
+        assert_eq!(result["registrationError"], Value::Null, "{result}");
+        let neighbor = instance(root, "neighbor").unwrap();
+        assert!(neighbor.management_discovered);
+        assert!(!neighbor.removed);
+        assert!(target.is_dir());
     }
 
     #[test]

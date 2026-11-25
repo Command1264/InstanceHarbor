@@ -18,7 +18,7 @@ import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
-import { managementChoice, NO_MANAGEMENT_FOLDER, type ManagementChoice } from './creation-management'
+import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
@@ -326,11 +326,26 @@ function creationInput() {
     ...(creationManagement.value ? { managementFolder: creationManagement.value } : {}),
   }
 }
-function chooseManagementFolder(selected: string) {
-  const options = creationPreview.value?.managementOptions
-  if (!options || modalBusy.value) return
-  creationManagement.value = managementChoice(selected, options)
-  void previewCreation()
+const creationRescoping=ref(0)
+async function chooseManagementFolder(selected: string) {
+  const preview = creationPreview.value
+  if (!preview || modalBusy.value) return
+  creationManagement.value = managementChoice(selected, preview.managementOptions)
+  const input = creationInput()
+  if (!input) return
+  // Keep the checked preview on screen and replace it once; a later choice wins.
+  const request = ++creationRescoping.value
+  modalError.value=''
+  try{
+    const next=await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)])
+    if(request!==creationRescoping.value||creationPreview.value!==preview)return
+    creationPreview.value=next
+    previewedCreation.value=input
+  }catch(e){
+    if(request===creationRescoping.value)modalError.value=creationError(e)
+  }finally{
+    if(request===creationRescoping.value)creationRescoping.value=0
+  }
 }
 const creationTestAdmins = computed(() => {
   const state = creationPreview.value?.testAdministrators
@@ -1142,12 +1157,12 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
             <dt id="create-management-folder-label">{{ t('app.create.allowedFolder') }}</dt>
             <dd role="radiogroup" aria-labelledby="create-management-folder-label" class="create-folder-choices">
               <label v-for="folder in creationPreview.managementOptions" :key="folder" class="create-folder-choice">
-                <input type="radio" name="create-management-folder" :value="folder" :checked="creationPreview.whitelist === folder"
+                <input type="radio" name="create-management-folder" :value="folder" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === folder"
                   :disabled="modalBusy" @change="chooseManagementFolder(folder)">
                 <span class="selectable" translate="no">{{ createPath(folder) }}</span>
               </label>
               <label class="create-folder-choice">
-                <input type="radio" name="create-management-folder" :value="NO_MANAGEMENT_FOLDER" :checked="!creationPreview.whitelist"
+                <input type="radio" name="create-management-folder" :value="NO_MANAGEMENT_FOLDER" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === NO_MANAGEMENT_FOLDER"
                   :disabled="modalBusy" @change="chooseManagementFolder(NO_MANAGEMENT_FOLDER)">
                 <span>{{ t('app.create.noManagementFolder') }}</span>
               </label>
@@ -1182,7 +1197,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="creationUnconfirmedWork" class="hint selectable">{{ t('app.create.workId') }} <bdi class="mono" translate="no">{{ creationUnconfirmedWork }}</bdi></p>
         <div class="dialog-actions">
           <button ref="createBackButton" type="button" :disabled="modalBusy" @click="cancelCreationPreview">{{ t('app.create.back') }}</button>
-          <button type="button" class="primary" :disabled="modalBusy" @click="provision">{{ t('app.create.submit') }}</button>
+          <button type="button" class="primary" :disabled="modalBusy || creationRescoping > 0" @click="provision">{{ t('app.create.submit') }}</button>
         </div>
       </template>
       <form v-else @submit.prevent="previewCreation">

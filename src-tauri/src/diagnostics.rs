@@ -384,6 +384,7 @@ pub fn safe_action(action: &str) -> &str {
         | "preview-management-scope"
         | "save-management-scope"
         | "gui-create-preview"
+        | "gui-create-rescope"
         | "gui-create-confirm"
         | "gui-create-recover"
         | "management-folder-preview"
