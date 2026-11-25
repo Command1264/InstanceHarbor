@@ -11,6 +11,7 @@ import ManagementPathRows, { type PathDraft } from './components/ManagementPathR
 import PathPickerButton from './components/PathPickerButton.vue'
 import { managementPathError, type ManagementPathKind } from './management-folders'
 import OverlayScroll from './components/OverlayScroll.vue'
+import { coreFamilyName } from './core-display'
 import PolicyFields from './components/PolicyFields.vue'
 import RecoveryKeyPanel from './components/RecoveryKeyPanel.vue'
 import AboutPanel from './components/AboutPanel.vue'
@@ -1254,7 +1255,7 @@ void load()
             <label for="initialization-profile">{{ t('settingsPage.initProfile') }}</label>
             <select id="initialization-profile" :value="initChoice" @change="onInitializationChoice">
               <option v-for="profile in init.profiles" :key="profileKey(profile)" :value="profileKey(profile)">
-                {{ profile.family }} {{ profile.version }}
+                {{ coreFamilyName(profile.family) }} {{ profile.version }}
               </option>
             </select>
           </div>
@@ -1266,7 +1267,7 @@ void load()
       <template v-else-if="tab==='world'">
         <h2>{{ t('settings.world') }}</h2>
         <template v-if="world">
-          <p class="hint">{{ world.profile ? world.profile.family + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}</p>
+          <p class="hint">{{ world.profile ? coreFamilyName(world.profile.family) + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}</p>
           <p class="notice">{{ t('settingsPage.worldApplyNotice') }}</p>
           <p v-if="world.pending" class="hint" role="status">{{ world.pending.state === 'Conflict' ? t('settingsPage.pendingConflict') : t('settingsPage.pendingKept') }}</p>
           <details class="world-preflight">

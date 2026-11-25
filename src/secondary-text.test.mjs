@@ -10,7 +10,7 @@ const ALLOWED_ALWAYS_VISIBLE = [
   "SettingsPage.vue: {{ t('settings.javaCheckHelp') }}",
   "SettingsPage.vue: {{ t('settings.restartScheduleHelp') }}",
   "SettingsPage.vue: {{ t('settingsPage.jvmFlagsHelp') }}",
-  "SettingsPage.vue: {{ world.profile ? world.profile.family + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}",
+  "SettingsPage.vue: {{ world.profile ? coreFamilyName(world.profile.family) + ' ' + world.profile.version : t('settingsPage.worldProfilePending') }}",
   "SettingsPage.vue: {{ t('settingsPage.worldApplyNotice') }}",
   "SettingsPage.vue: {{ t('settingsPage.yamlChangedFiles') }}",
   "SettingsPage.vue: {{ t('settingsPage.scanHelp') }}",

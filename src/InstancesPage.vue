@@ -11,7 +11,7 @@ import {usePinnedDrag} from './usePinnedDrag'
 import {keepEditingContext} from './context-menu'
 import { displayPath } from './path-display'
 import { presentedState } from './instance-state'
-import { coreReasonId } from './core-display'
+import { coreBuildText, coreReasonId, coreVersionText } from './core-display'
 import { registryIssueMessage, stateIssueMessage } from './registry-issues'
 import { useAppLanguage, type MessageId } from './i18n'
 import { actionName, batchItemState, canOpenConsole, canRestart, canStop, consoleSummary, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
@@ -148,7 +148,7 @@ const emergency = computed(() => !!single.value && canStop(single.value) &&
 const recent = computed(() => single.value && recentByName.value.get(single.value.name))
 const refreshBusy=computed(()=>!!props.refreshPending)
 const refreshLabel=computed(()=>props.refreshDone?t('instances.refreshDone'):t('action.refresh'))
-function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? core.label ?? `${core.family} ${core.minecraft}${core.build ? ` build ${core.build}` : ''}` : t('instances.coreUnchecked')}
+function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? coreVersionText(core) : t('instances.coreUnchecked')}
 function coreReason(name:string){const core=metaByName.value.get(name)?.core;if(core?.state==='known')return core.offline?t('instances.coreOffline'):undefined;const id=coreReasonId(core?.reason);return id?t(id):undefined}
 const coreVersions = computed(() => new Map<string, {version:string;build?:string;update?:string}>(props.meta.map(({ name, core }) => {
   if (core?.state !== 'known') return [name, { version: coreLabel(name) }]
@@ -159,7 +159,7 @@ const coreVersions = computed(() => new Map<string, {version:string;build?:strin
     && source.minecraft === core.minecraft && source.build === build
     && source.remoteBuild !== build ? source.remoteBuild : undefined
   return [name, {
-    version: core.family && core.minecraft ? `${core.family} ${core.minecraft}` : coreLabel(name),
+    version: core.family && core.minecraft ? coreVersionText({ family: core.family, minecraft: core.minecraft }) : coreLabel(name),
     build,
     update,
   }]
@@ -252,7 +252,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
             <div class="core-version">
               <span :title="coreReason(row.name)">{{ coreVersions.get(row.name)?.version ?? t('instances.coreUnchecked') }}</span>
               <small v-if="coreVersions.get(row.name)?.build" class="core-build" translate="no">
-                Build {{ coreVersions.get(row.name)?.build }}
+                {{ coreBuildText(coreVersions.get(row.name)?.build ?? '') }}
                 <template v-if="coreVersions.get(row.name)?.update">
                   <span aria-hidden="true"> → {{ coreVersions.get(row.name)?.update }}</span>
                   <span class="sr-only" translate="yes"> {{ t('core.batch.updateTo', { build: coreVersions.get(row.name)?.update ?? '' }) }}</span>

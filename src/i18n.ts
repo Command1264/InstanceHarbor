@@ -437,7 +437,7 @@ const baseMessages = {
   'core.batch.noCandidate': ['沒有可安裝的同版核心', 'No installable core for the same Minecraft version'],
   'core.batch.notStopped': ['已略過，請先正常停止', 'Skipped. Stop the server gracefully first.'],
   'core.batch.operationPending': ['已略過，請等候目前的實例操作完成', 'Skipped. Wait for the current instance operation to finish.'],
-  'core.batch.updateTo': ['可更新至 Build {build}', 'Can update to build {build}'],
+  'core.batch.updateTo': ['可更新至 Build {build}', 'Can update to Build {build}'],
   'core.batch.check': ['檢查更新', 'Check for updates'],
   'core.batch.checking': ['正在核對更新', 'Checking for updates'],
   'core.batch.confirm': ['確認更新', 'Confirm update'],

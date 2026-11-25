@@ -44,7 +44,7 @@ export const componentsMessages = {
   'components.coreMaintenance.reconcile': ['核對未完成工作', 'Verify unfinished work'],
   'components.coreMaintenance.restoreTitle': ['還原核心', 'Restore core'],
   'components.coreMaintenance.reconcileTitle': ['核對維護結果', 'Verify maintenance result'],
-  'components.coreMaintenance.targetBuild': ['目標版本為 Build {build}。', 'The target is build {build}.'],
+  'components.coreMaintenance.targetBuild': ['目標版本為 Build {build}。', 'The target is Build {build}.'],
   'components.coreMaintenance.backupNote': ['替換前會再次核對並保留備份。', 'The core is verified again and a backup is kept before replacement.'],
   'components.coreMaintenance.progressTitle': ['核心維護進行中', 'Core maintenance in progress'],
   'components.coreMaintenance.progressBody': ['請等待管理服務核對檔案寫入結果。', 'Wait for the management service to verify the file write.'],

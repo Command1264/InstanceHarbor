@@ -12,6 +12,7 @@ import RemovedInstancesDialog from './components/RemovedInstancesDialog.vue'
 import PathPickerButton from './components/PathPickerButton.vue'
 import CopyButton from './components/CopyButton.vue'
 import { displayPath } from './path-display'
+import { coreVersionText } from './core-display'
 import OverlayScroll from './components/OverlayScroll.vue'
 import OperationButton from './components/OperationButton.vue'
 import InitialQueryProgress from './components/InitialQueryProgress.vue'
@@ -1188,7 +1189,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
       <template v-if="creationPreview">
         <dl class="create-review">
           <dt>{{ t('app.create.path') }}</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.target) }}</dd>
-          <dt>{{ t('app.create.coreVersion') }}</dt><dd>{{ creationPreview.core.family }} {{ creationPreview.core.minecraft }}<span v-if="creationPreview.core.build"> · Build {{ creationPreview.core.build }}</span></dd>
+          <dt>{{ t('app.create.coreVersion') }}</dt><dd>{{ coreVersionText(creationPreview.core) }}</dd>
           <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>{{ t('app.create.suggestedJava') }}</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
           <template v-if="creationTestAdmins"><dt>{{ t('app.create.testAdmins') }}</dt><dd>{{ creationTestAdmins }}</dd></template>
