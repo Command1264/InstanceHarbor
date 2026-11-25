@@ -3,6 +3,7 @@ import { tr, type LanguagePreference, type MessageId, type TimeFormat } from './
 import type { SelectionColorPreference } from './theme'
 import type { ConsoleChoice } from './console-tier.ts'
 import { javaStartErrorId } from './java-start-error.ts'
+import type { RegistryIssue, StateIssue } from './registry-issues.ts'
 export { consoleFallbackReason, consoleSummary, type ConsoleChoice, type ConsolePlan } from './console-tier.ts'
 
 export interface Instance {
@@ -19,13 +20,14 @@ export interface Instance {
   autoRestartStatus?: AutoRestartStatus | null
   stopPhase?: string
   stopToken: string | null
+  stateIssue?: StateIssue
   run?: { id: string; java: { pid: number }; host: { pid: number } }
 }
 export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean; offline?: boolean }
 export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity; managementDiscovered?: boolean }
 export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }
-export interface RegistryIssue { file: string; reason: 'FileInUse' | 'AccessDenied' | 'InvalidRecord' | 'Unconfirmed' | 'ObservationUnconfirmed'; osError: number | null }
+export type { RegistryIssue } from './registry-issues.ts'
 export interface InstanceSnapshot extends Omit<Presentation, 'preferences'> { rows: Instance[]; issues: RegistryIssue[] }
 export interface Presentation {
   preferences: Preferences
@@ -111,7 +113,7 @@ export function manage<T>(arguments_: string[],origin:'manual'|'background'='man
 }
 const stateMessageIds: Record<string, MessageId> = {
   Stopped: 'instance.state.stopped', Listening: 'instance.state.listening', Starting: 'instance.state.starting', Stopping: 'instance.state.stopping',
-  PortOccupied: 'instance.state.portOccupied', RunUnconfirmed: 'instance.state.runUnconfirmed',
+  PortOccupied: 'instance.state.portOccupied', RunUnconfirmed: 'instance.state.runUnconfirmed', StateUnconfirmed: 'instance.state.stateUnconfirmed',
 }
 export function stateName(state: string) { return Object.hasOwn(stateMessageIds, state) ? tr(stateMessageIds[state]) : state }
 const actionMessageIds: Record<string, MessageId> = {

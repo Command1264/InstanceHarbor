@@ -179,7 +179,7 @@ pub(super) fn registry_records(root: &Path) -> Result<Vec<Instance>> {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or("InvalidInstanceName")?;
-        if !token(name) {
+        if !instance_name(name) {
             return Err("InvalidInstanceName".into());
         }
         rows.push(instance(root, name)?);
@@ -253,7 +253,7 @@ fn validate_console_preferences(value: &Preferences) -> Result<()> {
         return Err("TooManyConsoleTitleOverrides".into());
     }
     for (name, template) in &value.console_title_overrides {
-        if !token(name) {
+        if !instance_name(name) {
             return Err("InvalidConsoleTitleOverride".into());
         }
         render_title(template, |_| None)?;
@@ -522,7 +522,7 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
     }
     let mut names = previous.pins.clone();
     for name in &value.pins {
-        if token(name) && !names.contains(name) && admitted(root, name)? && !instance(root, name)?.removed {
+        if instance_name(name) && !names.contains(name) && admitted(root, name)? && !instance(root, name)?.removed {
             names.push(name.clone());
         }
     }
@@ -566,7 +566,7 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
 }
 
 pub(super) fn active_instance(root: &Path, name: &str) -> Result<Instance> {
-    if !token(name) || !admitted(root, name)? {
+    if !instance_name(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
     let item = instance(root, name)?;
@@ -1038,7 +1038,7 @@ pub(super) fn remove_management(root: &Path, name: &str, mode: &str) -> Result<V
 
 fn adopt(root: &Path, name: &str, request: &str, executable: &str) -> Result<Value> {
     let created_at = Some((clock() / 1_000_000) as u64);
-    if !token(name) || !admitted(root, name)? {
+    if !instance_name(name) || !admitted(root, name)? {
         return Err("InstanceExcludedOrInvalid".into());
     }
     if !token(request) {

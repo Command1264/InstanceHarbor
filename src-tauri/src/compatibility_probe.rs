@@ -46,7 +46,7 @@ impl Manifest {
             || !token(&value.probe_id)
             || names
                 .iter()
-                .any(|name| !token(name) || !distinct.insert(name.to_ascii_lowercase()))
+                .any(|name| !instance_name(name) || !distinct.insert(name.to_ascii_lowercase()))
         {
             return Err("InvalidCompatibilityProbeManifest".into());
         }

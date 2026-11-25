@@ -12,6 +12,7 @@ import {keepEditingContext} from './context-menu'
 import { displayPath } from './path-display'
 import { presentedState } from './instance-state'
 import { coreReasonId } from './core-display'
+import { registryIssueMessage, stateIssueMessage } from './registry-issues'
 import { useAppLanguage, type MessageId } from './i18n'
 import { actionName, batchItemState, canOpenConsole, canRestart, canStop, consoleSummary, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
 
@@ -140,6 +141,7 @@ const diagnosticProxies = computed(() => props.meta.filter(item => item.core?.fa
 function isQueued(row:Instance){return row.state==='Stopped' && !!props.queuedNames?.has(row.name)}
 function starting(row:Instance){return row.state==='Stopped' && !!props.startingNames?.has(row.name)}
 function stateClass(row:Instance){return presentedState(row,{queued:!!props.queuedNames?.has(row.name),starting:!!props.startingNames?.has(row.name),stopping:!!row.run && props.stopping[row.name]===row.run.id})}
+function stateIssueText(row:Instance,full=false){const issue=row.stateIssue;if(!issue)return '';const message=full?registryIssueMessage({...issue,file:'',stage:'observation'}):stateIssueMessage(issue);return t(message.id,message.values)}
 function displayState(row:Instance){const state=stateClass(row);return state==='Queued'?t('activity.state.Queued'):stateName(state)}
 const emergency = computed(() => !!single.value && canStop(single.value) &&
   !!(single.value.stopPhase || props.stopping[single.value.name] === single.value.run?.id))
@@ -257,7 +259,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
                 </template>
               </small>
             </div>
-          </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : t('instances.noActions') }}</td>
+          </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span><span v-if="row.stateIssue" class="sub">{{ stateIssueText(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : t('instances.noActions') }}</td>
         </tr></tbody></table><InitialQueryProgress v-if="initialLoading" :label="t('instances.loadingList')" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? t('instances.emptyNotLoaded') : rows.length ? t('instances.emptyNoMatch') : t('instances.emptyNone') }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">{{ t('instances.createInstance') }}</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
     </section>
     <aside class="detail-panel" :aria-label="t('instances.detailLabel')"><OverlayScroll class="detail-scroll" :label="t('instances.detailContentLabel')"><div class="detail-content">
@@ -276,7 +278,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
         <p class="hint">{{ coreLabel(single.name) }}<template v-if="coreReason(single.name)"> · {{ coreReason(single.name) }}</template><br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><p v-if="single.listenAddress==='0.0.0.0'" class="form-error" role="note">{{ t('velocity.allInterfaces') }}</p><p v-if="metaByName.get(single.name)?.core?.unverified" class="form-error" role="note">{{ t('core.warning.unverifiedInstance') }}</p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
-        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
+        <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.stateIssue">{{ t('instances.stateProblem') }}</dt><dd v-if="single.stateIssue">{{ stateIssueText(single, true) }}</dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
         <div class="detail-actions">
           <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>
           <button v-else-if="single.state==='Stopped'" class="primary" :disabled="!connected || single.outsideManagement || busyNames.has(single.name) || isQueued(single) || starting(single)" @click="emit('action','start',[single])">{{ starting(single)?t('instance.state.starting'):isQueued(single)?t('activity.state.Queued'):t('activity.action.start') }}</button>

@@ -299,7 +299,7 @@ fn servers_not_stopped(snapshot: &Value, auto_restart: impl Fn(&str) -> bool) ->
 
 #[cfg_attr(test, allow(dead_code))]
 fn restarts_automatically(root: &Path, name: &str) -> bool {
-    token(name)
+    instance_name(name)
         && instance(root, name).is_ok_and(|config| {
             !config.removed && config.auto_restart.as_ref().is_some_and(|policy| policy.valid() && policy.enabled())
         })
@@ -333,7 +333,7 @@ fn load(directory: &Path) -> Result<Vec<Batch>> {
             || batch
                 .items
                 .iter()
-                .any(|item| !token(&item.target.name) || !token(&item.request))
+                .any(|item| !instance_name(&item.target.name) || !token(&item.request))
         {
             return Err("InvalidBatchJournal".into());
         }
@@ -410,7 +410,7 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
         let [name, expected, trailing @ ..] = args.as_slice() else {
             return Err("InvalidHostArguments".into());
         };
-        if !token(name) || !token(expected) {
+        if !instance_name(name) || !token(expected) {
             return Err("InvalidHostIdentity".into());
         }
         let stopping = matches!(trailing, [request] if verb == "host-control"
@@ -512,7 +512,7 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
             let mut names = HashSet::new();
             let mut items = Vec::new();
             for target in targets {
-                if !token(&target.name)
+                if !instance_name(&target.name)
                     || target.guard.registration.is_some()
                     || target.guard.previous_identity.is_some()
                     || !names.insert(target.name.clone())
@@ -1224,7 +1224,7 @@ fn process_auto_restart(root: &Path, state: &Mutex<State>) -> Result<()> {
     for item in fs::read_dir(root.join("registry")).map_err(fail)? {
         let path = item.map_err(fail)?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else { continue };
-        if path.extension().is_some_and(|ext| ext == "json") && token(name) {
+        if path.extension().is_some_and(|ext| ext == "json") && instance_name(name) {
             match auto_restart_one(root, name) {
                 Ok(true) => break,
                 Ok(false) => (),
@@ -1241,7 +1241,7 @@ fn recover_deferred_settings(root: &Path) -> Result<()> {
     for entry in fs::read_dir(root.join("registry")).map_err(fail)? {
         let path = entry.map_err(fail)?.path();
         let Some(name) = path.file_stem().and_then(|name| name.to_str()) else { continue };
-        if path.extension().is_none_or(|ext| ext != "json") || !token(name) {
+        if path.extension().is_none_or(|ext| ext != "json") || !instance_name(name) {
             continue;
         }
         let config = instance(root, name)?;

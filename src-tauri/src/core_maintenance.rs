@@ -283,7 +283,7 @@ struct Target {
 
 impl Target {
     fn resolve(root: &Path, name: &str) -> Result<Self> {
-        if !token(name) || !admitted(root, name)? {
+        if !instance_name(name) || !admitted(root, name)? {
             return Err("InstanceExcludedOrInvalid".into());
         }
         let config = instance(root, name)?;

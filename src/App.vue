@@ -18,12 +18,16 @@ import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
+import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
+import { ScopeCache } from './creation-scope-cache'
+import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
 import { startupListRendered, startupMark, startupWindowPresented } from './startup-timing'
+import { registryDiagnosticText, registryIssueMessage } from './registry-issues'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
@@ -112,9 +116,16 @@ async function refreshAfterCoreChange() {
   await checkCoreUpdates(presentation.value.instances.map(item=>item.name),false)
 }
 const registryIssues=ref<RegistryIssue[]>([])
-const registryIssueLabels=computed<Record<RegistryIssue['reason'],string>>(()=>({
-  FileInUse:t('app.registry.fileInUse'), AccessDenied:t('app.registry.accessDenied'), InvalidRecord:t('app.registry.invalidRecord'), Unconfirmed:t('app.registry.unconfirmed'), ObservationUnconfirmed:t('app.registry.observationUnconfirmed'),
-}))
+function registryIssueLabel(issue:RegistryIssue){const message=registryIssueMessage(issue);return t(message.id,message.values)}
+const registryStateIssues=computed(()=>rows.value.some(row=>!!row.stateIssue))
+const registryCopy=ref<'copied'|'failed'>()
+let registryCopyTimer:ReturnType<typeof setTimeout>|undefined
+async function copyRegistryDiagnostics(){
+  clearTimeout(registryCopyTimer)
+  try{await navigator.clipboard.writeText(registryDiagnosticText(registryIssues.value));registryCopy.value='copied'}
+  catch{registryCopy.value='failed'}
+  registryCopyTimer=setTimeout(()=>{registryCopy.value=undefined},2000)
+}
 const listUnavailable=ref('')
 const preferencesRevision=ref('')
 function applyPreferences(snapshot:PreferencesSnapshot){
@@ -265,6 +276,9 @@ type CreationPreview = {
   target: string
   parent: string
   whitelist: string | null
+  managementOptions: string[]
+  managementCandidates: { name: string; directory: string; core: string | null; kind: 'Minecraft' | 'Velocity' | 'Unknown'; port: number | null; listenAddress: string | null }[]
+  managementScanComplete: boolean
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
   initializationDefaults?: boolean
@@ -285,22 +299,15 @@ const creationBytes=computed(()=>{
   return update && 'total' in update ? update : undefined
 })
 const previewedCreation=ref<ReturnType<typeof creationInput>>()
+const creationManagement=ref<ManagementChoice>()
 const creationUnconfirmedWork=ref('')
 const createEditingPicker=ref(false)
 const createBackButton=ref<HTMLButtonElement>()
 const createNameInput=ref<HTMLInputElement>()
 const createNameChecked=ref(false)
 const createNameIssue=computed(()=>{
-  const {name}=draft
-  if(!name)return t('app.name.required')
-  if(name.length>64)return t('app.name.tooLong')
-  if(name.includes('.'))return t('app.name.period')
-  if(!/^[a-z0-9]/.test(name))return t('app.name.start')
-  if(!/^[a-z0-9-]+$/.test(name))return t('app.name.characters')
-  if(/^(?:con|prn|aux|nul|(?:com|lpt)[1-9])$/.test(name)){
-    return t('app.name.reserved')
-  }
-  return ''
+  const issue=instanceNameIssue(draft.name)
+  return issue?t(`app.name.${issue}`):''
 })
 function validateCreationName(){
   createNameChecked.value=true
@@ -309,7 +316,7 @@ function validateCreationName(){
   return false
 }
 const createPath=(path:string)=>displayPath(path,visiblePreferences.value.pathSeparator)
-function creationInput() {
+function creationInput(management: ManagementChoice | undefined = creationManagement.value) {
   const build = creationBuild.value?.value
   if (!canPreviewCreation.value || (draft.source && !build)) return
   return {
@@ -318,6 +325,60 @@ function creationInput() {
     port:draft.port,
     source: draft.source && build ? { kind: 'official', ...build } : { kind: 'local', path: draft.core },
     ...(draft.testAdministrators === 'default' ? {} : { testAdministrators: draft.testAdministrators === 'grant' }),
+    ...(management ? { managementFolder: management } : {}),
+  }
+}
+const creationRescoping=ref(false)
+let creationRescopeRequest=0
+// One preview per management folder option of the open confirmation, so switching back is instant.
+const creationScopes=new ScopeCache<CreationPreview>()
+function startCreationScopes(preview: CreationPreview) {
+  const generation=creationScopes.reset()
+  creationScopes.set(generation,selectedManagementFolder(creationManagement.value,preview.managementOptions),preview)
+  void prefetchCreationScopes(generation,preview.managementOptions)
+}
+async function prefetchCreationScopes(generation: number, options: readonly string[]) {
+  for(const selected of [...options,NO_MANAGEMENT_FOLDER]){
+    if(generation!==creationScopes.generation)return
+    if(creationScopes.get(selected))continue
+    const input=creationInput(managementChoice(selected,options))
+    if(!input)return
+    try{
+      creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+    }catch{
+      // A failed background preview is fetched again when that option is chosen.
+    }
+  }
+}
+async function chooseManagementFolder(selected: string) {
+  const preview = creationPreview.value
+  if (!preview || modalBusy.value) return
+  const options = preview.managementOptions
+  creationManagement.value = managementChoice(selected, options)
+  const input = creationInput()
+  if (!input) return
+  modalError.value=''
+  const generation=creationScopes.generation
+  const cached=creationScopes.get(selected)
+  // A newer choice supersedes any request still in flight.
+  const request = ++creationRescopeRequest
+  if(cached){
+    creationRescoping.value=false
+    creationPreview.value=cached
+    previewedCreation.value=input
+    return
+  }
+  // Keep the checked preview on screen and replace it once.
+  creationRescoping.value=true
+  try{
+    const next=await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)])
+    if(!creationScopes.set(generation,selected,next)||request!==creationRescopeRequest)return
+    creationPreview.value=next
+    previewedCreation.value=input
+  }catch(e){
+    if(request===creationRescopeRequest)modalError.value=creationError(e)
+  }finally{
+    if(request===creationRescopeRequest)creationRescoping.value=false
   }
 }
 const creationTestAdmins = computed(() => {
@@ -334,8 +395,10 @@ function pickerFailed() {
   void showModalError(t('management.pickFailed'))
 }
 function cancelCreationPreview() {
+  creationScopes.reset()
   creationPreview.value=undefined
   previewedCreation.value=undefined
+  creationManagement.value=undefined
   creationUnconfirmedWork.value=''
   modalError.value=''
   modalMessage.value=''
@@ -900,6 +963,7 @@ async function previewCreation(){
   try{
     creationPreview.value=await manage<CreationPreview>(['gui-create-preview',JSON.stringify(input)])
     previewedCreation.value=input
+    startCreationScopes(creationPreview.value)
   }catch(e){
     const reason = rawError(e)
     if (/CreationPreviewChanged|CoreNoStableBuild|CreationNoStableBuild/.test(reason)) refreshCreationBuild()
@@ -915,6 +979,9 @@ function creationError(error: unknown) {
   const reason = rawError(error)
   if (reason.includes('InvalidCreationName')) {
     return t('app.create.invalidName')
+  }
+  if (reason.includes('CreationManagementFolderNotAncestor')) {
+    return t('app.create.managementFolderNotAncestor')
   }
   if (/CoreNoStableBuild|CreationNoStableBuild/.test(reason)) {
     return t('app.create.noStable')
@@ -1071,7 +1138,10 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="listUnavailable">{{ listUnavailable }}</p>
         <template v-else>
           <p>{{ t('app.registry.intro') }}</p>
-          <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="issue in registryIssues" :key="issue.file">{{ issue.file }} · {{ registryIssueLabels[issue.reason] }}</li></ul></OverlayScroll>
+          <OverlayScroll class="registry-issues" :label="t('app.registry.label')"><ul><li v-for="(issue,index) in registryIssues" :key="`${issue.file}-${index}`">{{ issue.file }} · {{ registryIssueLabel(issue) }}</li></ul></OverlayScroll>
+          <p v-if="registryStateIssues" class="hint">{{ t('app.registry.stillListed') }}</p>
+          <div class="registry-actions"><button type="button" @click="copyRegistryDiagnostics">{{ t('app.registry.copyDiagnostics') }}</button>
+            <span v-if="registryCopy" :class="registryCopy==='copied'?'hint':'form-error'" role="status">{{ t(registryCopy==='copied'?'app.registry.copied':'app.registry.copyFailed') }}</span></div>
         </template>
       </aside>
       <InstancesPage v-if="route==='instances'" :rows="rows" :initial-loading="listReading && !listLoaded && connection==='unknown'" :loaded="listLoaded" :meta="presentation.instances" :core-check-rows="coreCheckRows" :preferences="visiblePreferences" :pin-busy="pinBusy || !preferencesLoaded || preferencesUnavailable" :busy-names="lifecycleBusy" :queued-names="queuedStarts" :starting-names="residentStarting" :stopping="stopControls" :force-busy="forceBusy" :console-busy="openingConsoles" :console-available="presentation.capabilities?.nativeConsole===true" :connected="connected" :jobs="projectedJobs" :feedback="feedback" :refresh-pending="manualRefreshPending" :refresh-done="manualRefreshDone" @action="requestAction" @batch-action="(action,targets)=>requestAction(action,targets,true)" @console="openConsoles" @force="row=>open('force',{name:row.name,run:row.run?.id})" @pin="pin" @pin-move="movePin" @pin-order="savePinOrder" @settings="name=>{settingsName=name;route='settings'}" @core="openCore" @batch-core="names=>batchCoreDialog?.open(names)" @add-management-folder="managementFolderDialog?.open()" @logs="name=>open('logs',{name})" @remove="name=>open('remove',{name})" @open-folder="openServerFolder" @removed="removedInstancesDialog?.open()" @create="open('create')" @refresh="refresh(true)"/>
@@ -1122,11 +1192,37 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>{{ t('app.create.suggestedJava') }}</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
           <template v-if="creationTestAdmins"><dt>{{ t('app.create.testAdmins') }}</dt><dd>{{ creationTestAdmins }}</dd></template>
-          <template v-if="creationPreview.whitelist">
-            <dt>{{ t('app.create.allowedFolder') }}</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
+          <template v-if="creationPreview.managementOptions.length">
+            <dt id="create-management-folder-label">{{ t('app.create.allowedFolder') }}</dt>
+            <dd role="radiogroup" aria-labelledby="create-management-folder-label" class="create-folder-choices">
+              <label v-for="folder in creationPreview.managementOptions" :key="folder" class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="folder" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === folder"
+                  :disabled="modalBusy" @change="chooseManagementFolder(folder)">
+                <span class="selectable" translate="no">{{ createPath(folder) }}</span>
+              </label>
+              <label class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="NO_MANAGEMENT_FOLDER" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === NO_MANAGEMENT_FOLDER"
+                  :disabled="modalBusy" @change="chooseManagementFolder(NO_MANAGEMENT_FOLDER)">
+                <span>{{ t('app.create.noManagementFolder') }}</span>
+              </label>
+            </dd>
+          </template>
+          <template v-if="creationPreview.managementOptions.length">
+            <dt>{{ t('app.create.alsoRegistered') }}</dt>
+            <dd v-if="!creationPreview.managementCandidates.length">{{ t('app.create.noCandidates') }}</dd>
+            <dd v-else><ul class="create-candidates">
+              <li v-for="candidate in creationPreview.managementCandidates" :key="candidate.directory">
+                <strong class="selectable" translate="no">{{ candidate.name }}</strong>
+                <span class="create-candidate-core">{{ candidate.core || t(`batchImport.${candidate.kind}`) }}</span>
+                <span v-if="candidate.port !== null" class="create-candidate-core">{{ t('batchImport.port', { port: candidate.port }) }}</span>
+                <bdi v-if="candidate.listenAddress" class="create-candidate-core selectable" translate="no">{{ candidate.listenAddress }}</bdi>
+                <span class="hint selectable create-candidate-path" translate="no">{{ createPath(candidate.directory) }}</span>
+              </li>
+            </ul></dd>
           </template>
         </dl>
-        <p v-if="creationPreview.whitelist" class="hint">{{ t('app.create.onlyFolder') }}</p>
+        <p v-if="creationPreview.managementOptions.length && !creationPreview.whitelist" class="hint">{{ t('app.create.noFolderHint') }}</p>
+        <p v-if="!creationPreview.managementScanComplete" class="form-error" role="alert">{{ t('app.create.scanIncomplete') }}</p>
         <p v-if="creationPreview.initializationDefaults === false" class="hint">{{ t('app.create.builtinDefaults') }}</p>
         
         <div v-if="creationPhase" class="creation-progress">
@@ -1141,7 +1237,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="creationUnconfirmedWork" class="hint selectable">{{ t('app.create.workId') }} <bdi class="mono" translate="no">{{ creationUnconfirmedWork }}</bdi></p>
         <div class="dialog-actions">
           <button ref="createBackButton" type="button" :disabled="modalBusy" @click="cancelCreationPreview">{{ t('app.create.back') }}</button>
-          <button type="button" class="primary" :disabled="modalBusy" @click="provision">{{ t('app.create.submit') }}</button>
+          <button type="button" class="primary" :disabled="modalBusy || creationRescoping" @click="provision">{{ t('app.create.submit') }}</button>
         </div>
       </template>
       <form v-else @submit.prevent="previewCreation">
@@ -1239,10 +1335,18 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 .registry-notice p { margin: 0; }
 .registry-notice ul { margin: .25rem 0 0; padding-inline-start: 1.125rem; }
 .registry-notice li { overflow-wrap: anywhere; }
+.registry-actions { display: flex; align-items: center; gap: .5rem; margin-top: .375rem; }
+.registry-actions .form-error { margin: 0; }
 .create-name-row .form-error { margin: .375rem 0 0; font-size: .8125rem; }
 .create-path-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; margin-block: .375rem 1rem; }
 .create-path-editor input { width: 100%; }
 .create-review { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .5rem 1rem; font-size: .875rem; }
 .create-review dt { color: var(--muted); }
 .create-review dd { margin: 0; overflow-wrap: anywhere; }
+.create-folder-choices { display: grid; gap: .375rem; }
+.create-folder-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; align-items: start; cursor: pointer; }
+.create-folder-choice input { margin: .2rem 0 0; }
+.create-candidates { margin: 0; padding: 0; list-style: none; display: grid; gap: .5rem; }
+.create-candidate-core { margin-inline-start: .5rem; }
+.create-candidate-path { display: block; }
 </style>

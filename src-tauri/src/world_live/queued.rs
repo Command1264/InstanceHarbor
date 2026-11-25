@@ -64,7 +64,7 @@ enum QueueFile {
 }
 
 fn entry(root: &Path, name: &str) -> Result<PathBuf> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidWorldRequest".into());
     }
     Ok(child_directory(root, "history")?.join(format!("queued-world-{name}.json")))
@@ -144,7 +144,7 @@ pub(super) fn submit_edit(
     value: &str,
     confirmation: &str,
 ) -> Result<Value> {
-    if !token(name) || !token(request) || confirmation != if key == TIME { "time" } else { "rules" }
+    if !instance_name(name) || !token(request) || confirmation != if key == TIME { "time" } else { "rules" }
     {
         return Err("InvalidWorldRequest".into());
     }
@@ -172,7 +172,7 @@ fn submit_rule_batch(
     raw: &str,
     mode: Mode,
 ) -> Result<Value> {
-    if !token(name) || !token(request) || raw.len() > 4096 {
+    if !instance_name(name) || !token(request) || raw.len() > 4096 {
         return Err("InvalidWorldRequest".into());
     }
     let targets: Targets = serde_json::from_str(raw).map_err(|_| "InvalidWorldRequest")?;
@@ -530,7 +530,7 @@ pub(super) fn recover_live_rules(root: &Path, name: &str) -> Result<bool> {
 }
 
 pub(super) fn values(root: &Path, name: &str) -> Result<Value> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidWorldRequest".into());
     }
     let config = instance(root, name)?;
