@@ -37,6 +37,9 @@ pub fn info() -> Value {
     json!({
         "version": about::VERSION,
         "commit": about::COMMIT,
+        // The development workspace this GUI serves; null in the stable channel.
+        "channel": instanceharbor::desktop_channel::TITLE,
+        "workspace": instanceharbor::desktop_channel::workspace_name(),
         "author": about::AUTHOR,
         "repository": about::REPOSITORY,
         "issues": about::ISSUES,

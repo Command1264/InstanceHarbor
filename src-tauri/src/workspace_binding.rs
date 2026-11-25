@@ -24,13 +24,17 @@ unsafe extern "system" {
 /// The WebView2 profile folder this process should use, or None to keep the one a
 /// launcher already chose. Both channels keep it beside their workspaces, so the
 /// app's data stays in one folder instead of Tauri's identifier folder.
-pub(super) fn webview_profile(local_app_data: &Path, inherited: Option<&OsStr>) -> Option<PathBuf> {
-    // The development channel always isolates its profile; a stable launcher such as
-    // launch-acceptance.ps1 may pick a per-workspace profile.
+pub(super) fn webview_profile(
+    local_app_data: &Path,
+    inherited: Option<&OsStr>,
+    workspace: Option<&str>,
+) -> Option<PathBuf> {
+    // The development channel always isolates its profile, one per workspace; a stable
+    // launcher such as launch-acceptance.ps1 may pick a per-workspace profile.
     if !desktop_channel::DEVELOPMENT && inherited.is_some_and(|folder| !folder.is_empty()) {
         return None;
     }
-    Some(local_app_data.join(desktop_channel::APP_DIRECTORY).join("webview"))
+    Some(desktop_channel::webview_profile(local_app_data, workspace))
 }
 
 /// The WebView2 profile folder chosen by `configure_desktop` or the launcher. Tauri on
@@ -42,14 +46,23 @@ pub(super) fn webview_data_directory() -> Option<PathBuf> {
 
 pub(super) fn configure_desktop() -> Result<(), String> {
     let local = desktop_channel::local_app_data()?;
-    if let Some(profile) = webview_profile(&local, env::var_os("WEBVIEW2_USER_DATA_FOLDER").as_deref()) {
-        create_plain_directory(&local.join(desktop_channel::APP_DIRECTORY))?;
-        create_plain_directory(&profile)?;
+    let workspace = desktop_channel::workspace_name();
+    let inherited = env::var_os("WEBVIEW2_USER_DATA_FOLDER");
+    if let Some(profile) = webview_profile(&local, inherited.as_deref(), workspace.as_deref()) {
+        // Create each missing level; all of them stay under the app folder.
+        let app = local.join(desktop_channel::APP_DIRECTORY);
+        create_plain_directory(&app)?;
+        let mut folder = app;
+        for part in profile.strip_prefix(&folder).map_err(|error| error.to_string())?.components() {
+            folder.push(part);
+            create_plain_directory(&folder)?;
+        }
         // Configure only this process and its children before WebView2 starts.
         env::set_var("WEBVIEW2_USER_DATA_FOLDER", profile);
     }
     if desktop_channel::DEVELOPMENT {
-        let id: Vec<_> = desktop_channel::IDENTIFIER.encode_utf16().chain([0]).collect();
+        // Each workspace gets its own taskbar button.
+        let id: Vec<_> = desktop_channel::app_user_model_id(workspace.as_deref()).encode_utf16().chain([0]).collect();
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
         if status < 0 {
             return Err(format!("DevelopmentAppUserModelIdFailed: {status:#x}"));
@@ -96,7 +109,8 @@ unsafe extern "system" {
 pub(super) fn show_startup_error(error: &str) {
     let text: Vec<_> = format!("無法開啟 InstanceHarbor 工作區。\n{error}")
         .encode_utf16().chain([0]).collect();
-    let title: Vec<_> = desktop_channel::TITLE.encode_utf16().chain([0]).collect();
+    let title = desktop_channel::product_title(desktop_channel::workspace_name().as_deref());
+    let title: Vec<_> = title.encode_utf16().chain([0]).collect();
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10); }
 }
 
@@ -108,8 +122,8 @@ mod tests {
     fn the_stable_webview_profile_sits_beside_the_workspaces_unless_a_launcher_chose_one() {
         let local = Path::new(r"C:\Users\someone\AppData\Local");
         let profile = Some(local.join("InstanceHarbor").join("webview"));
-        assert_eq!(webview_profile(local, None), profile);
-        assert_eq!(webview_profile(local, Some(OsStr::new(""))), profile);
-        assert_eq!(webview_profile(local, Some(OsStr::new(r"D:\evidence\manual-webview"))), None);
+        assert_eq!(webview_profile(local, None, None), profile);
+        assert_eq!(webview_profile(local, Some(OsStr::new("")), Some("agent-a")), profile);
+        assert_eq!(webview_profile(local, Some(OsStr::new(r"D:\evidence\manual-webview")), None), None);
     }
 }

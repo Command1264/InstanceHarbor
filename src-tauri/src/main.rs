@@ -386,7 +386,8 @@ fn terminal_title(
     viewer: tauri::State<'_, instanceharbor::ConsoleViewer>,
     run: String,
 ) -> Result<(), String> {
-    window.set_title(&viewer.title(&run)?).map_err(|error| error.to_string())
+    let title = desktop_channel::window_title(&viewer.title(&run)?, desktop_channel::workspace_name().as_deref());
+    window.set_title(&title).map_err(|error| error.to_string())
 }
 
 /// Sets the translated window title while no tab supplies its own.
@@ -396,6 +397,7 @@ fn terminal_window_title(window: tauri::WebviewWindow, title: String) -> Result<
     if title.trim().is_empty() || title.chars().count() > 256 || title.chars().any(char::is_control) {
         return Err("InvalidConsoleRequest".into());
     }
+    let title = desktop_channel::window_title(&title, desktop_channel::workspace_name().as_deref());
     window.set_title(&title).map_err(|error| error.to_string())
 }
 
@@ -428,6 +430,7 @@ const CONSOLE_MIN_SIZE: window_placement::LogicalSize = window_placement::Logica
 #[cfg(windows)]
 fn run_console(workspace: &str) -> Result<(), String> {
     desktop_channel::validate_workspace(std::path::Path::new(workspace), false)?;
+    desktop_channel::bind_workspace(std::path::Path::new(workspace));
     workspace_binding::configure_desktop()?;
     let Some(viewer) = instanceharbor::ConsoleViewer::start(workspace)? else {
         return Ok(());
@@ -455,7 +458,7 @@ fn run_console(workspace: &str) -> Result<(), String> {
                 tauri::WebviewUrl::App("console.html".into()),
             )
             // The viewer replaces this with its translated title before the window is shown.
-            .title(desktop_channel::TITLE)
+            .title(desktop_channel::product_title(desktop_channel::workspace_name().as_deref()))
             .inner_size(CONSOLE_SIZE.width, CONSOLE_SIZE.height)
             .min_inner_size(CONSOLE_MIN_SIZE.width, CONSOLE_MIN_SIZE.height)
             .resizable(true)
@@ -570,6 +573,7 @@ fn main() {
     #[cfg(windows)]
     if desktop_channel::DEVELOPMENT {
         if let Err(error) = workspace_binding::development_workspace()
+            .map(|workspace| desktop_channel::bind_workspace(&workspace))
             .and_then(|_| workspace_binding::configure_desktop())
         {
             workspace_binding::show_startup_error(&error);
@@ -636,9 +640,11 @@ fn main() {
     #[cfg(windows)]
     {
         context.config_mut().identifier = desktop_channel::IDENTIFIER.into();
-        context.config_mut().product_name = Some(desktop_channel::TITLE.into());
+        // The development channel names the workspace in the title and taskbar.
+        let title = desktop_channel::product_title(desktop_channel::workspace_name().as_deref());
+        context.config_mut().product_name = Some(title.clone());
         for window in &mut context.config_mut().app.windows {
-            window.title = desktop_channel::TITLE.into();
+            window.title = title.clone();
         }
     }
     for window in &mut context.config_mut().app.windows {

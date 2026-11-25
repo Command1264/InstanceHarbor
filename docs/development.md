@@ -31,7 +31,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   GUI、CLI 或 Agent 啟動 Manager 時都會出現圖示，但不會開啟 GUI 視窗。
 - GUI 啟動後每 5 秒向自己工作區的 Manager 登記（`gui-attach`，只接受同一安裝的 GUI 程序），Manager 不在時會先啟動它。
   所以 GUI 開著時一定有圖示；Manager 中途被結束，下一次登記會再啟動它。
-- 一個工作區最多一個圖示。開發版的提示文字會帶工作區資料夾名稱，同時有多個工作區時可以分辨。
+- 一個工作區最多一個圖示。開發版的提示文字以「InstanceHarbor Dev — <工作區資料夾名稱>」開頭，同時有多個工作區時可以分辨。
 - 滑鼠停在圖示上會顯示執行中的伺服器台數，右鍵選單第一行也會顯示（每 5 秒更新，算法與清單的「可停止」相同）。
   選單文字依「語言與外觀」的語言設定。
 - 左鍵點圖示，或右鍵選「開啟 InstanceHarbor」，會以這個工作區開啟 GUI；GUI 已在執行時則叫回它的視窗。
@@ -83,7 +83,7 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 ```
 
 腳本先連線該工作區的 Manager（模擬 Manager 常駐、點系統匣開 GUI），逐次啟動 GUI、讀出 `gui-startup`，
-再以 PID 結束自己啟動的 GUI，最後請該工作區的 Manager 結束。其他開發版 GUI 開著時，腳本會等待，不會關閉它。
+再以 PID 結束自己啟動的 GUI，最後請該工作區的 Manager 結束。同一工作區的開發版 GUI 開著時，腳本會等待，不會關閉它；其他工作區的 GUI 不影響量測。
 `-BinaryDirectory` 可指定另一份建置，`-BrowserArguments` 可在不重建的情況下比較 WebView2 參數。
 
 冷啟動的時間大多花在建立 WebView2（`setup` 到 `window-built` 約 580 ms），這段由 WebView2 自己決定。
@@ -543,8 +543,23 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 會使用正式版與正式預設工作區。兩版可同時開啟，再次啟動同一版時會定位該版原視窗。
 
 正式版使用 `dist` 與 Rust `release`，開發版使用 `dist-dev` 與 Rust `dev-channel`。
-開發版的執行檔為 `InstanceHarborDev.exe`，視窗名稱為「InstanceHarbor Dev」，使用自己的 Windows 工作列身分和
-`%LOCALAPPDATA%/InstanceHarbor Dev`。其工作區、設定、WebView2 與日誌都在該目錄下。
+開發版的執行檔為 `InstanceHarborDev.exe`，使用 `%LOCALAPPDATA%/InstanceHarbor Dev`。其工作區、設定、WebView2 與日誌都在該目錄下。
+
+開發版依工作區分開 GUI，讓多個 Agent 可以同時驗收不同工作區。正式版不變，一次只開一個 GUI。
+
+| 項目 | 正式版 | 開發版 |
+|---|---|---|
+| 單一執行個體鎖 | `Local\InstanceHarbor-GUI` | `Local\InstanceHarbor-GUI-Dev-<工作區鍵>`，同一工作區仍只能開一個 GUI |
+| 重複啟動 | 叫出原視窗 | 只叫出同一工作區的視窗（以執行檔與含工作區的視窗標題比對） |
+| WebView2 資料 | `InstanceHarbor\webview` | `InstanceHarbor Dev\webviews\<工作區名稱>` |
+| 工作列身分（AppUserModelID） | Windows 預設 | `local.instanceharbor.dev.<工作區鍵>`，每個工作區一個工作列按鈕 |
+| 主視窗、工作列、系統匣提示、訊息框 | `InstanceHarbor` | `InstanceHarbor Dev — <工作區名稱>` |
+| 伺服器後台視窗 | 原標題 | 原標題後加上 `[InstanceHarbor Dev — <工作區名稱>]` |
+| 側欄名稱、「關於」 | `InstanceHarbor` | 同主視窗標題；「關於」另列「開發工作區」與 Git commit |
+
+`<工作區名稱>` 是工作區資料夾名稱；`<工作區鍵>` 是名稱轉小寫後的 FNV-1a 64 位元雜湊（16 位十六進位），
+讓鎖名稱與 AppUserModelID 長度固定。實作集中在 `src-tauri/src/desktop_channel.rs`。
+1.0.1 以前的開發版把所有工作區的 WebView2 資料放在 `InstanceHarbor Dev\webview`，現在不再使用，可以手動刪除。
 
 需要重新建置開發版，或手動指定另一個開發工作區時，可使用下列入口。
 
@@ -572,7 +587,7 @@ $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-fe
 - 手動設定 `IH_BUILD_COMMIT` 時，值必須是七位小寫十六進位（可加 `-dirty`）或 `unknown`，否則 Rust 建置失敗。
 
 `ihctl --version` 輸出 `InstanceHarbor CLI 1.0.0 (33dfd35)`，開發版為 `InstanceHarbor Dev CLI 1.0.0 (33dfd35)`。
-「應用程式設定」→「關於」顯示版本、Git commit、作者、GitHub 儲存庫與回報問題的按鈕，以及授權條款與第三方授權通知的按鈕。這一頁沒有可儲存的設定，所以不顯示「儲存設定」與「還原變更」。
+「應用程式設定」→「關於」顯示版本、Git commit（開發版另顯示開發工作區）、作者、GitHub 儲存庫與回報問題的按鈕，以及授權條款與第三方授權通知的按鈕。這一頁沒有可儲存的設定，所以不顯示「儲存設定」與「還原變更」。
 GitHub 按鈕用預設瀏覽器開啟固定的 `https://github.com/Command1264/InstanceHarbor` 與其 `/issues`，頁面只傳送連結名稱，不傳送網址。
 授權按鈕用記事本開啟執行檔旁的 `LICENSE` 與 `THIRD-PARTY-NOTICES.txt`。開發版與本機建置沒有這兩個檔案，按鈕會停用。
 GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
@@ -586,7 +601,7 @@ GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 | 工作區 | `<應用程式資料夾>\workspaces\default`（正式）、`InstanceHarbor Dev\workspaces\<名稱>`（開發） | 實例登記、設定、工作紀錄與執行狀態 |
 | 測試管理員 | 工作區的 `test-administrators.json` 與 `plugin-cache/luckperms/` | 只存在本機；見「測試管理員權限」 |
 | GUI 診斷紀錄 | `<應用程式資料夾>\logs\gui-*.jsonl` | 1.0 之前寫在 `<應用程式資料夾>\v2\logs`；舊檔留在原處，可以手動刪除 |
-| WebView2 資料 | `<應用程式資料夾>\webview` | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
+| WebView2 資料 | `<應用程式資料夾>\webview`（正式）、`InstanceHarbor Dev\webviews\<名稱>`（開發） | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
 | Setup 安裝位置 | `Programs\InstanceHarbor` | 解除安裝登錄 `InstanceHarbor-Desktop`，安裝租約檔 `instanceharbor.install` |
 
 1.0 之前的版本把 WebView2 資料放在 `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`）。
