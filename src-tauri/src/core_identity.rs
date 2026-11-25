@@ -291,46 +291,48 @@ fn parse_paper_path(rest: &[u8]) -> Option<(String, String, String)> {
     ))
 }
 
+/// A minimal stored ZIP with empty entries, for core identity fixtures.
+#[cfg(test)]
+pub(super) fn zip(names: &[&str]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut entries = Vec::new();
+    for name in names {
+        entries.push((*name, bytes.len() as u32));
+        let mut local = [0u8; 30];
+        local[..4].copy_from_slice(&0x0403_4b50u32.to_le_bytes());
+        local[4..6].copy_from_slice(&20u16.to_le_bytes());
+        local[26..28].copy_from_slice(&(name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(&local);
+        bytes.extend_from_slice(name.as_bytes());
+    }
+    let offset = bytes.len() as u32;
+    for (name, local_offset) in entries {
+        let mut central = [0u8; 46];
+        central[..4].copy_from_slice(&0x0201_4b50u32.to_le_bytes());
+        central[4..6].copy_from_slice(&20u16.to_le_bytes());
+        central[6..8].copy_from_slice(&20u16.to_le_bytes());
+        central[28..30].copy_from_slice(&(name.len() as u16).to_le_bytes());
+        central[42..46].copy_from_slice(&local_offset.to_le_bytes());
+        bytes.extend_from_slice(&central);
+        bytes.extend_from_slice(name.as_bytes());
+    }
+    let size = bytes.len() as u32 - offset;
+    bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&(names.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&(names.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&size.to_le_bytes());
+    bytes.extend_from_slice(&offset.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT: AtomicU64 = AtomicU64::new(0);
-
-    fn zip(names: &[&str]) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        let mut entries = Vec::new();
-        for name in names {
-            entries.push((*name, bytes.len() as u32));
-            let mut local = [0u8; 30];
-            local[..4].copy_from_slice(&0x0403_4b50u32.to_le_bytes());
-            local[4..6].copy_from_slice(&20u16.to_le_bytes());
-            local[26..28].copy_from_slice(&(name.len() as u16).to_le_bytes());
-            bytes.extend_from_slice(&local);
-            bytes.extend_from_slice(name.as_bytes());
-        }
-        let offset = bytes.len() as u32;
-        for (name, local_offset) in entries {
-            let mut central = [0u8; 46];
-            central[..4].copy_from_slice(&0x0201_4b50u32.to_le_bytes());
-            central[4..6].copy_from_slice(&20u16.to_le_bytes());
-            central[6..8].copy_from_slice(&20u16.to_le_bytes());
-            central[28..30].copy_from_slice(&(name.len() as u16).to_le_bytes());
-            central[42..46].copy_from_slice(&local_offset.to_le_bytes());
-            bytes.extend_from_slice(&central);
-            bytes.extend_from_slice(name.as_bytes());
-        }
-        let size = bytes.len() as u32 - offset;
-        bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
-        bytes.extend_from_slice(&[0; 4]);
-        bytes.extend_from_slice(&(names.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&(names.len() as u16).to_le_bytes());
-        bytes.extend_from_slice(&size.to_le_bytes());
-        bytes.extend_from_slice(&offset.to_le_bytes());
-        bytes.extend_from_slice(&0u16.to_le_bytes());
-        bytes
-    }
 
     fn directory(bytes: &[u8]) -> &[u8] {
         let end = bytes.len() - 22;

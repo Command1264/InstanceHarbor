@@ -196,6 +196,15 @@ $options = @{ proxy = 'diagnostics-velocity'; route = 'paper'; plugin = 'LuckPer
 
 Spigot 由 BuildTools 在本機建置，沒有官方檔案可比對，所以內建清單以外的 Spigot 一律是未核對。
 
+實例清單與詳細面板的核心版本（`presentation::core_metadata`）和「核心維護」用相同的來源，依序為：
+
+1. 新版 Paper 從 JAR 內 `paper-api` 函式庫的路徑讀出版本與 build，不計算整個檔案的雜湊。登記為其他家族（例如 Folia）時跳過這一步。
+2. 目前 JAR 的 SHA-256 在內建清單，或與登記的核心資料相符（與「核心維護」的 `trusted_profile` 相同）。Folia、Spigot 與舊版 Paper（1.14、1.14.4）走這一步。
+3. 雜湊與離線接受的未核對登記相符時也顯示版本，並附未核對警告。
+
+都不符時顯示「尚未核對」，不沿用登記中的舊版本。原因以代碼回傳（`CorePathUnverified`、`CoreUnreadable`、`CoreProfileUnverified`），
+由前端 `src/core-display.ts` 翻譯，顯示在清單儲存格的滑鼠提示與詳細面板。新增代碼時 `src/core-display.test.mjs` 會要求補上翻譯。
+
 每次啟動前，登記的檔名不存在時，會依上述規則重新尋找並更新登記，例如 Velocity 換成檔名帶有新 build 的 JAR。新核心的雜湊與登記不同時，同家族的核心會被接受（離線時以未核對方式接受）；遊戲伺服器另外要求 Minecraft 版本相同，避免世界被意外升級。其他情況維持原本的錯誤，例如 `CoreArtifactChanged`。
 
 登記、匯入預覽與 V1 移交都會用 Windows Restart Manager 查詢哪些程式開著核心 JAR。其他程式（通常是仍在執行的伺服器）開著時回報 `CoreInUse`，不檢查 Port 也不登記。查詢只讀取，不會要求程式關閉。

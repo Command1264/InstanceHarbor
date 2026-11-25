@@ -327,37 +327,62 @@ pub(super) fn console_appearance(root: &Path, name: &str, run: &str) -> Result<(
 
 pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
     let jar = core_artifact::jar(path, row);
-    let saved = row.core_profile.as_ref().filter(|profile| {
-        profile.family != "PAPER"
-            && content_revision::file_revision(&jar).is_ok_and(|hash| hash == profile.sha256)
-    });
-    let mut core = if let Some(profile) = saved {
-        let label = if profile.build.is_empty() {
-            format!("{} {}", profile.family, profile.minecraft)
-        } else {
-            format!("{} {} build {}", profile.family, profile.minecraft, profile.build)
-        };
-        json!({"state":"known","family":profile.family,"minecraft":profile.minecraft,
-            "build":profile.build,"label":label})
-    } else if no_redirect(&jar).is_ok() {
-        match core_identity::read_identity(&jar) {
-            Ok(Some(identity)) => {
-                json!({"state":"known","family":identity.family,"minecraft":identity.minecraft_version,
-                "build":identity.build,"label":format!("{} {} build {}",identity.family,identity.minecraft_version,identity.build),
-                "directoryRevision":identity.directory_revision})
-            }
-            Ok(None) => json!({"state":"unknown","reason":"此核心的本機版本格式尚未支援"}),
-            Err(_) => json!({"state":"unknown","reason":"無法讀取目前的本機核心"}),
-        }
+    let core = core_metadata(row, &jar, |sha| core_maintenance::trusted_profile(row, sha));
+    json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core,
+        "managementDiscovered":row.management_discovered})
+}
+
+fn known_core(family: &str, minecraft: &str, build: &str) -> Value {
+    let label = if build.is_empty() {
+        format!("{family} {minecraft}")
     } else {
-        json!({"state":"unknown","reason":"本機核心路徑尚未通過核對"})
+        format!("{family} {minecraft} build {build}")
     };
+    json!({"state":"known","family":family,"minecraft":minecraft,"build":build,"label":label})
+}
+
+/// The core the list and the details panel show. It agrees with core maintenance:
+/// the built-in table or a registered profile whose hash matches the current JAR
+/// (`trust`), then an offline-accepted profile with the same hash. A Paper JAR that
+/// names its own build is read from its ZIP directory without hashing the file,
+/// unless the registration says it is another family. `reason` is a stable code
+/// that the interface translates.
+fn core_metadata(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<CoreProfile>) -> Value {
+    let mut core = current_core(row, jar, trust);
     // Accepted without the built-in table or the official catalog (#14 offline use).
     if row.core_profile.as_ref().is_some_and(|profile| profile.unverified) {
         core["unverified"] = json!(true);
     }
-    json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core,
-        "managementDiscovered":row.management_discovered})
+    core
+}
+
+fn current_core(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<CoreProfile>) -> Value {
+    if no_redirect(jar).is_err() {
+        return json!({"state":"unknown","reason":"CorePathUnverified"});
+    }
+    let identity = core_identity::read_identity(jar);
+    let registered_paper = row.core_profile.as_ref()
+        .is_none_or(|profile| profile.family.eq_ignore_ascii_case("PAPER"));
+    let from_identity = |identity: &core_identity::CoreIdentity| {
+        let mut core = known_core(identity.family, &identity.minecraft_version, &identity.build);
+        core["directoryRevision"] = json!(identity.directory_revision);
+        core
+    };
+    if registered_paper {
+        if let Ok(Some(identity)) = &identity {
+            return from_identity(identity);
+        }
+    }
+    let Ok(sha) = content_revision::file_revision(jar) else {
+        return json!({"state":"unknown","reason":"CoreUnreadable"});
+    };
+    let saved = row.core_profile.as_ref().filter(|profile| profile.sha256 == sha).cloned();
+    match (trust(sha).or(saved), identity) {
+        (Some(profile), _) => known_core(&profile.family, &profile.minecraft, &profile.build),
+        (None, Ok(Some(identity))) => from_identity(&identity),
+        (None, Ok(None)) => json!({"state":"unknown","reason":"CoreProfileUnverified"}),
+        (None, Err(_)) => json!({"state":"unknown","reason":"CoreUnreadable"}),
+    }
 }
 
 /// `nativeConsole` reports whether this installation can show a server console
@@ -1753,5 +1778,83 @@ mod tests {
         assert_eq!(tail.len(), LOG_LIMIT as usize);
         assert!(tail.ends_with(&"y".repeat(32)));
         assert_eq!(tail.as_bytes()[LOG_LIMIT as usize - 33], b'x');
+    }
+
+    fn core_fixture(bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let folder = std::env::temp_dir().join(format!("ih-core-meta-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&folder).unwrap();
+        let folder = fs::canonicalize(&folder).unwrap();
+        let jar = folder.join("server.jar");
+        fs::write(&jar, bytes).unwrap();
+        (folder, jar)
+    }
+
+    fn core_row(profile: Option<CoreProfile>) -> Instance {
+        Instance { core_file: None, name: "core-meta".into(), java: PathBuf::new(), port: 25565,
+            velocity_listen_address: None, removed: false, directory: None, jvm: None, timing: None,
+            auto_restart: None, core_profile: profile, core_local_create: false, management_discovered: false }
+    }
+
+    fn core_profile(family: &str, minecraft: &str, build: &str, sha256: String) -> CoreProfile {
+        CoreProfile { family: family.into(), minecraft: minecraft.into(), build: build.into(), sha256,
+            unverified: false, java: None }
+    }
+
+    fn known(core: &Value) -> (&str, &str, &str) {
+        assert_eq!(core["state"], "known", "{core}");
+        (core["family"].as_str().unwrap(), core["minecraft"].as_str().unwrap(), core["build"].as_str().unwrap())
+    }
+
+    // #48: the list must agree with core maintenance, which trusts the
+    // built-in table first and then a registered profile with the same hash.
+    #[test]
+    fn list_core_uses_the_same_trusted_profile_as_core_maintenance() {
+        let (folder, jar) = core_fixture(b"legacy paperclip without a paper-api library");
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let pinned = core_profile("SPIGOT", "1.14", "c8d4cef", sha.clone());
+        let imported = core_metadata(&core_row(None), &jar, |hash| (hash == sha).then(|| pinned.clone()));
+        assert_eq!(known(&imported), ("SPIGOT", "1.14", "c8d4cef"));
+        // Old Paper (1.14, 1.14.4) has no paper-api library to read offline.
+        let old_paper = core_row(Some(core_profile("PAPER", "1.14.4", "245", sha.clone())));
+        let saved = core_metadata(&old_paper, &jar, |hash| core_maintenance::trusted_profile(&old_paper, hash));
+        assert_eq!(known(&saved), ("PAPER", "1.14.4", "245"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_does_not_reuse_a_profile_after_the_jar_changes() {
+        let (folder, jar) = core_fixture(b"replaced core");
+        let row = core_row(Some(core_profile("FOLIA", "26.1.2", "8", "0".repeat(64))));
+        let core = core_metadata(&row, &jar, |hash| core_maintenance::trusted_profile(&row, hash));
+        assert_eq!(core["state"], "unknown");
+        assert_eq!(core["reason"], "CoreProfileUnverified");
+        fs::remove_file(&jar).unwrap();
+        assert_eq!(core_metadata(&row, &jar, |_| None)["reason"], "CorePathUnverified");
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_prefers_a_registered_non_paper_profile_over_paperclip_metadata() {
+        let paper_api = "META-INF/libraries/io/papermc/paper/paper-api/26.1.2.build.74-stable/paper-api-26.1.2.build.74-stable.jar";
+        let (folder, jar) = core_fixture(&core_identity::zip(&[paper_api]));
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let unregistered = core_metadata(&core_row(None), &jar, |_| None);
+        assert_eq!(known(&unregistered), ("Paper", "26.1.2", "74"));
+        let folia = core_row(Some(core_profile("FOLIA", "26.1.2", "8", sha)));
+        let core = core_metadata(&folia, &jar, |hash| core_maintenance::trusted_profile(&folia, hash));
+        assert_eq!(known(&core), ("FOLIA", "26.1.2", "8"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_keeps_an_offline_accepted_profile_marked_unverified() {
+        let (folder, jar) = core_fixture(b"offline accepted core");
+        let mut profile = core_profile("PAPER", "1.21.4", "232", content_revision::file_revision(&jar).unwrap());
+        profile.unverified = true;
+        let row = core_row(Some(profile));
+        let core = core_metadata(&row, &jar, |hash| core_maintenance::trusted_profile(&row, hash));
+        assert_eq!(known(&core), ("PAPER", "1.21.4", "232"));
+        assert_eq!(core["unverified"], true);
+        fs::remove_dir_all(&folder).unwrap();
     }
 }
