@@ -32,6 +32,8 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - GUI 啟動後每 5 秒向自己工作區的 Manager 登記（`gui-attach`，只接受同一安裝的 GUI 程序），Manager 不在時會先啟動它。
   所以 GUI 開著時一定有圖示；Manager 中途被結束，下一次登記會再啟動它。
 - 一個工作區最多一個圖示。開發版的提示文字以「InstanceHarbor Dev — <工作區資料夾名稱>」開頭，同時有多個工作區時可以分辨。
+- 圖示註冊時不帶提示文字，Manager 隨即補上。Windows 11 會把註冊時的提示文字當成圖示名稱，提示文字改變後
+  名稱會變成「註冊時的文字 目前的文字」，產品名稱因此重複。現在名稱開頭多一個空白，不影響顯示。
 - 滑鼠停在圖示上會顯示執行中的伺服器台數，右鍵選單第一行也會顯示（每 5 秒更新，算法與清單的「可停止」相同）。
   選單文字依「語言與外觀」的語言設定。
 - 左鍵點圖示，或右鍵選「開啟 InstanceHarbor」，會以這個工作區開啟 GUI；GUI 已在執行時則叫回它的視窗。
@@ -562,7 +564,7 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 | 工作列身分（AppUserModelID） | Windows 預設 | `local.instanceharbor.dev.<工作區鍵>`，每個工作區一個工作列按鈕 |
 | 主視窗、工作列、系統匣提示、訊息框 | `InstanceHarbor` | `InstanceHarbor Dev — <工作區名稱>` |
 | 伺服器後台視窗 | 原標題 | 原標題後加上 `[InstanceHarbor Dev — <工作區名稱>]` |
-| 側欄名稱、「關於」 | `InstanceHarbor` | 同主視窗標題；「關於」另列「開發工作區」與 Git commit |
+| 側欄名稱、「關於」 | `InstanceHarbor` | 側欄第一行 `InstanceHarbor Dev`，第二行工作區名稱；「關於」另列「開發工作區」與 Git commit |
 | GUI 診斷紀錄 | `InstanceHarbor\logs` | `InstanceHarbor Dev\logs\<工作區名稱>`，同時開著的 GUI 不會互搶寫入鎖與 16 MiB 容量上限 |
 
 `<工作區名稱>` 是工作區資料夾名稱；`<工作區鍵>` 是名稱轉小寫後的 FNV-1a 64 位元雜湊（16 位十六進位），

@@ -62,3 +62,13 @@ test('the About panel shows the development workspace and the rail names the cha
   assert.doesNotMatch(app, /<span>InstanceHarbor<\/span>/, 'the rail must not hard-code the stable name')
   assert.match(app, /productTitle\(/)
 })
+
+test('a narrow rail wraps the channel name between words and puts the workspace on its own line', () => {
+  const app = read('./App.vue')
+  assert.match(app, /<span v-if="channelInfo\?\.workspace" class="brand-workspace">/)
+  const css = read('./app.css')
+  // Breaking anywhere split "InstanceHarbor" itself at the 160px rail.
+  assert.doesNotMatch(css, /\.brand span\{[^}]*overflow-wrap:anywhere/)
+  assert.doesNotMatch(css, /\.brand-name\{[^}]*(overflow-wrap|word-break)/)
+  assert.match(css, /\.brand-workspace\{[^}]*display:block[^}]*overflow-wrap:anywhere/)
+})

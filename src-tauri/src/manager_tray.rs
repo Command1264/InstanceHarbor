@@ -198,9 +198,10 @@ fn run(root: &Path, gui: &Path, hooks: &Hooks, stop: &AtomicBool) -> Result<()> 
     menu.append_items(&[&status, &PredefinedMenuItem::separator(), &open, &quit])
         .map_err(|error| error.to_string())?;
     let workspace = crate::desktop_channel::workspace_of(root);
+    // No tooltip at registration: Windows 11 keeps the first tooltip as the icon's name and
+    // reads "<first> <current>" once the text changes. The loop below sets it right away.
     let mut builder = TrayIconBuilder::new()
         .with_id(format!("instanceharbor-manager-{}", std::process::id()))
-        .with_tooltip(tooltip(workspace.as_deref(), None, chinese))
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false);
     match Icon::from_resource(ICON_RESOURCE, None) {
@@ -399,5 +400,16 @@ mod tests {
         assert_eq!(tooltip(None, Some(3), true), format!("{title} · 執行中 3 台"));
         let named = crate::desktop_channel::product_title(Some("agent-a"));
         assert_eq!(tooltip(Some("agent-a"), Some(1), false), format!("{named} · 1 server running"));
+    }
+
+    #[test]
+    fn tray_icon_is_registered_without_a_tooltip() {
+        // Windows 11 names the icon "<tooltip at registration> <current tooltip>" once the
+        // tooltip changes, which repeated the product title when a server started.
+        let source = include_str!("manager_tray.rs");
+        let builder = source.split("TrayIconBuilder::new()").nth(1).and_then(|rest| rest.split(".build()").next());
+        let builder = builder.expect("run() builds the tray icon");
+        assert!(!builder.contains(".with_tooltip("), "the refresh loop sets the tooltip after registration");
+        assert!(source.contains("tray.set_tooltip(Some(tooltip("));
     }
 }

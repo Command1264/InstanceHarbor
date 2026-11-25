@@ -1111,7 +1111,8 @@ async function openServerFolder(name:string){
   catch(e){feedback.value=t('instances.openServerFolderError',{error:errorText(e)})}
 }
 let catalogTimer:ReturnType<typeof setInterval> | undefined
-// The development channel names its workspace beside the logo, as in the window title.
+// The development channel names its workspace under the channel name, so a narrow rail
+// wraps between words and never inside "InstanceHarbor".
 const channelInfo=ref<Pick<AboutInfo,'channel'|'workspace'>>()
 onMounted(async()=>{
   if(!nativeBridge)return
@@ -1140,7 +1141,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 </script>
 <template>
   <a class="skip" href="#view">{{ t('skip.main') }}</a>
-  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span>{{ productTitle(channelInfo) }}</span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
+  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span class="brand-name" :title="productTitle(channelInfo)">{{ channelInfo?.channel ?? 'InstanceHarbor' }}<span v-if="channelInfo?.workspace" class="brand-workspace"><span class="sr-only"> — </span>{{ channelInfo.workspace }}</span></span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
     <main id="view" :class="{'route-settings':route==='settings'}"><div v-if="!nativeBridge" class="notice error" role="alert">{{ t('app.bridgeNotice') }}</div>
       <aside v-if="route==='instances' && (registryIssues.length || listUnavailable)" class="registry-notice" role="status">
         <p v-if="listUnavailable">{{ listUnavailable }}</p>
