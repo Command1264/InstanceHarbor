@@ -94,7 +94,25 @@ struct Management {
 struct TestAdmins {
     requested: bool,
     configured: usize,
+    /// Set when the default left out configured administrators because no
+    /// enabled method works on this core (for example OP on a Velocity proxy).
+    skipped: Option<&'static str>,
     grant: Option<test_admins::Grant>,
+}
+
+/// The default grants outside `instances/Agent`, unless no enabled method
+/// works on this core. An explicit choice is used as given.
+fn test_administrator_choice(root: &Path, target: &Path, core: &CoreProfile, explicit: Option<bool>) -> Result<TestAdmins> {
+    let (requested, skipped) = match explicit {
+        Some(requested) => (requested, None),
+        None if test_admins::agent_path(root, target) => (false, None),
+        None => match test_admins::default_skip_reason(root, core)? {
+            Some(reason) => (false, Some(reason)),
+            None => (true, None),
+        },
+    };
+    let (configured, grant) = test_admins::plan(root, core, requested)?;
+    Ok(TestAdmins { requested, configured, skipped, grant })
 }
 
 #[derive(Deserialize, Serialize)]
@@ -319,18 +337,16 @@ fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Ins
     port_unassigned(root, draft.port, &draft.name)?;
     port_free(draft.port)?;
     let (core, assets) = read_source(root, &draft.source, verify_latest)?;
-    let requested = draft.test_administrators.unwrap_or_else(|| !test_admins::agent_path(root, &target));
-    let (configured, grant) = test_admins::plan(root, &core, requested)?;
+    let test_admins = test_administrator_choice(root, &target, &core, draft.test_administrators)?;
     let scope = Scope { original_revision, added_revision };
     let mut identity = json!({
         "draft":draft,"target":path_format::display(&target),"core":core,"scope":scope,
         "managementCandidates":management.candidates,"managementScanComplete":management.complete,
     });
-    if let Some(grant) = &grant {
+    if let Some(grant) = &test_admins.grant {
         identity["testAdministrators"] = grant.summary();
     }
     let revision = content_revision::revision(&serde_json::to_vec(&identity).map_err(fail)?)?;
-    let test_admins = TestAdmins { requested, configured, grant };
     Ok(Inspection { parent, target, core, assets, scope, revision, test_admins, management })
 }
 
@@ -346,6 +362,7 @@ fn report(inspection: &Inspection) -> Value {
         "initializationDefaults":policy_settings::has_creation_defaults(&inspection.core),
         "testAdministrators":{
             "requested":inspection.test_admins.requested,"configured":inspection.test_admins.configured,
+            "skipped":inspection.test_admins.skipped,
             "grant":inspection.test_admins.grant.as_ref().map(test_admins::Grant::summary),
         },
     })
@@ -898,7 +915,7 @@ mod tests {
             assets: Assets::Local { core, mojang: None },
             scope: Scope { original_revision, added_revision },
             revision: "fixture".into(),
-            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            test_admins: TestAdmins { requested: true, configured: 0, skipped: None, grant: None },
             management: Management::default(),
         };
         let work = "register-neighbors";
@@ -941,7 +958,7 @@ mod tests {
             assets: Assets::Local { core, mojang: None },
             scope: Scope { original_revision: original_revision.clone(), added_revision: None },
             revision: "fixture".into(),
-            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            test_admins: TestAdmins { requested: true, configured: 0, skipped: None, grant: None },
             management: Management::default(),
         };
         let work = "no-folder";
@@ -1017,12 +1034,12 @@ mod tests {
         let root = &fixture.0;
         let mut draft = draft(Source::Download { family: "PAPER".into(), minecraft: "26.3".into() });
         let empty = report(&inspect_source(root, &draft, false).unwrap());
-        assert_eq!(empty["testAdministrators"], json!({"requested":true,"configured":0,"grant":null}));
+        assert_eq!(empty["testAdministrators"], json!({"requested":true,"configured":0,"skipped":null,"grant":null}));
         test_admins::tests::save_fake_administrators(root, "");
         assert_eq!(inspect_source(root, &draft, false).err().unwrap(), "TestPermissionArtifactMissing");
         draft.test_administrators = Some(false);
         let declined = report(&inspect_source(root, &draft, false).unwrap());
-        assert_eq!(declined["testAdministrators"], json!({"requested":false,"configured":2,"grant":null}));
+        assert_eq!(declined["testAdministrators"], json!({"requested":false,"configured":2,"skipped":null,"grant":null}));
         fs::create_dir_all(root.join("instances").join("Agent").join("Lobby")).unwrap();
         draft.test_administrators = None;
         draft.parent = "instances/Agent/Lobby".into();
@@ -1030,6 +1047,27 @@ mod tests {
         assert_eq!(agent["testAdministrators"]["requested"], false);
         draft.test_administrators = Some(true);
         assert_eq!(inspect_source(root, &draft, false).err().unwrap(), "TestPermissionArtifactMissing");
+    }
+
+    #[test]
+    fn velocity_default_skips_op_only_test_administrators_but_an_explicit_grant_still_fails() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let target = root.join("instances").join("existing").join("proxy");
+        let velocity = CoreProfile {
+            unverified: false, java: None, family: "VELOCITY".into(),
+            minecraft: "3.4.0".into(), build: "1".into(), sha256: "fixture".into(),
+        };
+        test_admins::tests::save_fake(root, json!({"luckperms":false,"op":true}));
+        let defaulted = test_administrator_choice(root, &target, &velocity, None).unwrap();
+        assert_eq!((defaulted.requested, defaulted.configured, defaulted.skipped), (false, 2, Some("ProxyHasNoOp")));
+        assert!(defaulted.grant.is_none());
+        let declined = test_administrator_choice(root, &target, &velocity, Some(false)).unwrap();
+        assert_eq!((declined.requested, declined.skipped), (false, None));
+        assert_eq!(
+            test_administrator_choice(root, &target, &velocity, Some(true)).err().unwrap(),
+            "UnsupportedTestPermissionPlatform"
+        );
     }
 
     #[test]
@@ -1106,7 +1144,7 @@ mod tests {
             assets: Assets::Local { core, mojang: None },
             scope: Scope { original_revision, added_revision },
             revision: "fixture".into(),
-            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            test_admins: TestAdmins { requested: true, configured: 0, skipped: None, grant: None },
             management: Management::default(),
         };
         let work = "resume-creation";

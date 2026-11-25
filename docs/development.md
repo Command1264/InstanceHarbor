@@ -404,7 +404,8 @@ LuckPerms 開、授予所有權限、OP 關。
   才會清空（欄位有內容時才能按）。
 - **OP**：建立實例時寫入 `ops.json`（`uuid`、`name`、`level` 為 4、`bypassesPlayerLimit` 為 `false`），
   使用同一份管理員清單。關閉時不寫 `ops.json`，由伺服器自行建立空的清單。OP 與 LuckPerms
-  無關，只開 OP 時不需要也不會安裝 LuckPerms。Velocity 代理沒有 OP，只開 OP 會停止建立並說明原因。
+  無關，只開 OP 時不需要也不會安裝 LuckPerms。Velocity 代理沒有 OP：只開 OP 時，建立 Velocity 的預設是不授權，
+  確認畫面說明原因；只有明確選「授權」才會停止建立並回報 `UnsupportedTestPermissionPlatform`。
 
 LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方來源與 SHA-256：
 
@@ -419,7 +420,8 @@ LuckPerms 使用 `config/test-admin-permissions.json` 固定的版本、官方�
 不會下載；快取缺少或雜湊不符時停止建立並說明原因，不改用其他版本。
 
 建立實例的「測試管理員權限」預設依位置決定：`instances/Agent/` 底下的 Agent 隔離實例不授權，
-其他位置授權。可在建立時改為「授權」或「不授權」，兩個開關都適用；確認畫面列出將套用的內容，
+其他位置授權；但開啟的方式都不適用這個核心時（例如 Velocity 只開 OP），預設改為不授權，預覽回傳的
+`testAdministrators.skipped` 帶原因代碼（`ProxyHasNoOp` 或 `UnsupportedCore`）。LuckPerms 尚未下載不算不適用，仍會停止建立。可在建立時改為「授權」或「不授權」，兩個開關都適用；確認畫面列出將套用的內容，
 例如「授權 1 位 · LuckPerms · OP」。LuckPerms 開啟時，新實例的 `plugins/` 會有核對過的
 LuckPerms JAR，`plugins/LuckPerms/`（Velocity 為 `plugins/luckperms/`）寫入 `storage-method: json` 的
 `config.yml`、每位管理員的 `json-storage/users/<uuid>.json`，以及讓 `lp user <名稱>` 在首次登入前

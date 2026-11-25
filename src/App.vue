@@ -285,7 +285,7 @@ type CreationPreview = {
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
   initializationDefaults?: boolean
-  testAdministrators?: { requested: boolean; configured: number; grant: { count: number; group: string; luckperms: boolean; op: boolean; fileName: string | null } | null }
+  testAdministrators?: { requested: boolean; configured: number; skipped?: 'ProxyHasNoOp' | 'UnsupportedCore' | null; grant: { count: number; group: string; luckperms: boolean; op: boolean; fileName: string | null } | null }
   revision: string
 }
 const creationPreview=ref<CreationPreview>()
@@ -392,6 +392,8 @@ const creationTestAdmins = computed(() => {
     const what = [luckperms && (group ? t('app.create.testAdminsLuckPermsGroup', { group }) : 'LuckPerms'), op && 'OP'].filter(Boolean).join(' · ')
     return t('app.create.testAdminsGranted', { count, what })
   }
+  if (state.skipped === 'ProxyHasNoOp') return t('app.create.testAdminsSkippedProxy')
+  if (state.skipped) return t('app.create.testAdminsSkippedCore')
   return t(state.configured ? 'app.create.testAdminsDeclined' : 'app.create.testAdminsNone')
 })
 function pickerFailed() {
