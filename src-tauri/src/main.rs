@@ -291,7 +291,7 @@ async fn manage_inner(
     if arguments.first().is_some_and(|verb| {
         matches!(
             verb.as_str(),
-            "host" | "init" | "manager-serve" | "manager-exit" | "gui-attach"
+            "host" | "init" | "manager-serve" | "manager-exit" | "app-exit" | "gui-attach"
         )
     }) {
         return Err("不允許從 GUI 啟動 Host 或變更工作區。".into());

@@ -13,4 +13,7 @@ pub mod diagnostics;
 pub mod installation;
 
 #[cfg(windows)]
+pub mod setup_probe;
+
+#[cfg(windows)]
 pub mod desktop_channel;

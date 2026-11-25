@@ -155,11 +155,15 @@ fn verified_guis(recorded: &[AttachedGui], probe: impl Fn(u32) -> GuiProbe) -> V
         .collect()
 }
 
-/// Tray Quit: ends the Manager and closes the windows of attached GUIs that are still
-/// the same processes. `Ok(false)` while batch or core-update work would be cut off.
+/// Tray Quit and `app-exit`: ends the Manager and closes the windows of attached GUIs
+/// that are still the same processes. `Ok(false)` while batch or core-update work would
+/// be cut off.
 #[cfg_attr(test, allow(dead_code))]
 fn exit_app(state: &Mutex<State>) -> Result<bool> {
-    let mut state = state.lock().map_err(fail)?;
+    exit_app_locked(state.lock().map_err(fail)?)
+}
+
+fn exit_app_locked(mut state: std::sync::MutexGuard<'_, State>) -> Result<bool> {
     if active_work(&state) {
         return Ok(false);
     }
@@ -642,6 +646,13 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
                 return Err("ManagerHasActiveWork".into());
             }
             state.exiting = true;
+            Ok(json!({"exiting":true}))
+        }
+        // The same flow as tray Quit, without its question; Setup uses it to update.
+        ("app-exit", []) => {
+            if !exit_app_locked(state)? {
+                return Err("ManagerHasActiveWork".into());
+            }
             Ok(json!({"exiting":true}))
         }
         ("gui-attach", [pid]) => {

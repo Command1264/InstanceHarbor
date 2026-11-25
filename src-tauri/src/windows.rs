@@ -2796,6 +2796,7 @@ pub fn dispatch_with_creation_progress(
             | "agent-list"
             | "batch-cancel"
             | "manager-exit"
+            | "app-exit"
             | "console-open"
             | "host-recover"
             | "gui-attach"

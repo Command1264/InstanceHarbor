@@ -46,6 +46,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   其中開啟自動重啟的伺服器會另外說明：自動重啟由 Manager 執行，
   結束後這些伺服器當機或意外結束不會自動重啟，要等 Manager 下次啟動才恢復。按「是」後會再核對一次批次工作。
   CLI 的 `manager-exit` 不詢問，只套用批次工作的條件。
+  CLI 的 `app-exit` 與「結束」同一套流程（結束 Manager 並關閉已登記的 GUI 視窗），同樣不詢問、只套用批次工作的條件；Setup 更新時使用它。
 - 「結束」只關閉仍是原登記程序的 GUI：`gui-attach` 記下 PID、Windows 程序建立時間與 GUI 執行檔路徑，
   送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
 - 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
@@ -566,7 +567,24 @@ Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本
 Setup 的對話框用同一條系統語言規則。
 已安裝時，Setup 比較版本：較舊時詢問是否更新，相同時詢問是否修復（重新安裝程式檔案），
 較新時預設拒絕並詢問是否確定退回舊版。工作區資料一律保留；InstanceHarbor 仍在執行時，Setup 不替換檔案。
-使用者取消時退出碼為 4。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
+使用者取消時退出碼為 4。
+
+已安裝的程式仍在執行時（更新或修復），Setup 會先關閉它，不再要求使用者自行關閉：
+
+- 能否繼續只看安裝標記檔 `instanceharbor.install`：GUI、CLI、Manager 與每台伺服器的 Host 都持有它直到結束，
+  Setup 能以不共用的方式開啟它時才替換檔案，並持有到替換完成。伺服器台數只用來說明為何等待。
+- Setup 把自己的 `ihctl.exe` 解到暫存資料夾，以 `ihctl setup-probe servers|close ...`（`src-tauri/src/setup_probe.rs`）
+  呼叫**已安裝版本**的 `ihctl`：用 `list` 讀取預設正式工作區（`%LOCALAPPDATA%/InstanceHarbor/workspaces/default`）
+  不是「已停止」的伺服器台數（規則與系統匣「結束」相同）；台數為 0 時請已安裝版本結束 GUI 與 Manager。
+  1.1.0 起用 `ihctl <工作區> app-exit`，與系統匣「結束」同一套流程（不詢問，有批次工作或核心更新時回報 `ManagerHasActiveWork`）。
+  1.0.0／1.0.1 沒有這個指令，Setup 依已安裝的版本號改用 `manager-exit`，並請使用者自行關閉 GUI 視窗；不會對舊版送出未知指令，也不以視窗標題送關閉訊息。
+  2026-11-25 在 Windows Sandbox 實測 1.0.1：Manager 結束後 GUI 不會自行結束，按視窗關閉後縮到系統匣，仍持有標記檔，所以等待頁請使用者從系統匣結束。
+- 互動安裝在歡迎頁後顯示「正在關閉 InstanceHarbor」等待頁，每 1.5 秒重新檢查：有伺服器沒有停止時顯示「還有 N 台伺服器沒有停止」；
+  台數為 0 但標記檔仍被占用時，說明可能是其他工作區或已不在管理範圍的伺服器。Setup 不替使用者停止伺服器，
+  等待頁只提供「開啟 InstanceHarbor」與「取消」；取消時退出碼為 4，不改動已安裝的檔案。標記檔釋放後自動進入安裝頁。
+- 靜默安裝（`/S`）不等待伺服器：有伺服器沒有停止或狀態讀不到時立即失敗，退出碼為 5，不改動已安裝的檔案。
+  伺服器都已停止時自動關閉 GUI 與 Manager，最多等 30 秒標記檔釋放，仍被占用時退出碼為 2。
+- 等待頁各狀態的文字對應（`windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
 Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
 Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
