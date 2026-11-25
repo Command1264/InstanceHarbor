@@ -25,6 +25,7 @@ import { ScopeCache } from './creation-scope-cache'
 import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
+import { diagnosticWarning, type DiagnosticStatus } from './diagnostic-warning'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
@@ -51,7 +52,7 @@ const listLoaded=ref(false)
 const listReading=ref(false)
 const presentation=ref<Presentation>({preferences:{theme:'system',pins:[]},instances:[]})
 const languagePreview=ref<LanguagePreference>()
-const { t }=provideAppLanguage(()=>presentation.value.preferences.language,()=>languagePreview.value)
+const { t, locale }=provideAppLanguage(()=>presentation.value.preferences.language,()=>languagePreview.value)
 const coreCheckRows=ref<Record<string,CoreSource>>({})
 let coreEpoch=0
 let lastCoreTargets=''
@@ -488,16 +489,16 @@ const BACKGROUND_FAILURE_LIMIT=3
 let backgroundFailures=0
 function clearRefreshFeedback(){clearTimeout(refreshFeedbackTimer);refreshFeedbackTimer=undefined;manualRefreshDone.value=false}
 let diagnosticFailureReported=false
-let pendingDiagnosticWarning=false
+let pendingDiagnosticWarning:DiagnosticStatus|undefined
 function presentDiagnosticWarning(){
-  if(pendingDiagnosticWarning && !failureMessage.value && !failureDialog.value?.open){pendingDiagnosticWarning=false;showOperationError(t('app.diagnosticWarning'))}
+  if(pendingDiagnosticWarning && !failureMessage.value && !failureDialog.value?.open){const status=pendingDiagnosticWarning;pendingDiagnosticWarning=undefined;showOperationError(diagnosticWarning(locale.value,status))}
 }
 function afterFailureClose(){failureMessage.value='';failureItems.value=[];failureBatch=undefined;const pending=pendingOperationErrors.shift();if(pending)showOperationError(pending.message,pending.items,pending.batch);else void nextTick(presentDiagnosticWarning)}
 async function checkDiagnostics(){
   if(!nativeBridge||diagnosticFailureReported)return
   try{
-    const status=await invoke<{available:boolean;error?:string}>('diagnostic_status')
-    if(!status.available){diagnosticFailureReported=true;pendingDiagnosticWarning=true;void nextTick(presentDiagnosticWarning)}
+    const status=await invoke<DiagnosticStatus>('diagnostic_status')
+    if(!status.available){diagnosticFailureReported=true;pendingDiagnosticWarning=status;void nextTick(presentDiagnosticWarning)}
   }catch(error){console.error('Could not check the diagnostic log state',error)}
 }
 let pollTick=0
