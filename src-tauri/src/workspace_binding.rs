@@ -24,13 +24,17 @@ unsafe extern "system" {
 /// The WebView2 profile folder this process should use, or None to keep the one a
 /// launcher already chose. Both channels keep it beside their workspaces, so the
 /// app's data stays in one folder instead of Tauri's identifier folder.
-pub(super) fn webview_profile(local_app_data: &Path, inherited: Option<&OsStr>) -> Option<PathBuf> {
-    // The development channel always isolates its profile; a stable launcher such as
-    // launch-acceptance.ps1 may pick a per-workspace profile.
+pub(super) fn webview_profile(
+    local_app_data: &Path,
+    inherited: Option<&OsStr>,
+    workspace: Option<&str>,
+) -> Option<PathBuf> {
+    // The development channel always isolates its profile, one per workspace; a stable
+    // launcher such as launch-acceptance.ps1 may pick a per-workspace profile.
     if !desktop_channel::DEVELOPMENT && inherited.is_some_and(|folder| !folder.is_empty()) {
         return None;
     }
-    Some(local_app_data.join(desktop_channel::APP_DIRECTORY).join("webview"))
+    Some(desktop_channel::webview_profile(local_app_data, workspace))
 }
 
 /// The WebView2 profile folder chosen by `configure_desktop` or the launcher. Tauri on
@@ -42,14 +46,23 @@ pub(super) fn webview_data_directory() -> Option<PathBuf> {
 
 pub(super) fn configure_desktop() -> Result<(), String> {
     let local = desktop_channel::local_app_data()?;
-    if let Some(profile) = webview_profile(&local, env::var_os("WEBVIEW2_USER_DATA_FOLDER").as_deref()) {
-        create_plain_directory(&local.join(desktop_channel::APP_DIRECTORY))?;
-        create_plain_directory(&profile)?;
+    let workspace = desktop_channel::workspace_name();
+    let inherited = env::var_os("WEBVIEW2_USER_DATA_FOLDER");
+    if let Some(profile) = webview_profile(&local, inherited.as_deref(), workspace.as_deref()) {
+        // Create each missing level; all of them stay under the app folder.
+        let app = local.join(desktop_channel::APP_DIRECTORY);
+        create_plain_directory(&app)?;
+        let mut folder = app;
+        for part in profile.strip_prefix(&folder).map_err(|error| error.to_string())?.components() {
+            folder.push(part);
+            create_plain_directory(&folder)?;
+        }
         // Configure only this process and its children before WebView2 starts.
         env::set_var("WEBVIEW2_USER_DATA_FOLDER", profile);
     }
     if desktop_channel::DEVELOPMENT {
-        let id: Vec<_> = desktop_channel::IDENTIFIER.encode_utf16().chain([0]).collect();
+        // Each workspace gets its own taskbar button.
+        let id: Vec<_> = desktop_channel::app_user_model_id(workspace.as_deref()).encode_utf16().chain([0]).collect();
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
         if status < 0 {
             return Err(format!("DevelopmentAppUserModelIdFailed: {status:#x}"));
@@ -96,8 +109,85 @@ unsafe extern "system" {
 pub(super) fn show_startup_error(error: &str) {
     let text: Vec<_> = format!("無法開啟 InstanceHarbor 工作區。\n{error}")
         .encode_utf16().chain([0]).collect();
-    let title: Vec<_> = desktop_channel::TITLE.encode_utf16().chain([0]).collect();
+    let title = desktop_channel::product_title(desktop_channel::workspace_name().as_deref());
+    let title: Vec<_> = title.encode_utf16().chain([0]).collect();
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x10); }
+}
+
+/// `System.AppUserModel.*` property ids (format id 9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3).
+const RELAUNCH_COMMAND: u32 = 2;
+const RELAUNCH_DISPLAY_NAME: u32 = 4;
+const APP_USER_MODEL_ID: u32 = 5;
+
+/// What the main window tells the taskbar, in the order it is set. The Jump List names the
+/// app by its relaunch display name, so each development workspace shows its own name there.
+/// The stable channel keeps the installed shortcut's name and sets nothing.
+fn taskbar_properties(development: bool, workspace: Option<&str>, executable: &Path) -> Vec<(u32, String)> {
+    if !development {
+        return Vec::new();
+    }
+    vec![
+        (RELAUNCH_COMMAND, format!("\"{}\"", executable.display())),
+        (RELAUNCH_DISPLAY_NAME, desktop_channel::product_title_for(true, workspace)),
+        (APP_USER_MODEL_ID, desktop_channel::app_user_model_id_for(true, workspace)),
+    ]
+}
+
+#[repr(C)]
+struct Guid(u32, u16, u16, [u8; 8]);
+#[repr(C)]
+struct PropertyKey { format: Guid, id: u32 }
+#[repr(C)]
+struct PropVariant { kind: u16, reserved: [u16; 3], text: *const u16, rest: usize }
+#[repr(C)]
+struct PropertyStore { table: *const PropertyStoreTable }
+#[repr(C)]
+struct PropertyStoreTable {
+    query_interface: usize,
+    add_ref: usize,
+    release: unsafe extern "system" fn(*mut PropertyStore) -> u32,
+    get_count: usize,
+    get_at: usize,
+    get_value: usize,
+    set_value: unsafe extern "system" fn(*mut PropertyStore, *const PropertyKey, *const PropVariant) -> i32,
+    commit: usize,
+}
+
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn SHGetPropertyStoreForWindow(window: *mut std::ffi::c_void, interface: *const Guid, store: *mut *mut PropertyStore) -> i32;
+}
+
+/// Names the development main window in the taskbar Jump List. These are properties of the
+/// window only: nothing is written to the registry or to a shortcut.
+pub(super) fn name_taskbar_window(window: *mut std::ffi::c_void) -> Result<(), String> {
+    let executable = env::current_exe().map_err(|error| error.to_string())?;
+    let workspace = desktop_channel::workspace_name();
+    let properties = taskbar_properties(desktop_channel::DEVELOPMENT, workspace.as_deref(), &executable);
+    if properties.is_empty() {
+        return Ok(());
+    }
+    const PROPERTY_STORE: Guid = Guid(0x886d8eeb, 0x8cf2, 0x4446, [0x8d, 0x02, 0xcd, 0xba, 0x1d, 0xbd, 0xcf, 0x99]);
+    const VT_LPWSTR: u16 = 31;
+    let mut store = std::ptr::null_mut();
+    let status = unsafe { SHGetPropertyStoreForWindow(window, &PROPERTY_STORE, &mut store) };
+    if status < 0 || store.is_null() {
+        return Err(format!("TaskbarPropertyStoreUnavailable: {status:#x}"));
+    }
+    let mut result = Ok(());
+    for (id, value) in properties {
+        let text: Vec<u16> = value.encode_utf16().chain([0]).collect();
+        let key = PropertyKey { format: Guid(0x9F4C2855, 0x9F79, 0x4B39, [0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3]), id };
+        let variant = PropVariant { kind: VT_LPWSTR, reserved: [0; 3], text: text.as_ptr(), rest: 0 };
+        // SetValue copies the string.
+        let status = unsafe { ((*(*store).table).set_value)(store, &key, &variant) };
+        if status < 0 {
+            result = Err(format!("TaskbarPropertyRejected {id}: {status:#x}"));
+            break;
+        }
+    }
+    unsafe { ((*(*store).table).release)(store) };
+    result
 }
 
 #[cfg(test)]
@@ -108,8 +198,19 @@ mod tests {
     fn the_stable_webview_profile_sits_beside_the_workspaces_unless_a_launcher_chose_one() {
         let local = Path::new(r"C:\Users\someone\AppData\Local");
         let profile = Some(local.join("InstanceHarbor").join("webview"));
-        assert_eq!(webview_profile(local, None), profile);
-        assert_eq!(webview_profile(local, Some(OsStr::new(""))), profile);
-        assert_eq!(webview_profile(local, Some(OsStr::new(r"D:\evidence\manual-webview"))), None);
+        assert_eq!(webview_profile(local, None, None), profile);
+        assert_eq!(webview_profile(local, Some(OsStr::new("")), Some("agent-a")), profile);
+        assert_eq!(webview_profile(local, Some(OsStr::new(r"D:\evidence\manual-webview")), None), None);
+    }
+
+    #[test]
+    fn each_development_window_names_its_workspace_in_the_jump_list() {
+        let executable = Path::new(r"D:\builds\InstanceHarborDev.exe");
+        assert!(taskbar_properties(false, Some("agent-a"), executable).is_empty(), "stable keeps its shortcut name");
+        let named = taskbar_properties(true, Some("agent-a"), executable);
+        assert_eq!(named[0], (RELAUNCH_COMMAND, r#""D:\builds\InstanceHarborDev.exe""#.to_owned()));
+        assert_eq!(named[1], (RELAUNCH_DISPLAY_NAME, desktop_channel::product_title_for(true, Some("agent-a"))));
+        assert_eq!(named[2], (APP_USER_MODEL_ID, desktop_channel::app_user_model_id_for(true, Some("agent-a"))));
+        assert!(named[1].1.ends_with("agent-a"));
     }
 }

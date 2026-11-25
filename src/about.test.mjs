@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { aboutCommitText } from './about.ts'
+import { aboutCommitText, productTitle } from './about.ts'
 import { componentsMessages as messages } from './messages/components.ts'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
@@ -44,4 +44,31 @@ test('the About tab has no save or restore buttons', () => {
   const footer = page.match(/<div[^>]*class="settings-footer"[^>]*>/)
   assert.ok(footer, 'SettingsPage must render the settings footer')
   assert.match(footer[0], /v-if="tab!=='about'"/)
+})
+
+test('the product title names the development workspace like the backend does', () => {
+  assert.equal(productTitle({ channel: 'InstanceHarbor', workspace: null }), 'InstanceHarbor')
+  assert.equal(productTitle({ channel: 'InstanceHarbor Dev', workspace: 'accept-52b' }), 'InstanceHarbor Dev — accept-52b')
+  assert.equal(productTitle(undefined), 'InstanceHarbor')
+  const backend = read('../src-tauri/src/desktop_channel.rs')
+  assert.ok(backend.includes(String.raw`format!("{title} \u{2014} {name}")`),'desktop_channel.rs uses the same separator')
+})
+
+test('the About panel shows the development workspace and the rail names the channel', () => {
+  const panel = read('./components/AboutPanel.vue')
+  assert.match(panel, /info\?\.workspace/)
+  assert.match(panel, /components\.about\.workspace/)
+  const app = read('./App.vue')
+  assert.doesNotMatch(app, /<span>InstanceHarbor<\/span>/, 'the rail must not hard-code the stable name')
+  assert.match(app, /productTitle\(/)
+})
+
+test('a narrow rail wraps the channel name between words and puts the workspace on its own line', () => {
+  const app = read('./App.vue')
+  assert.match(app, /<span v-if="channelInfo\?\.workspace" class="brand-workspace">/)
+  const css = read('./app.css')
+  // Breaking anywhere split "InstanceHarbor" itself at the 160px rail.
+  assert.doesNotMatch(css, /\.brand span\{[^}]*overflow-wrap:anywhere/)
+  assert.doesNotMatch(css, /\.brand-name\{[^}]*(overflow-wrap|word-break)/)
+  assert.match(css, /\.brand-workspace\{[^}]*display:block[^}]*overflow-wrap:anywhere/)
 })

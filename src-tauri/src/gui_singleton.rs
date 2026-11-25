@@ -28,12 +28,10 @@ unsafe extern "system" {
     fn FlashWindow(window: Handle, invert: i32) -> i32;
 }
 
+/// One GUI per channel; the development channel allows one per workspace.
 pub fn acquire() -> io::Result<Option<OwnedHandle>> {
-    acquire_named(if crate::desktop_channel::DEVELOPMENT {
-        r"Local\InstanceHarbor-GUI-Dev"
-    } else {
-        r"Local\InstanceHarbor-GUI"
-    })
+    let workspace = crate::desktop_channel::workspace_name();
+    acquire_named(&crate::desktop_channel::gui_lock_name(workspace.as_deref()))
 }
 
 pub(super) fn acquire_named(name: &str) -> io::Result<Option<OwnedHandle>> {
@@ -54,13 +52,12 @@ pub fn focus_existing() -> bool {
     let Ok(executable) = std::env::current_exe().and_then(|path| path.canonicalize()) else {
         return false;
     };
-    let mut target: (PathBuf, Handle) = (executable, std::ptr::null_mut());
+    // The main window title names the workspace, so only this workspace's GUI matches.
+    let title = crate::desktop_channel::product_title(crate::desktop_channel::workspace_name().as_deref());
+    let mut target: Target = (executable, title, std::ptr::null_mut());
     unsafe {
-        EnumWindows(
-            find_existing,
-            (&mut target as *mut (PathBuf, Handle)) as isize,
-        );
-        let window = target.1;
+        EnumWindows(find_existing, (&mut target as *mut Target) as isize);
+        let window = target.2;
         if window.is_null() {
             return false;
         }
@@ -77,13 +74,16 @@ pub fn focus_existing() -> bool {
     true
 }
 
+/// The executable, the expected main window title, and the window found.
+type Target = (PathBuf, String, Handle);
+
 unsafe extern "system" fn find_existing(window: Handle, context: isize) -> i32 {
-    let mut title = [0u16; 64];
+    let target = unsafe { &mut *(context as *mut Target) };
+    let mut title = [0u16; 512];
     let size = unsafe { GetWindowTextW(window, title.as_mut_ptr(), title.len() as i32) };
-    if size <= 0 || String::from_utf16_lossy(&title[..size as usize]) != crate::desktop_channel::TITLE {
+    if size <= 0 || String::from_utf16_lossy(&title[..size as usize]) != target.1 {
         return 1;
     }
-    let target = unsafe { &mut *(context as *mut (PathBuf, Handle)) };
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(window, &mut pid) };
     if pid == std::process::id()
@@ -94,6 +94,6 @@ unsafe extern "system" fn find_existing(window: Handle, context: isize) -> i32 {
     {
         return 1;
     }
-    target.1 = window;
+    target.2 = window;
     0
 }

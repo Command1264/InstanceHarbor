@@ -5,6 +5,7 @@ export const componentsMessages = {
   'components.about.commit': ['Git commit', 'Git commit'],
   'components.about.commitUnknown': ['不明（建置時無法使用 Git）', 'Unknown (Git was not available at build time)'],
   'components.about.commitDirty': ['{commit}（含未提交的變更）', '{commit} (with uncommitted changes)'],
+  'components.about.workspace': ['開發工作區', 'Development workspace'],
   'components.about.author': ['作者', 'Author'],
   'components.about.links': ['連結', 'Links'],
   'components.about.repository': ['GitHub 儲存庫', 'GitHub repository'],

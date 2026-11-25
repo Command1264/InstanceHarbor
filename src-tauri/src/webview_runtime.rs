@@ -100,7 +100,7 @@ pub(super) fn ensure_available() -> bool {
     }
     let ui_language = unsafe { GetUserDefaultUILanguage() };
     let text = wide(&message(chinese(saved_language().as_deref(), ui_language)));
-    let title = wide(desktop_channel::TITLE);
+    let title = wide(&desktop_channel::product_title(desktop_channel::workspace_name().as_deref()));
     // MB_YESNO | MB_ICONERROR | MB_DEFBUTTON1; IDYES = 6.
     if unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x4 | 0x10) } == 6 {
         let (open, link) = (wide("open"), wide(STANDALONE_X64));

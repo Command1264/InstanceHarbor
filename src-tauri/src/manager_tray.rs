@@ -88,12 +88,9 @@ pub(super) fn status_line(running: Option<u32>, chinese: bool) -> String {
     }
 }
 
-/// A workspace other than the default one is named, so several icons stay apart.
+/// A development workspace is named, so several icons stay apart.
 pub(super) fn tooltip(workspace: Option<&str>, running: Option<u32>, chinese: bool) -> String {
-    let title = match workspace {
-        Some(name) => format!("{} ({name})", crate::desktop_channel::TITLE),
-        None => crate::desktop_channel::TITLE.into(),
-    };
+    let title = crate::desktop_channel::product_title(workspace);
     match (running, chinese) {
         (None | Some(0), _) => title,
         (Some(count), true) => format!("{title} · 執行中 {count} 台"),
@@ -168,15 +165,9 @@ fn handle_quit(hooks: &Hooks, chinese: bool) {
 }
 
 #[cfg(not(test))]
-fn workspace_label(root: &Path) -> Option<String> {
-    // The development channel uses many workspaces; name each one.
-    crate::desktop_channel::DEVELOPMENT
-        .then(|| root.file_name().map(|name| name.to_string_lossy().into_owned()))
-        .flatten()
-}
-
-#[cfg(not(test))]
 pub(super) fn start(root: &Path, gui: PathBuf, hooks: Hooks) -> Guard {
+    // The Manager serves one workspace; its message boxes name it.
+    crate::desktop_channel::bind_workspace(root);
     let stop = Arc::new(AtomicBool::new(false));
     let (done_send, done) = mpsc::channel();
     let thread_stop = Arc::clone(&stop);
@@ -206,10 +197,11 @@ fn run(root: &Path, gui: &Path, hooks: &Hooks, stop: &AtomicBool) -> Result<()> 
     let menu = Menu::new();
     menu.append_items(&[&status, &PredefinedMenuItem::separator(), &open, &quit])
         .map_err(|error| error.to_string())?;
-    let workspace = workspace_label(root);
+    let workspace = crate::desktop_channel::workspace_of(root);
+    // No tooltip at registration: Windows 11 keeps the first tooltip as the icon's name and
+    // reads "<first> <current>" once the text changes. The loop below sets it right away.
     let mut builder = TrayIconBuilder::new()
         .with_id(format!("instanceharbor-manager-{}", std::process::id()))
-        .with_tooltip(tooltip(workspace.as_deref(), None, chinese))
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false);
     match Icon::from_resource(ICON_RESOURCE, None) {
@@ -272,10 +264,17 @@ fn open_gui(root: &Path, gui: &Path, chinese: bool) {
     }
 }
 
+/// The Manager's message box caption names its workspace in the development channel.
+#[cfg(not(test))]
+fn caption() -> Vec<u16> {
+    let workspace = crate::desktop_channel::workspace_name();
+    crate::desktop_channel::product_title(workspace.as_deref()).encode_utf16().chain([0]).collect()
+}
+
 #[cfg(not(test))]
 fn message_box(text: &str, error: bool) {
     let text: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    let caption: Vec<u16> = crate::desktop_channel::TITLE.encode_utf16().chain([0]).collect();
+    let caption: Vec<u16> = caption();
     // MB_OK | MB_SETFOREGROUND | MB_TOPMOST, with an error or information icon.
     let flags = 0x0001_0000 | 0x0004_0000 | if error { 0x10 } else { 0x40 };
     unsafe {
@@ -287,7 +286,7 @@ fn message_box(text: &str, error: bool) {
 /// A Yes/No warning whose default answer is No.
 fn confirm(text: &str) -> bool {
     let text: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    let caption: Vec<u16> = crate::desktop_channel::TITLE.encode_utf16().chain([0]).collect();
+    let caption: Vec<u16> = caption();
     // MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST
     let flags = 0x0004 | 0x0030 | 0x0100 | 0x0001_0000 | 0x0004_0000;
     // IDYES
@@ -399,6 +398,18 @@ mod tests {
         assert_eq!(tooltip(None, Some(0), true), title);
         assert_eq!(tooltip(None, None, false), title);
         assert_eq!(tooltip(None, Some(3), true), format!("{title} · 執行中 3 台"));
-        assert_eq!(tooltip(Some("agent-a"), Some(1), false), format!("{title} (agent-a) · 1 server running"));
+        let named = crate::desktop_channel::product_title(Some("agent-a"));
+        assert_eq!(tooltip(Some("agent-a"), Some(1), false), format!("{named} · 1 server running"));
+    }
+
+    #[test]
+    fn tray_icon_is_registered_without_a_tooltip() {
+        // Windows 11 names the icon "<tooltip at registration> <current tooltip>" once the
+        // tooltip changes, which repeated the product title when a server started.
+        let source = include_str!("manager_tray.rs");
+        let builder = source.split("TrayIconBuilder::new()").nth(1).and_then(|rest| rest.split(".build()").next());
+        let builder = builder.expect("run() builds the tray icon");
+        assert!(!builder.contains(".with_tooltip("), "the refresh loop sets the tooltip after registration");
+        assert!(source.contains("tray.set_tooltip(Some(tooltip("));
     }
 }

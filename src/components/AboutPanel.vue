@@ -34,6 +34,7 @@ async function open(link: AboutLink) {
     <h2 id="about-heading">{{ t('components.about.heading') }}</h2>
     <div class="field"><span class="about-label">{{ t('components.about.version') }}</span><span class="about-value">{{ info?.version ?? '--' }}</span></div>
     <div class="field"><span class="about-label">{{ t('components.about.commit') }}</span><span class="about-value mono">{{ info ? aboutCommitText(info.commit) : '--' }}</span></div>
+    <div v-if="info?.workspace" class="field"><span class="about-label">{{ t('components.about.workspace') }}</span><span class="about-value mono">{{ info.workspace }}</span></div>
     <div class="field"><span class="about-label">{{ t('components.about.author') }}</span><span class="about-value">{{ info?.author ?? '--' }}</span></div>
     <div class="field"><span class="about-label">{{ t('components.about.links') }}</span><div class="actions">
       <button type="button" :disabled="!info" @click="open('repository')">{{ t('components.about.repository') }}</button>

@@ -445,11 +445,12 @@ fn system_chinese(ui_language: u16) -> bool {
 /// Title of a console window run (tier 3). It states the consequence of closing it.
 pub(super) fn console_window_title(root: &Path, name: &str) -> String {
     let language = load_preferences(root).map(|preferences| preferences.language).unwrap_or_default();
-    if chinese_interface(language) {
+    let title = if chinese_interface(language) {
         format!("{name} - InstanceHarbor 伺服器後台（關閉此視窗會停止伺服器）")
     } else {
         format!("{name} - InstanceHarbor server console (closing this window stops the server)")
-    }
+    };
+    crate::desktop_channel::window_title(&title, crate::desktop_channel::workspace_of(root).as_deref())
 }
 
 /// Turns the VT output a pseudoconsole writes into `stdout.log` into plain

@@ -19,6 +19,7 @@ import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
+import {productTitle,type AboutInfo} from './about'
 import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
 import { ScopeCache } from './creation-scope-cache'
 import {instanceNameIssue} from './instance-name'
@@ -1111,6 +1112,14 @@ async function openServerFolder(name:string){
   catch(e){feedback.value=t('instances.openServerFolderError',{error:errorText(e)})}
 }
 let catalogTimer:ReturnType<typeof setInterval> | undefined
+// The development channel names its workspace under the channel name, so a narrow rail
+// wraps between words and never inside "InstanceHarbor".
+const channelInfo=ref<Pick<AboutInfo,'channel'|'workspace'>>()
+onMounted(async()=>{
+  if(!nativeBridge)return
+  try{channelInfo.value=await invoke<AboutInfo>('about_info')}
+  catch(error){console.warn('Could not read the channel name',error)}
+})
 onMounted(() => {
   if (!nativeBridge) return
   refreshCatalog()
@@ -1133,7 +1142,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 </script>
 <template>
   <a class="skip" href="#view">{{ t('skip.main') }}</a>
-  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span>InstanceHarbor</span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
+  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span class="brand-name" :title="productTitle(channelInfo)">{{ channelInfo?.channel ?? 'InstanceHarbor' }}<span v-if="channelInfo?.workspace" class="brand-workspace"><span class="sr-only"> — </span>{{ channelInfo.workspace }}</span></span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
     <main id="view" :class="{'route-settings':route==='settings'}"><div v-if="!nativeBridge" class="notice error" role="alert">{{ t('app.bridgeNotice') }}</div>
       <aside v-if="route==='instances' && (registryIssues.length || listUnavailable)" class="registry-notice" role="status">
         <p v-if="listUnavailable">{{ listUnavailable }}</p>
