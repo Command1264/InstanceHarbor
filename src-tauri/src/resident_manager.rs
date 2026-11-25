@@ -121,7 +121,53 @@ struct State {
     exiting: bool,
     fault: bool,
     /// GUI processes that asked to close with the Manager (tray Quit).
-    gui: Vec<u32>,
+    gui: Vec<AttachedGui>,
+}
+
+/// A GUI process that asked to close with the Manager. A PID alone is not enough:
+/// Windows reuses PIDs, so Quit checks the creation time and executable again.
+struct AttachedGui {
+    process: Identity,
+    /// Canonical path of the accepted GUI executable it was running at attach.
+    image: PathBuf,
+}
+
+/// What a PID refers to now: the process identity and its canonical executable.
+type GuiProbe = (io::Result<Option<Identity>>, Option<PathBuf>);
+
+fn probe_gui(pid: u32) -> GuiProbe {
+    // The image is read first. A matching identity afterwards proves the recorded process
+    // was alive the whole time, so the image belonged to it and not to a PID reuse.
+    let image = process_image(pid).and_then(|image| image.canonicalize().ok());
+    (identity(pid), image)
+}
+
+/// The PIDs of attached GUIs that are still the recorded process running the recorded
+/// executable. Any other process at such a PID must never receive WM_CLOSE.
+fn verified_guis(recorded: &[AttachedGui], probe: impl Fn(u32) -> GuiProbe) -> Vec<u32> {
+    recorded
+        .iter()
+        .filter(|gui| {
+            let (current, image) = probe(gui.process.pid);
+            recorded_alive(&gui.process, current).unwrap_or(false) && image.as_ref() == Some(&gui.image)
+        })
+        .map(|gui| gui.process.pid)
+        .collect()
+}
+
+/// Tray Quit: ends the Manager and closes the windows of attached GUIs that are still
+/// the same processes. `Ok(false)` while batch or core-update work would be cut off.
+#[cfg_attr(test, allow(dead_code))]
+fn exit_app(state: &Mutex<State>) -> Result<bool> {
+    let mut state = state.lock().map_err(fail)?;
+    if active_work(&state) {
+        return Ok(false);
+    }
+    state.exiting = true;
+    let gui = std::mem::take(&mut state.gui);
+    drop(state);
+    manager_tray::close_gui_windows(&verified_guis(&gui, probe_gui));
+    Ok(true)
 }
 
 /// Work the Manager must finish before it may exit; servers themselves never count.
@@ -600,18 +646,18 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
         }
         ("gui-attach", [pid]) => {
             let pid: u32 = pid.parse().map_err(|_| "InvalidManagerRequest")?;
-            let image = process_image(pid).and_then(|image| image.canonicalize().ok());
+            let (current, image) = probe_gui(pid);
             let exe = executable()?;
-            let accepted = [crate::desktop_channel::GUI_EXECUTABLE, "instanceharbor-acceptance.exe"]
+            let image = [crate::desktop_channel::GUI_EXECUTABLE, "instanceharbor-acceptance.exe"]
                 .iter()
                 .filter_map(|name| exe.with_file_name(name).canonicalize().ok())
-                .any(|gui| image.as_ref() == Some(&gui));
-            if !accepted {
-                return Err("PeerMismatch".into());
-            }
-            state.gui.retain(|known| process_image(*known).is_some());
-            if !state.gui.contains(&pid) {
-                state.gui.push(pid);
+                .find(|gui| image.as_ref() == Some(gui))
+                .ok_or("PeerMismatch")?;
+            let process = current.map_err(fail)?.ok_or("PeerMismatch")?;
+            let live = verified_guis(&state.gui, probe_gui);
+            state.gui.retain(|known| live.contains(&known.process.pid));
+            if !state.gui.iter().any(|known| known.process == process) {
+                state.gui.push(AttachedGui { process, image });
             }
             Ok(json!({"attached":true}))
         }
@@ -1401,17 +1447,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
                         servers => manager_tray::ExitCheck::Confirm(Some(servers)),
                     })
                 }),
-                request_exit: Box::new(move || {
-                    let mut state = exit_state.lock().map_err(fail)?;
-                    if active_work(&state) {
-                        return Ok(false);
-                    }
-                    state.exiting = true;
-                    let gui = std::mem::take(&mut state.gui);
-                    drop(state);
-                    manager_tray::close_gui_windows(&gui);
-                    Ok(true)
-                }),
+                request_exit: Box::new(move || exit_app(&exit_state)),
                 exiting: Box::new(move || exiting_state.lock().map_or(true, |state| state.exiting)),
             },
         )
@@ -1578,5 +1614,42 @@ mod tray_count_tests {
         assert_eq!(servers_not_stopped(&snapshot, policy), (5, 2));
         assert_eq!(servers_not_stopped(&json!({"rows":[{"state":"Stopped"}]}), |_| true), (0, 0));
         assert_eq!(servers_not_stopped(&json!({}), |_| true), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod gui_identity_tests {
+    use super::*;
+
+    fn gui(pid: u32, created: u64, image: &str) -> AttachedGui {
+        AttachedGui { process: Identity { pid, created }, image: PathBuf::from(image) }
+    }
+
+    #[test]
+    fn quit_closes_only_guis_that_are_still_the_attached_process() {
+        let exe = r"X:\InstanceHarbor\instanceharbor.exe";
+        let recorded = [gui(10, 100, exe), gui(11, 200, exe), gui(12, 300, exe), gui(13, 400, exe), gui(14, 500, exe)];
+        let probe = |pid: u32| -> GuiProbe {
+            match pid {
+                // Still the attached GUI.
+                10 => (Ok(Some(Identity { pid, created: 100 })), Some(PathBuf::from(exe))),
+                // The PID was reused by a later process of the same executable name.
+                11 => (Ok(Some(Identity { pid, created: 999 })), Some(PathBuf::from(exe))),
+                // Same creation time reported, but another executable now owns the PID.
+                12 => (Ok(Some(Identity { pid, created: 300 })), Some(PathBuf::from(r"X:\Other\editor.exe"))),
+                // The GUI has ended.
+                13 => (Ok(None), None),
+                // Access denied: the PID now belongs to a process of another user or level.
+                _ => (Err(io::Error::from_raw_os_error(5)), None),
+            }
+        };
+        assert_eq!(verified_guis(&recorded, probe), vec![10]);
+    }
+
+    #[test]
+    fn quit_sends_nothing_when_no_gui_is_verified() {
+        let recorded = [gui(20, 1, r"X:\InstanceHarbor\instanceharbor.exe")];
+        assert!(verified_guis(&recorded, |_| (Ok(None), None)).is_empty());
+        assert!(verified_guis(&[], |_| unreachable!("no GUI is probed")).is_empty());
     }
 }
