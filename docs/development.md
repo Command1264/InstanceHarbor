@@ -196,13 +196,26 @@ $options = @{ proxy = 'diagnostics-velocity'; route = 'paper'; plugin = 'LuckPer
 
 Spigot 由 BuildTools 在本機建置，沒有官方檔案可比對，所以內建清單以外的 Spigot 一律是未核對。
 
-實例清單與詳細面板的核心版本（`presentation::core_metadata`）和「核心維護」用相同的來源，依序為：
+實例清單與詳細面板的核心版本（`presentation::core_metadata`）和「核心維護」用相同的來源。
+離線辨識（`core_identity`）只讀取 JAR 的 ZIP 目錄與幾個小型中繼資料檔，不啟動 Java：
 
-1. 新版 Paper 從 JAR 內 `paper-api` 函式庫的路徑讀出版本與 build，不計算整個檔案的雜湊。登記為其他家族（例如 Folia）時跳過這一步。
-2. 目前 JAR 的 SHA-256 在內建清單，或與登記的核心資料相符（與「核心維護」的 `trusted_profile` 相同）。Folia、Spigot 與舊版 Paper（1.14、1.14.4）走這一步。
-3. 雜湊與離線接受的未核對登記相符時也顯示版本，並附未核對警告。
+- Paper 與 Folia：`paper-api` 或 `folia-api` 函式庫的路徑，例如 `dev/folia/folia-api/26.3.build.28-stable/`，可讀出 Minecraft 版本與 build。
+  兩者同時出現時無法判斷，視為無法辨識。
+- Spigot：BuildTools 產生的 bundler JAR 讀 `META-INF/versions.list`，較舊的 Spigot 讀 Maven `pom.properties`。只有 Minecraft 版本，沒有 build。
+- 舊版 Paper（1.14、1.14.4）沒有 API 函式庫，只能靠內建清單的雜湊辨識。
 
-都不符時顯示「尚未核對」，不沿用登記中的舊版本。原因以代碼回傳（`CorePathUnverified`、`CoreUnreadable`、`CoreProfileUnverified`），
+清單依序判斷：
+
+1. 沒有登記資料：直接顯示離線辨識的結果，標示為離線辨識，不計算整個檔案的雜湊。
+2. 離線辨識的種類、版本與 build 和已核對的登記相同：顯示為已核對。
+3. 離線接受的未核對登記，種類與版本相同：顯示離線辨識的結果（含 build），並附未核對警告。
+4. 其他情況計算目前 JAR 的 SHA-256。在內建清單或與已核對登記相符（與「核心維護」的 `trusted_profile` 相同）時顯示為已核對；
+   否則顯示離線辨識的結果或相同雜湊的未核對登記，標示為離線辨識。
+
+清單中繼資料以 `offline: true` 標示離線辨識的版本，介面在滑鼠提示與詳細面板說明「尚未向官方來源核對」。
+「核心維護」在核心未核對時以 `identified` 回傳離線辨識的版本並同樣標示；核心更新是否可用仍依 `trusted_profile`，不因離線辨識而改變。
+
+都無法辨識時顯示「尚未核對」，不沿用登記中的舊版本。原因以代碼回傳（`CorePathUnverified`、`CoreUnreadable`、`CoreProfileUnverified`），
 由前端 `src/core-display.ts` 翻譯，顯示在清單儲存格的滑鼠提示與詳細面板。新增代碼時 `src/core-display.test.mjs` 會要求補上翻譯。
 
 每次啟動前，登記的檔名不存在時，會依上述規則重新尋找並更新登記，例如 Velocity 換成檔名帶有新 build 的 JAR。新核心的雜湊與登記不同時，同家族的核心會被接受（離線時以未核對方式接受）；遊戲伺服器另外要求 Minecraft 版本相同，避免世界被意外升級。其他情況維持原本的錯誤，例如 `CoreArtifactChanged`。

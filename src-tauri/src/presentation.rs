@@ -343,10 +343,11 @@ fn known_core(family: &str, minecraft: &str, build: &str) -> Value {
 
 /// The core the list and the details panel show. It agrees with core maintenance:
 /// the built-in table or a registered profile whose hash matches the current JAR
-/// (`trust`), then an offline-accepted profile with the same hash. A Paper JAR that
-/// names its own build is read from its ZIP directory without hashing the file,
-/// unless the registration says it is another family. `reason` is a stable code
-/// that the interface translates.
+/// (`trust`), then an offline-accepted profile with the same hash. A Paper, Folia
+/// or Spigot JAR that states its own version is read from the JAR without hashing
+/// the whole file. `offline` marks a version that only the JAR states: it was not
+/// matched with the built-in table, the official catalog or a verified registration.
+/// `reason` is a stable code that the interface translates.
 fn core_metadata(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<CoreProfile>) -> Value {
     let mut core = current_core(row, jar, trust);
     // Accepted without the built-in table or the official catalog (#14 offline use).
@@ -361,27 +362,48 @@ fn current_core(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<Cor
         return json!({"state":"unknown","reason":"CorePathUnverified"});
     }
     let identity = core_identity::read_identity(jar);
-    let registered_paper = row.core_profile.as_ref()
-        .is_none_or(|profile| profile.family.eq_ignore_ascii_case("PAPER"));
-    let from_identity = |identity: &core_identity::CoreIdentity| {
+    let from_identity = |identity: &core_identity::CoreIdentity, offline: bool| {
         let mut core = known_core(identity.family, &identity.minecraft_version, &identity.build);
         core["directoryRevision"] = json!(identity.directory_revision);
+        if offline {
+            core["offline"] = json!(true);
+        }
         core
     };
-    if registered_paper {
-        if let Ok(Some(identity)) = &identity {
-            return from_identity(identity);
+    if let Ok(Some(identity)) = &identity {
+        match &row.core_profile {
+            // An unregistered core: only the JAR states its version.
+            None => return from_identity(identity, true),
+            // The JAR states the version of its verified registration.
+            Some(profile) if !profile.unverified
+                && profile.family.eq_ignore_ascii_case(identity.family)
+                && profile.minecraft == identity.minecraft_version
+                && profile.build == identity.build => return from_identity(identity, false),
+            // Registered offline (import without the catalog), which already
+            // checked the built-in table. The JAR also names the build.
+            Some(profile) if profile.unverified
+                && profile.family.eq_ignore_ascii_case(identity.family)
+                && profile.minecraft == identity.minecraft_version => return from_identity(identity, true),
+            // Another version or family than registered: the hash decides.
+            Some(_) => {}
         }
     }
     let Ok(sha) = content_revision::file_revision(jar) else {
         return json!({"state":"unknown","reason":"CoreUnreadable"});
     };
-    let saved = row.core_profile.as_ref().filter(|profile| profile.sha256 == sha).cloned();
-    match (trust(sha).or(saved), identity) {
-        (Some(profile), _) => known_core(&profile.family, &profile.minecraft, &profile.build),
-        (None, Ok(Some(identity))) => from_identity(&identity),
-        (None, Ok(None)) => json!({"state":"unknown","reason":"CoreProfileUnverified"}),
-        (None, Err(_)) => json!({"state":"unknown","reason":"CoreUnreadable"}),
+    if let Some(profile) = trust(sha.clone()) {
+        return known_core(&profile.family, &profile.minecraft, &profile.build);
+    }
+    let saved = row.core_profile.as_ref().filter(|profile| profile.sha256 == sha);
+    match (identity, saved) {
+        (Ok(Some(identity)), _) => from_identity(&identity, true),
+        (_, Some(profile)) => {
+            let mut core = known_core(&profile.family, &profile.minecraft, &profile.build);
+            core["offline"] = json!(true);
+            core
+        }
+        (Ok(None), None) => json!({"state":"unknown","reason":"CoreProfileUnverified"}),
+        (Err(_), None) => json!({"state":"unknown","reason":"CoreUnreadable"}),
     }
 }
 
@@ -1855,6 +1877,44 @@ mod tests {
         let core = core_metadata(&row, &jar, |hash| core_maintenance::trusted_profile(&row, hash));
         assert_eq!(known(&core), ("PAPER", "1.21.4", "232"));
         assert_eq!(core["unverified"], true);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    const FOLIA_API: &str = "META-INF/libraries/dev/folia/folia-api/26.3.build.28-stable/folia-api-26.3.build.28-stable.jar";
+
+    // #48: a Folia or Spigot imported without a registration is identified
+    // from the JAR alone, and the list says the version was read offline.
+    #[test]
+    fn list_core_reads_unregistered_folia_and_spigot_offline() {
+        let (folder, jar) = core_fixture(&core_identity::zip(&[FOLIA_API]));
+        let core = core_metadata(&core_row(None), &jar, |_| None);
+        assert_eq!(known(&core), ("Folia", "26.3", "28"));
+        assert_eq!(core["offline"], true);
+        fs::write(&jar, core_identity::zip_with(&[(
+            "META-INF/versions.list",
+            b"0000000000000000000000000000000000000000000000000000000000000000\tspigot-26.2-R0.1-SNAPSHOT.jar\n",
+        )])).unwrap();
+        let core = core_metadata(&core_row(None), &jar, |_| None);
+        assert_eq!(known(&core), ("Spigot", "26.2", ""));
+        assert_eq!(core["offline"], true);
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn list_core_marks_only_unchecked_versions_offline() {
+        let (folder, jar) = core_fixture(&core_identity::zip(&[FOLIA_API]));
+        let sha = content_revision::file_revision(&jar).unwrap();
+        let verified = core_row(Some(core_profile("FOLIA", "26.3", "28", sha.clone())));
+        let core = core_metadata(&verified, &jar, |hash| core_maintenance::trusted_profile(&verified, hash));
+        assert_eq!(known(&core), ("Folia", "26.3", "28"));
+        assert!(core.get("offline").is_none(), "{core}");
+        // An offline import records no build; the JAR still names it.
+        let mut accepted = core_profile("FOLIA", "26.3", "", sha);
+        accepted.unverified = true;
+        let accepted = core_row(Some(accepted));
+        let core = core_metadata(&accepted, &jar, |hash| core_maintenance::trusted_profile(&accepted, hash));
+        assert_eq!(known(&core), ("Folia", "26.3", "28"));
+        assert_eq!((&core["offline"], &core["unverified"]), (&json!(true), &json!(true)));
         fs::remove_dir_all(&folder).unwrap();
     }
 }

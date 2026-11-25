@@ -1,4 +1,9 @@
 //! Read the installed core's own ZIP directory without starting Java or extracting files.
+//!
+//! Paper and Folia name their API library with the Minecraft version and build.
+//! Spigot states only its Minecraft version, in `META-INF/versions.list` or its
+//! Maven `pom.properties`. The result is what the JAR states about itself; it is
+//! not checked against the built-in table or an official source.
 use super::*;
 use std::{
     io::{Seek, SeekFrom},
@@ -9,7 +14,12 @@ const MAX_DIRECTORY: u64 = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
 const MAX_TAIL: u64 = 22 + u16::MAX as u64;
 const MAX_ENTRY_NAME: usize = 1024;
-const PAPER_API_PREFIX: &[u8] = b"META-INF/libraries/io/papermc/paper/paper-api/";
+/// The library folder, artifact name and family of each core that names its build.
+const API_LIBRARIES: [(&[u8], &str, &str); 2] = [
+    (b"META-INF/libraries/io/papermc/paper/paper-api/", "paper-api", "Paper"),
+    (b"META-INF/libraries/dev/folia/folia-api/", "folia-api", "Folia"),
+];
+const SPIGOT_POM: &[u8] = b"META-INF/maven/org.spigotmc/spigot/pom.properties";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +40,7 @@ struct CachedIdentity {
 }
 
 struct PaperCandidate {
+    family: &'static str,
     minecraft_version: String,
     build: String,
     version: String,
@@ -63,32 +74,105 @@ pub(super) fn read_open_identity(jar: &Path, mut file: File) -> Result<Option<Co
     else {
         return Ok(None);
     };
-    let Some(candidate) = paper_coordinate(&directory) else {
-        return Ok(None);
+    let candidate = match api_candidate(&directory) {
+        Some(Some(candidate)) => candidate,
+        Some(None) if spigot_marked(&directory) => {
+            return spigot_identity(jar, &mut file, file_length, directory);
+        }
+        // No API library, or an ambiguous one (two libraries, ZIP64).
+        _ => return Ok(None),
     };
     if !local_matches(&mut file, &candidate, directory_offset).map_err(fail)? {
         return Ok(None);
     }
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
-    let mut guard = cache.lock().map_err(|_| "CoreIdentityCacheUnavailable")?;
-    if let Some(saved) = guard.as_ref() {
-        if saved.path == jar && saved.file_length == file_length && saved.directory == directory {
-            return Ok(saved.identity.clone());
-        }
+    if let Some(saved) = cached(jar, file_length, &directory)? {
+        return Ok(saved);
     }
     let identity = Some(CoreIdentity {
-        family: "Paper",
+        family: candidate.family,
         minecraft_version: candidate.minecraft_version,
         build: candidate.build,
         version: candidate.version,
         directory_revision: content_revision::revision(&directory)?,
     });
+    remember(jar, file_length, directory, identity.clone())?;
+    Ok(identity)
+}
+
+fn cached(jar: &Path, file_length: u64, directory: &[u8]) -> Result<Option<Option<CoreIdentity>>> {
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let guard = cache.lock().map_err(|_| "CoreIdentityCacheUnavailable")?;
+    Ok(guard
+        .as_ref()
+        .filter(|saved| {
+            saved.path == jar && saved.file_length == file_length && saved.directory == directory
+        })
+        .map(|saved| saved.identity.clone()))
+}
+
+fn remember(
+    jar: &Path,
+    file_length: u64,
+    directory: Vec<u8>,
+    identity: Option<CoreIdentity>,
+) -> Result<()> {
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache.lock().map_err(|_| "CoreIdentityCacheUnavailable")?;
     *guard = Some(CachedIdentity {
         path: jar.to_path_buf(),
         file_length,
         directory,
-        identity: identity.clone(),
+        identity,
     });
+    Ok(())
+}
+
+/// A Spigot bundler (`META-INF/versions.list` without a Paperclip patch list)
+/// or an older Spigot JAR with its Maven properties.
+fn spigot_marked(directory: &[u8]) -> bool {
+    let (mut versions, mut patches, mut pom) = (false, false, false);
+    let mut at = 0;
+    while at < directory.len() {
+        let (Some(name_length), Some(extra_length), Some(comment_length)) = (
+            le16(directory, at + 28),
+            le16(directory, at + 30),
+            le16(directory, at + 32),
+        ) else {
+            return false;
+        };
+        let name_length = usize::from(name_length);
+        match directory.get(at + 46..at + 46 + name_length) {
+            Some(b"META-INF/versions.list") => versions = true,
+            Some(b"META-INF/patches.list") => patches = true,
+            Some(name) if name == SPIGOT_POM => pom = true,
+            Some(_) => (),
+            None => return false,
+        }
+        at += 46 + name_length + usize::from(extra_length) + usize::from(comment_length);
+    }
+    (versions && !patches) || pom
+}
+
+fn spigot_identity(
+    jar: &Path,
+    file: &mut File,
+    file_length: u64,
+    directory: Vec<u8>,
+) -> Result<Option<CoreIdentity>> {
+    if let Some(saved) = cached(jar, file_length, &directory)? {
+        return Ok(saved);
+    }
+    let identity = match core_artifact::claim_file(file) {
+        Some(claim) if claim.family == "SPIGOT" => Some(CoreIdentity {
+            family: "Spigot",
+            version: claim.minecraft.clone(),
+            minecraft_version: claim.minecraft,
+            build: String::new(),
+            directory_revision: content_revision::revision(&directory)?,
+        }),
+        _ => None,
+    };
+    remember(jar, file_length, directory, identity.clone())?;
     Ok(identity)
 }
 
@@ -195,7 +279,14 @@ fn valid_directory(directory: &[u8], count: usize) -> bool {
     at == directory.len()
 }
 
+#[cfg(test)]
 fn paper_coordinate(directory: &[u8]) -> Option<PaperCandidate> {
+    api_candidate(directory).flatten()
+}
+
+/// `Some(None)` when no API library is named; `None` when the directory names
+/// two of them, an over-long name or a ZIP64 entry.
+fn api_candidate(directory: &[u8]) -> Option<Option<PaperCandidate>> {
     let mut found = None;
     let mut at = 0;
     while at < directory.len() {
@@ -203,31 +294,33 @@ fn paper_coordinate(directory: &[u8]) -> Option<PaperCandidate> {
         let extra_length = le16(directory, at + 30)? as usize;
         let comment_length = le16(directory, at + 32)? as usize;
         let name = directory.get(at + 46..at + 46 + name_length)?;
-        if let Some(rest) = name.strip_prefix(PAPER_API_PREFIX) {
-            if let Some((minecraft_version, build, version)) = parse_paper_path(rest) {
-                if found.is_some() || name_length > MAX_ENTRY_NAME {
-                    return None;
-                }
-                let local_offset = le32(directory, at + 42)?;
-                let compressed_size = le32(directory, at + 20)?;
-                if local_offset == u32::MAX || compressed_size == u32::MAX {
-                    return None; // ZIP64 entries are outside this bounded reader.
-                }
-                found = Some(PaperCandidate {
-                    minecraft_version,
-                    build,
-                    version,
-                    name: name.to_vec(),
-                    local_offset: u64::from(local_offset),
-                    compressed_size: u64::from(compressed_size),
-                    flags: le16(directory, at + 8)?,
-                    method: le16(directory, at + 10)?,
-                });
+        let library = API_LIBRARIES.iter().find_map(|(prefix, artifact, family)| {
+            parse_paper_path(name.strip_prefix(*prefix)?, artifact).map(|parsed| (*family, parsed))
+        });
+        if let Some((family, (minecraft_version, build, version))) = library {
+            if found.is_some() || name_length > MAX_ENTRY_NAME {
+                return None;
             }
+            let local_offset = le32(directory, at + 42)?;
+            let compressed_size = le32(directory, at + 20)?;
+            if local_offset == u32::MAX || compressed_size == u32::MAX {
+                return None; // ZIP64 entries are outside this bounded reader.
+            }
+            found = Some(PaperCandidate {
+                family,
+                minecraft_version,
+                build,
+                version,
+                name: name.to_vec(),
+                local_offset: u64::from(local_offset),
+                compressed_size: u64::from(compressed_size),
+                flags: le16(directory, at + 8)?,
+                method: le16(directory, at + 10)?,
+            });
         }
         at += 46 + name_length + extra_length + comment_length;
     }
-    found
+    Some(found)
 }
 
 fn local_matches(
@@ -267,10 +360,10 @@ fn local_matches(
     Ok(name == candidate.name)
 }
 
-fn parse_paper_path(rest: &[u8]) -> Option<(String, String, String)> {
+fn parse_paper_path(rest: &[u8], artifact: &str) -> Option<(String, String, String)> {
     let rest = std::str::from_utf8(rest).ok()?;
     let (coordinate, file) = rest.split_once('/')?;
-    if file != format!("paper-api-{coordinate}.jar") {
+    if file != format!("{artifact}-{coordinate}.jar") {
         return None;
     }
     let coordinate = coordinate.strip_suffix("-stable")?;
@@ -294,23 +387,39 @@ fn parse_paper_path(rest: &[u8]) -> Option<(String, String, String)> {
 /// A minimal stored ZIP with empty entries, for core identity fixtures.
 #[cfg(test)]
 pub(super) fn zip(names: &[&str]) -> Vec<u8> {
+    let entries: Vec<_> = names.iter().map(|name| (*name, &b""[..])).collect();
+    zip_with(&entries)
+}
+
+/// A stored (uncompressed) ZIP whose entries hold the given bytes.
+#[cfg(test)]
+pub(super) fn zip_with(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut entries = Vec::new();
-    for name in names {
-        entries.push((*name, bytes.len() as u32));
+    for (name, data) in files {
+        let crc = crc32fast::hash(data);
+        let length = data.len() as u32;
+        entries.push((*name, bytes.len() as u32, crc, length));
         let mut local = [0u8; 30];
         local[..4].copy_from_slice(&0x0403_4b50u32.to_le_bytes());
         local[4..6].copy_from_slice(&20u16.to_le_bytes());
+        local[14..18].copy_from_slice(&crc.to_le_bytes());
+        local[18..22].copy_from_slice(&length.to_le_bytes());
+        local[22..26].copy_from_slice(&length.to_le_bytes());
         local[26..28].copy_from_slice(&(name.len() as u16).to_le_bytes());
         bytes.extend_from_slice(&local);
         bytes.extend_from_slice(name.as_bytes());
+        bytes.extend_from_slice(data);
     }
     let offset = bytes.len() as u32;
-    for (name, local_offset) in entries {
+    for (name, local_offset, crc, length) in entries {
         let mut central = [0u8; 46];
         central[..4].copy_from_slice(&0x0201_4b50u32.to_le_bytes());
         central[4..6].copy_from_slice(&20u16.to_le_bytes());
         central[6..8].copy_from_slice(&20u16.to_le_bytes());
+        central[16..20].copy_from_slice(&crc.to_le_bytes());
+        central[20..24].copy_from_slice(&length.to_le_bytes());
+        central[24..28].copy_from_slice(&length.to_le_bytes());
         central[28..30].copy_from_slice(&(name.len() as u16).to_le_bytes());
         central[42..46].copy_from_slice(&local_offset.to_le_bytes());
         bytes.extend_from_slice(&central);
@@ -319,8 +428,8 @@ pub(super) fn zip(names: &[&str]) -> Vec<u8> {
     let size = bytes.len() as u32 - offset;
     bytes.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
     bytes.extend_from_slice(&[0; 4]);
-    bytes.extend_from_slice(&(names.len() as u16).to_le_bytes());
-    bytes.extend_from_slice(&(names.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&(files.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&(files.len() as u16).to_le_bytes());
     bytes.extend_from_slice(&size.to_le_bytes());
     bytes.extend_from_slice(&offset.to_le_bytes());
     bytes.extend_from_slice(&0u16.to_le_bytes());
@@ -362,7 +471,7 @@ mod tests {
         ]);
         assert!(paper_coordinate(directory(&other)).is_none());
         assert_eq!(
-            parse_paper_path(b"26.3.build.205-stable/not-the-api.jar"),
+            parse_paper_path(b"26.3.build.205-stable/not-the-api.jar", "paper-api"),
             None
         );
     }
@@ -418,5 +527,54 @@ mod tests {
         assert!(read_identity(&path).unwrap().is_none());
         fs::remove_file(&path).unwrap();
         assert!(read_identity(&path).is_err());
+    }
+
+    fn identity_of(bytes: &[u8]) -> Option<CoreIdentity> {
+        let path = std::env::temp_dir().join(format!(
+            "instanceharbor-core-identity-{}-{}.jar",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, bytes).unwrap();
+        let identity = read_identity(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        identity
+    }
+
+    fn summary(identity: Option<CoreIdentity>) -> Option<(&'static str, String, String)> {
+        identity.map(|identity| (identity.family, identity.minecraft_version, identity.build))
+    }
+
+    // #48: an imported Folia names its own API library, like Paper.
+    #[test]
+    fn reads_folia_from_its_api_library() {
+        let folia = "META-INF/libraries/dev/folia/folia-api/26.3.build.28-stable/folia-api-26.3.build.28-stable.jar";
+        let jar = zip_with(&[
+            ("META-INF/patches.list", b"versions\t26.3/folia-26.3.jar\n"),
+            (folia, b""),
+        ]);
+        assert_eq!(summary(identity_of(&jar)), Some(("Folia", "26.3".into(), "28".into())));
+        // Two API libraries cannot be told apart, so neither is trusted.
+        let both = zip(&[folia, &paper("26.3.build.205-stable")]);
+        assert_eq!(identity_of(&both), None);
+    }
+
+    // #48: Spigot has no build number in the JAR; its Minecraft version comes
+    // from the bundler list or, for older Spigot, the Maven properties.
+    #[test]
+    fn reads_spigot_bundler_and_maven_versions() {
+        let bundler = zip_with(&[
+            ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\nMain-Class: org.bukkit.craftbukkit.bootstrap.Main\n"),
+            ("META-INF/versions.list", b"0000000000000000000000000000000000000000000000000000000000000000\tspigot-26.2-R0.1-SNAPSHOT.jar\n"),
+        ]);
+        assert_eq!(summary(identity_of(&bundler)), Some(("Spigot", "26.2".into(), String::new())));
+        let legacy = zip_with(&[(
+            "META-INF/maven/org.spigotmc/spigot/pom.properties",
+            b"groupId=org.spigotmc\nartifactId=spigot\nversion=1.8.8-R0.1-SNAPSHOT\n",
+        )]);
+        assert_eq!(summary(identity_of(&legacy)), Some(("Spigot", "1.8.8".into(), String::new())));
+        // A bundler list that names another family is not Spigot.
+        let other = zip_with(&[("META-INF/versions.list", b"0\tcraftbukkit-1.21-R0.1-SNAPSHOT.jar\n")]);
+        assert_eq!(identity_of(&other), None);
     }
 }

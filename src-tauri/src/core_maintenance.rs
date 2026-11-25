@@ -497,8 +497,17 @@ fn state(root: &Path, name: &str) -> Result<Value> {
     let prepared = current.as_ref().ok().and_then(|hash| {
         core_prefetch::status(root, name, hash).ok().flatten()
     });
+    // What an unverified JAR states about itself, shown as an offline reading
+    // (#48). It does not make the core writable: `reason` still applies.
+    let identified = installed
+        .is_none()
+        .then(|| core_identity::read_identity(&target.jar()).ok().flatten())
+        .flatten()
+        .map(|identity| {
+            json!({"family":identity.family,"minecraft":identity.minecraft_version,"build":identity.build})
+        });
     Ok(
-        json!({"name":name,"installed":installed,"currentSha256":current.ok(),"pending":pending,
+        json!({"name":name,"installed":installed,"identified":identified,"currentSha256":current.ok(),"pending":pending,
         "backups":backups,"canWrite":reason.is_none(),"reason":reason,"prepared":prepared}),
     )
 }
@@ -1006,5 +1015,20 @@ mod tests {
             candidate_path(source).unwrap_err(),
             "CoreCandidateMustBeLocal"
         );
+    }
+
+    // #48: an unverified Folia shows the version its JAR states, but stays
+    // read-only until it is verified.
+    #[test]
+    fn state_reports_the_offline_identity_of_an_unverified_core() {
+        let fixture = Fixture::new();
+        let target = fixture.workspace();
+        assert!(state(&fixture.0, "server").unwrap()["identified"].is_null());
+        let folia = "META-INF/libraries/dev/folia/folia-api/26.3.build.28-stable/folia-api-26.3.build.28-stable.jar";
+        fs::write(target.jar(), core_identity::zip(&[folia])).unwrap();
+        let state = state(&fixture.0, "server").unwrap();
+        assert!(state["installed"].is_null());
+        assert_eq!(state["identified"], json!({"family":"Folia","minecraft":"26.3","build":"28"}));
+        assert_eq!((&state["canWrite"], &state["reason"]), (&json!(false), &json!("CoreProfileUnverified")));
     }
 }

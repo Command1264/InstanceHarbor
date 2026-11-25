@@ -22,3 +22,10 @@ test('an unknown core reason falls back to a general message and no reason shows
   assert.equal(coreReasonId(undefined), undefined)
   assert.equal(coreReasonId(''), undefined)
 })
+
+test('an offline reading of the core version is explained in both languages', () => {
+  for (const id of ['instances.coreOffline', 'components.coreMaintenance.offline']) {
+    assert.match(translate('zh-TW', id), /離線辨識/, id)
+    assert.match(translate('en', id), /offline/, id)
+  }
+})

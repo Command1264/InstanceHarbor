@@ -147,7 +147,7 @@ const recent = computed(() => single.value && recentByName.value.get(single.valu
 const refreshBusy=computed(()=>!!props.refreshPending)
 const refreshLabel=computed(()=>props.refreshDone?t('instances.refreshDone'):t('action.refresh'))
 function coreLabel(name:string){const core=metaByName.value.get(name)?.core;return core?.state==='known' ? core.label ?? `${core.family} ${core.minecraft}${core.build ? ` build ${core.build}` : ''}` : t('instances.coreUnchecked')}
-function coreReason(name:string){const core=metaByName.value.get(name)?.core;const id=core?.state==='known'?undefined:coreReasonId(core?.reason);return id?t(id):undefined}
+function coreReason(name:string){const core=metaByName.value.get(name)?.core;if(core?.state==='known')return core.offline?t('instances.coreOffline'):undefined;const id=coreReasonId(core?.reason);return id?t(id):undefined}
 const coreVersions = computed(() => new Map<string, {version:string;build?:string;update?:string}>(props.meta.map(({ name, core }) => {
   if (core?.state !== 'known') return [name, { version: coreLabel(name) }]
   const source = props.coreCheckRows?.[name]
