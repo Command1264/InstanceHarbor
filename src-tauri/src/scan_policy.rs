@@ -552,7 +552,7 @@ fn changed_discovery_roots(
     Ok(outer)
 }
 
-fn discovered_changes(
+pub(super) fn discovered_changes(
     root: &Path,
     current: &Policy,
     proposed: &Policy,

@@ -27,6 +27,26 @@ struct Draft {
     /// Absent: grant unless the instance is under `instances/Agent`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     test_administrators: Option<bool>,
+    /// Absent: add the parent folder when no management folder covers the target yet.
+    #[serde(default, skip_serializing_if = "ManagementChoice::is_parent")]
+    management_folder: ManagementChoice,
+}
+
+/// The management folder a creation adds when no management folder covers the target yet.
+#[derive(Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+enum ManagementChoice {
+    #[default]
+    Parent,
+    None,
+    /// The target folder itself or one of its parent folders.
+    Folder { path: String },
+}
+
+impl ManagementChoice {
+    fn is_parent(&self) -> bool {
+        *self == Self::Parent
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -58,6 +78,17 @@ struct Inspection {
     scope: Scope,
     revision: String,
     test_admins: TestAdmins,
+    management: Management,
+}
+
+/// What the confirmation shows about management folders. Options stay empty
+/// when an existing management folder already covers the target.
+#[derive(Default)]
+struct Management {
+    folder: Option<PathBuf>,
+    options: Vec<PathBuf>,
+    candidates: Vec<Value>,
+    complete: bool,
 }
 
 struct TestAdmins {
@@ -179,6 +210,47 @@ fn scope_revision(policy: &scan_policy::Policy) -> Result<String> {
     content_revision::revision(&serde_json::to_vec_pretty(policy).map_err(fail)?)
 }
 
+/// The folders a creation may add: the new folder itself, then each existing
+/// parent folder this workspace may manage, nearest first.
+fn management_options(root: &Path, parent: &Path, target: &Path) -> Vec<PathBuf> {
+    let mut options = vec![target.to_path_buf()];
+    let mut next = Some(parent.to_path_buf());
+    while let Some(folder) = next {
+        let verified = scan_policy::managed_path(root, &path_format::display(&folder));
+        if !verified.is_ok_and(|path| scan_policy::contains(&path, &folder) && scan_policy::contains(&folder, &path)) {
+            break;
+        }
+        next = folder.parent().map(Path::to_path_buf);
+        options.push(folder);
+    }
+    options
+}
+
+fn chosen_folder(root: &Path, parent: &Path, target: &Path, choice: &ManagementChoice) -> Result<Option<PathBuf>> {
+    match choice {
+        ManagementChoice::Parent => Ok(Some(parent.to_path_buf())),
+        ManagementChoice::None => Ok(None),
+        ManagementChoice::Folder { path } => {
+            let requested = scan_policy::rule_path(root, path)
+                .map_err(|_| "CreationManagementFolderNotAncestor")?;
+            management_options(root, parent, target)
+                .into_iter()
+                .find(|option| scan_policy::contains(option, &requested) && scan_policy::contains(&requested, option))
+                .map(Some)
+                .ok_or_else(|| "CreationManagementFolderNotAncestor".into())
+        }
+    }
+}
+
+fn proposed_scope(root: &Path, policy: &scan_policy::Policy, parent: &Path, target: &Path, folder: &Path) -> Result<scan_policy::Policy> {
+    if folder == target {
+        // The target does not exist before creation, so it is added as a new child.
+        policy.clone().with_new_child(root, parent, target)
+    } else {
+        policy.clone().with_folder(root, folder, &[])
+    }
+}
+
 fn covered(root: &Path, policy: &scan_policy::Policy, target: &Path) -> Result<bool> {
     for rule in policy.management_roots() {
         if scan_policy::contains(&scan_policy::rule_path(root, rule)?, target) {
@@ -211,14 +283,35 @@ fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Ins
     if policy.excludes_path(root, &target)? {
         return Err("CreationPathExcluded".into());
     }
+    let mut management = Management { complete: true, ..Management::default() };
     let added_revision = if covered(root, &policy, &target)? {
         None
     } else {
-        let proposed = policy.with_new_child(root, &parent, &target)?;
-        if !proposed.matches(root, &draft.name, &target)?.1 {
-            return Err("CreationPathExcluded".into());
+        management.options = management_options(root, &parent, &target);
+        management.folder = chosen_folder(root, &parent, &target, &draft.management_folder)?;
+        match &management.folder {
+            None => None,
+            Some(folder) => {
+                let proposed = proposed_scope(root, &policy, &parent, &target, folder)?;
+                if !proposed.matches(root, &draft.name, &target)?.1 {
+                    return Err("CreationPathExcluded".into());
+                }
+                if folder != &target {
+                    let (rows, reason) = scan_policy::discovered_changes(root, &policy, &proposed)?;
+                    management.complete = reason.is_none();
+                    management.candidates = rows.into_iter()
+                        .filter(|row| row["state"] == "Ready")
+                        .map(|row| {
+                            let directory = row["directory"].as_str().ok_or("BatchImportEvidenceUnavailable")?;
+                            let directory = path_format::display(&scan_policy::rule_path(root, directory)?);
+                            Ok(json!({"name":row["name"],"directory":directory,"core":row["core"],
+                                "kind":row["kind"],"port":row["port"],"listenAddress":row["listenAddress"]}))
+                        })
+                        .collect::<Result<_>>()?;
+                }
+                Some(scope_revision(&proposed)?)
+            }
         }
-        Some(scope_revision(&proposed)?)
     };
     if !scan_policy::admitted_path(root, &draft.name, &target)? && added_revision.is_none() {
         return Err("CreationPathExcluded".into());
@@ -230,21 +323,25 @@ fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Ins
     let (configured, grant) = test_admins::plan(root, &core, requested)?;
     let scope = Scope { original_revision, added_revision };
     let mut identity = json!({
-        "draft":draft,"target":path_format::display(&target),"core":core,"scope":scope
+        "draft":draft,"target":path_format::display(&target),"core":core,"scope":scope,
+        "managementCandidates":management.candidates,"managementScanComplete":management.complete,
     });
     if let Some(grant) = &grant {
         identity["testAdministrators"] = grant.summary();
     }
     let revision = content_revision::revision(&serde_json::to_vec(&identity).map_err(fail)?)?;
     let test_admins = TestAdmins { requested, configured, grant };
-    Ok(Inspection { parent, target, core, assets, scope, revision, test_admins })
+    Ok(Inspection { parent, target, core, assets, scope, revision, test_admins, management })
 }
 
 fn report(inspection: &Inspection) -> Value {
     json!({
         "target":path_format::display(&inspection.target),
         "parent":path_format::display(&inspection.parent),
-        "whitelist":inspection.scope.added_revision.as_ref().map(|_| path_format::display(&inspection.target)),
+        "whitelist":inspection.scope.added_revision.as_ref().and(inspection.management.folder.as_deref()).map(path_format::display),
+        "managementOptions":inspection.management.options.iter().map(|path| path_format::display(path)).collect::<Vec<_>>(),
+        "managementCandidates":inspection.management.candidates,
+        "managementScanComplete":inspection.management.complete,
         "core":inspection.core,"javaMajor":global_java::supported_major(&inspection.core),"revision":inspection.revision,
         "initializationDefaults":policy_settings::has_creation_defaults(&inspection.core),
         "testAdministrators":{
@@ -455,8 +552,10 @@ fn finish(
     } else {
         return Err("CreationPolicyChanged".into());
     };
+    let folder = chosen_folder(root, &parent, &target, &draft.management_folder)?;
     let proposed = need_scope.map(|expected| -> Result<scan_policy::Policy> {
-        let proposed = policy.with_new_child(root, &parent, &target)?;
+        let folder = folder.as_deref().ok_or("CreationPolicyChanged")?;
+        let proposed = proposed_scope(root, &policy, &parent, &target, folder)?;
         if &scope_revision(&proposed)? != expected || !proposed.matches(root, &draft.name, &target)?.1 {
             return Err("CreationPolicyChanged".into());
         }
@@ -479,15 +578,26 @@ fn finish(
         core_maintenance::move_durable(&stage, &target, false)?;
         verified_publication(&target, profile, &publication.hashes)?;
     }
+    let mut registration = (Value::Null, None);
     if let Some(proposed) = proposed {
         if scan_policy::managed_path(root, &path_format::display(&target))? != target {
             return Err("CreationRecoveryUnconfirmed".into());
         }
         scan_policy::persist(root, &proposed, &current)?;
+        // Register the other servers the new folder covers now, instead of waiting for the
+        // Manager's next scan. The instance itself is already created, so a failure here is
+        // reported and left for that scan rather than undoing the creation.
+        if let Some(folder) = folder.as_deref().filter(|folder| *folder != target) {
+            registration = match batch_import::register_management_folder(root, folder) {
+                Ok(value) => (value, None),
+                Err(error) => (Value::Null, Some(error)),
+            };
+        }
     }
     let result = json!({
         "workId":work,"replayed":replayed,"instance":draft.name,"path":path_format::display(&target),
-        "whitelist":publication.scope.added_revision.map(|_| path_format::display(&target)),
+        "whitelist":publication.scope.added_revision.and(folder.as_deref()).map(path_format::display),
+        "registration":registration.0,"registrationError":registration.1,
     });
     receipt.complete = true;
     receipt.output = Some(result.clone());
@@ -595,9 +705,12 @@ pub(super) fn dispatch(
 ) -> Option<Result<Value>> {
     Some(match (verb, args) {
         ("gui-create-preview", [raw]) => parse(raw).and_then(|draft| inspect(root, &draft)).map(|inspection| report(&inspection)),
+        // Changing only the management folder keeps the core the preview already checked
+        // against the official source; confirmation never repeats that check either.
+        ("gui-create-rescope", [raw]) => parse(raw).and_then(|draft| inspect_source(root, &draft, false)).map(|inspection| report(&inspection)),
         ("gui-create-confirm", [work, raw]) => confirm(root, work, raw, progress),
         ("gui-create-recover", [work]) => recover(root, work),
-        ("gui-create-preview" | "gui-create-confirm" | "gui-create-recover", _) => {
+        ("gui-create-preview" | "gui-create-rescope" | "gui-create-confirm" | "gui-create-recover", _) => {
             Err("InvalidGuiCreationArguments".into())
         }
         _ => return None,
@@ -640,6 +753,7 @@ mod tests {
             port,
             source,
             test_administrators: None,
+            management_folder: ManagementChoice::Parent,
         }
     }
 
@@ -650,7 +764,7 @@ mod tests {
         let draft = draft(Source::Download { family: "PAPER".into(), minecraft: "26.3".into() });
         let inspected = inspect(root, &draft).unwrap();
         let parent = root.join("instances").join("existing");
-        assert_eq!(report(&inspected)["whitelist"], path_format::display(&parent.join("paper-new")));
+        assert_eq!(report(&inspected)["whitelist"], path_format::display(&parent));
         assert_eq!(report(&inspected)["target"], path_format::display(&parent.join("paper-new")));
         let (policy, revision) = scan_policy::load(root).unwrap();
         assert!(policy.management_roots().is_empty());
@@ -662,6 +776,192 @@ mod tests {
         assert_eq!(error, "CreationPreviewChanged");
         assert_eq!(report(&inspect(root, &draft).unwrap())["whitelist"], Value::Null);
         assert!(!parent.join("paper-new").exists());
+    }
+
+    fn other_server(directory: &Path) {
+        let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap().local_addr().unwrap().port();
+        fs::create_dir_all(directory.join("world")).unwrap();
+        fs::write(directory.join("server.jar"), b"fixture").unwrap();
+        fs::write(directory.join("server.properties"), format!("server-ip=127.0.0.1\nserver-port={port}\n")).unwrap();
+        fs::write(directory.join("world").join("level.dat"), b"world").unwrap();
+    }
+
+    #[test]
+    fn creation_adds_the_parent_folder_by_default_and_accepts_only_the_target_or_its_parents() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let parent = root.join("instances").join("existing");
+        let target = parent.join("paper-new");
+        let instances = root.join("instances");
+        other_server(&parent.join("neighbor"));
+        fs::create_dir(instances.join("elsewhere")).unwrap();
+        let mut draft = draft(Source::Download { family: "PAPER".into(), minecraft: "26.3".into() });
+
+        let default = report(&inspect(root, &draft).unwrap());
+        assert_eq!(default["whitelist"], path_format::display(&parent));
+        let options: Vec<_> = default["managementOptions"].as_array().unwrap().iter()
+            .map(|value| value.as_str().unwrap().to_owned()).collect();
+        assert_eq!(options, [path_format::display(&target), path_format::display(&parent), path_format::display(&instances)]);
+        let candidates = default["managementCandidates"].as_array().unwrap();
+        assert_eq!(candidates.len(), 1, "{default}");
+        assert_eq!(candidates[0]["directory"], path_format::display(&parent.join("neighbor")));
+        assert_eq!(candidates[0]["name"], "neighbor");
+        assert!(candidates[0]["kind"].is_string(), "{default}");
+        assert!(candidates[0]["port"].is_u64(), "{default}");
+        assert!(candidates[0].get("core").is_some(), "{default}");
+        assert_eq!(default["managementScanComplete"], true);
+
+        draft.management_folder = ManagementChoice::None;
+        let none = report(&inspect(root, &draft).unwrap());
+        assert_eq!(none["whitelist"], Value::Null);
+        assert_eq!(none["managementCandidates"], json!([]));
+        assert_ne!(none["revision"], default["revision"]);
+
+        draft.management_folder = ManagementChoice::Folder { path: path_format::display(&target) };
+        let own = report(&inspect(root, &draft).unwrap());
+        assert_eq!(own["whitelist"], path_format::display(&target));
+        assert_eq!(own["managementCandidates"], json!([]));
+
+        draft.management_folder = ManagementChoice::Folder { path: path_format::display(&instances) };
+        assert_eq!(report(&inspect(root, &draft).unwrap())["whitelist"], path_format::display(&instances));
+
+        for refused in [instances.join("elsewhere"), parent.join("neighbor"), root.join("registry")] {
+            draft.management_folder = ManagementChoice::Folder { path: path_format::display(&refused) };
+            assert_eq!(
+                inspect(root, &draft).err().as_deref(),
+                Some("CreationManagementFolderNotAncestor"),
+                "{}", refused.display()
+            );
+        }
+
+        // A server folder that appears after the preview changes what will be registered.
+        draft.management_folder = ManagementChoice::Parent;
+        other_server(&parent.join("late"));
+        let later = report(&inspect(root, &draft).unwrap());
+        assert_eq!(later["managementCandidates"].as_array().unwrap().len(), 2);
+        assert_ne!(later["revision"], default["revision"]);
+
+        // A folder already covered by a management folder offers no choice and adds nothing.
+        let (policy, revision) = scan_policy::load(root).unwrap();
+        scan_policy::persist(root, &policy.with_folder(root, &instances, &[]).unwrap(), &revision).unwrap();
+        for choice in [ManagementChoice::Parent, ManagementChoice::None] {
+            draft.management_folder = choice;
+            let covered = report(&inspect(root, &draft).unwrap());
+            assert_eq!(covered["whitelist"], Value::Null);
+            assert_eq!(covered["managementOptions"], json!([]));
+            assert_eq!(covered["managementCandidates"], json!([]));
+        }
+    }
+
+    #[test]
+    fn changing_the_management_folder_rescopes_without_rechecking_the_official_build() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let parent = root.join("instances").join("existing");
+        other_server(&parent.join("neighbor"));
+        // Not the newest stable build: a full preview would query the official source.
+        let mut draft = draft(Source::Official {
+            family: "FOLIA".into(), minecraft: "26.3".into(), build: "26".into(), sha256: "a".repeat(64),
+        });
+        let rescope = |draft: &Draft| dispatch(root, "gui-create-rescope", &[serde_json::to_string(draft).unwrap()], &|_| {}).unwrap();
+        let default = rescope(&draft).unwrap();
+        assert_eq!(default["whitelist"], path_format::display(&parent));
+        assert_eq!(default["managementCandidates"].as_array().unwrap().len(), 1);
+        draft.management_folder = ManagementChoice::None;
+        let none = rescope(&draft).unwrap();
+        assert_eq!(none["whitelist"], Value::Null);
+        assert_eq!(none["revision"], report(&inspect_source(root, &draft, false).unwrap())["revision"]);
+        assert_eq!(
+            dispatch(root, "gui-create-rescope", &[], &|_| {}).unwrap().unwrap_err(),
+            "InvalidGuiCreationArguments"
+        );
+    }
+
+    #[test]
+    fn creation_registers_the_servers_the_added_folder_discovers_before_it_reports_done() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let draft = draft(Source::Local { path: path_format::display(&core) });
+        let parent = root.join("instances").join("existing");
+        let target = parent.join(&draft.name);
+        other_server(&parent.join("neighbor"));
+        let (policy, original_revision) = scan_policy::load(root).unwrap();
+        let added_revision = Some(scope_revision(&policy.with_folder(root, &parent, &[]).unwrap()).unwrap());
+        let profile = CoreProfile { unverified: false, java: None,
+            family: "SPIGOT".into(), minecraft: "1.8.8".into(), build: "fixture".into(),
+            sha256: content_revision::file_revision(&core).unwrap(),
+        };
+        let inspection = Inspection {
+            parent: parent.clone(), target: target.clone(), core: profile,
+            assets: Assets::Local { core, mojang: None },
+            scope: Scope { original_revision, added_revision },
+            revision: "fixture".into(),
+            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            management: Management::default(),
+        };
+        let work = "register-neighbors";
+        let raw = json!({"draft":draft,"revision":inspection.revision}).to_string();
+        let (mut staged, publication) = stage(root, &inspection, &draft, work, None).unwrap();
+        let receipt = Receipt {
+            arguments: vec!["gui-create-confirm".into(), draft.name.clone(), work.into(), raw.clone()],
+            complete: false, output: Some(serde_json::to_value(&publication).unwrap()), created_at: None,
+        };
+        reserve_receipt(root, &root.join("jobs").join(format!("{work}.json")), &receipt).unwrap();
+        staged.journaled = true;
+        core_maintenance::write_durable(&pending_path(root, &draft.name), &work, false).unwrap();
+
+        let result = confirm(root, work, &raw, &|_| {}).unwrap();
+        assert_eq!(result["whitelist"], path_format::display(&parent));
+        assert_eq!(result["registrationError"], Value::Null, "{result}");
+        let neighbor = instance(root, "neighbor").unwrap();
+        assert!(neighbor.management_discovered);
+        assert!(!neighbor.removed);
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn creation_without_a_management_folder_keeps_the_policy_and_the_instance_managed() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let mut draft = draft(Source::Local { path: path_format::display(&core) });
+        draft.management_folder = ManagementChoice::None;
+        let parent = root.join("instances").join("existing");
+        let target = parent.join(&draft.name);
+        let (_, original_revision) = scan_policy::load(root).unwrap();
+        let profile = CoreProfile { unverified: false, java: None,
+            family: "SPIGOT".into(), minecraft: "1.8.8".into(), build: "fixture".into(),
+            sha256: content_revision::file_revision(&core).unwrap(),
+        };
+        let inspection = Inspection {
+            parent: parent.clone(), target: target.clone(), core: profile,
+            assets: Assets::Local { core, mojang: None },
+            scope: Scope { original_revision: original_revision.clone(), added_revision: None },
+            revision: "fixture".into(),
+            test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            management: Management::default(),
+        };
+        let work = "no-folder";
+        let raw = json!({"draft":draft,"revision":inspection.revision}).to_string();
+        let (mut staged, publication) = stage(root, &inspection, &draft, work, None).unwrap();
+        let receipt = Receipt {
+            arguments: vec!["gui-create-confirm".into(), draft.name.clone(), work.into(), raw.clone()],
+            complete: false, output: Some(serde_json::to_value(&publication).unwrap()), created_at: None,
+        };
+        reserve_receipt(root, &root.join("jobs").join(format!("{work}.json")), &receipt).unwrap();
+        staged.journaled = true;
+        core_maintenance::write_durable(&pending_path(root, &draft.name), &work, false).unwrap();
+
+        let result = confirm(root, work, &raw, &|_| {}).unwrap();
+        assert_eq!(result["whitelist"], Value::Null);
+        assert!(target.is_dir());
+        let (policy, revision) = scan_policy::load(root).unwrap();
+        assert_eq!(revision, original_revision);
+        assert!(policy.management_roots().is_empty());
+        assert!(scan_policy::admitted(root, &draft.name).unwrap());
     }
 
     #[test]
@@ -795,7 +1095,7 @@ mod tests {
         let parent = root.join("instances").join("existing");
         let target = parent.join(&draft.name);
         let (policy, original_revision) = scan_policy::load(root).unwrap();
-        let proposed = policy.with_new_child(root, &parent, &target).unwrap();
+        let proposed = policy.with_folder(root, &parent, &[]).unwrap();
         let added_revision = Some(scope_revision(&proposed).unwrap());
         let profile = CoreProfile { unverified: false, java: None,
             family: "SPIGOT".into(), minecraft: "1.8.8".into(), build: "fixture".into(),
@@ -807,6 +1107,7 @@ mod tests {
             scope: Scope { original_revision, added_revision },
             revision: "fixture".into(),
             test_admins: TestAdmins { requested: true, configured: 0, grant: None },
+            management: Management::default(),
         };
         let work = "resume-creation";
         let raw = json!({"draft":draft,"revision":inspection.revision}).to_string();
@@ -832,10 +1133,10 @@ mod tests {
         assert_eq!(phases.into_inner(), [CreationPhase::Checking, CreationPhase::Creating]);
         assert_eq!(result["replayed"], true);
         assert_eq!(result["path"], path_format::display(&target));
-        assert_eq!(result["whitelist"], path_format::display(&target));
+        assert_eq!(result["whitelist"], path_format::display(&parent));
         assert!(instance(root, &draft.name).unwrap().java.as_os_str().is_empty());
         assert_idle(root, &draft.name).unwrap();
-        assert_eq!(scan_policy::load(root).unwrap().0.management_roots(), &[path_format::display(&target)]);
+        assert_eq!(scan_policy::load(root).unwrap().0.management_roots(), &[path_format::display(&parent)]);
         let phases = std::cell::RefCell::new(Vec::new());
         assert_eq!(confirm(root, work, &raw, &|phase| phases.borrow_mut().push(phase)).unwrap(), result);
         assert_eq!(phases.into_inner(), [CreationPhase::Checking]);

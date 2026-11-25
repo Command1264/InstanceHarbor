@@ -658,6 +658,17 @@ fn register_folders(root: &Path, directory: &Path, rows: Vec<Selected>) -> Resul
     apply_locked(root, &work_id, selection)
 }
 
+/// Registers the servers a management folder saved by another flow discovers.
+/// The caller holds the port registration lock.
+pub(super) fn register_management_folder(root: &Path, directory: &Path) -> Result<Value> {
+    let (policy, _) = scan_policy::load(root)?;
+    let view = discover_folder(root, directory, &policy)?;
+    if view["complete"] != true {
+        return Err("ManagementScopeScanIncomplete".into());
+    }
+    register_folders(root, directory, selected_folders(&view)?)
+}
+
 fn folder_save(root: &Path, request: FolderSave) -> Result<Value> {
     let _registration = command_lock(root, "port-registration.lock", false)?;
     let (view, directory, current) = folder_preview(root, &request.directory, &request.revision)?;

@@ -18,6 +18,8 @@ import InitialQueryProgress from './components/InitialQueryProgress.vue'
 import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
+import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
+import { ScopeCache } from './creation-scope-cache'
 import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
@@ -274,6 +276,9 @@ type CreationPreview = {
   target: string
   parent: string
   whitelist: string | null
+  managementOptions: string[]
+  managementCandidates: { name: string; directory: string; core: string | null; kind: 'Minecraft' | 'Velocity' | 'Unknown'; port: number | null; listenAddress: string | null }[]
+  managementScanComplete: boolean
   core: { family: string; minecraft: string; build: string | null; sha256: string }
   javaMajor?: number | null
   initializationDefaults?: boolean
@@ -294,6 +299,7 @@ const creationBytes=computed(()=>{
   return update && 'total' in update ? update : undefined
 })
 const previewedCreation=ref<ReturnType<typeof creationInput>>()
+const creationManagement=ref<ManagementChoice>()
 const creationUnconfirmedWork=ref('')
 const createEditingPicker=ref(false)
 const createBackButton=ref<HTMLButtonElement>()
@@ -310,7 +316,7 @@ function validateCreationName(){
   return false
 }
 const createPath=(path:string)=>displayPath(path,visiblePreferences.value.pathSeparator)
-function creationInput() {
+function creationInput(management: ManagementChoice | undefined = creationManagement.value) {
   const build = creationBuild.value?.value
   if (!canPreviewCreation.value || (draft.source && !build)) return
   return {
@@ -319,6 +325,60 @@ function creationInput() {
     port:draft.port,
     source: draft.source && build ? { kind: 'official', ...build } : { kind: 'local', path: draft.core },
     ...(draft.testAdministrators === 'default' ? {} : { testAdministrators: draft.testAdministrators === 'grant' }),
+    ...(management ? { managementFolder: management } : {}),
+  }
+}
+const creationRescoping=ref(false)
+let creationRescopeRequest=0
+// One preview per management folder option of the open confirmation, so switching back is instant.
+const creationScopes=new ScopeCache<CreationPreview>()
+function startCreationScopes(preview: CreationPreview) {
+  const generation=creationScopes.reset()
+  creationScopes.set(generation,selectedManagementFolder(creationManagement.value,preview.managementOptions),preview)
+  void prefetchCreationScopes(generation,preview.managementOptions)
+}
+async function prefetchCreationScopes(generation: number, options: readonly string[]) {
+  for(const selected of [...options,NO_MANAGEMENT_FOLDER]){
+    if(generation!==creationScopes.generation)return
+    if(creationScopes.get(selected))continue
+    const input=creationInput(managementChoice(selected,options))
+    if(!input)return
+    try{
+      creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+    }catch{
+      // A failed background preview is fetched again when that option is chosen.
+    }
+  }
+}
+async function chooseManagementFolder(selected: string) {
+  const preview = creationPreview.value
+  if (!preview || modalBusy.value) return
+  const options = preview.managementOptions
+  creationManagement.value = managementChoice(selected, options)
+  const input = creationInput()
+  if (!input) return
+  modalError.value=''
+  const generation=creationScopes.generation
+  const cached=creationScopes.get(selected)
+  // A newer choice supersedes any request still in flight.
+  const request = ++creationRescopeRequest
+  if(cached){
+    creationRescoping.value=false
+    creationPreview.value=cached
+    previewedCreation.value=input
+    return
+  }
+  // Keep the checked preview on screen and replace it once.
+  creationRescoping.value=true
+  try{
+    const next=await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)])
+    if(!creationScopes.set(generation,selected,next)||request!==creationRescopeRequest)return
+    creationPreview.value=next
+    previewedCreation.value=input
+  }catch(e){
+    if(request===creationRescopeRequest)modalError.value=creationError(e)
+  }finally{
+    if(request===creationRescopeRequest)creationRescoping.value=false
   }
 }
 const creationTestAdmins = computed(() => {
@@ -335,8 +395,10 @@ function pickerFailed() {
   void showModalError(t('management.pickFailed'))
 }
 function cancelCreationPreview() {
+  creationScopes.reset()
   creationPreview.value=undefined
   previewedCreation.value=undefined
+  creationManagement.value=undefined
   creationUnconfirmedWork.value=''
   modalError.value=''
   modalMessage.value=''
@@ -901,6 +963,7 @@ async function previewCreation(){
   try{
     creationPreview.value=await manage<CreationPreview>(['gui-create-preview',JSON.stringify(input)])
     previewedCreation.value=input
+    startCreationScopes(creationPreview.value)
   }catch(e){
     const reason = rawError(e)
     if (/CreationPreviewChanged|CoreNoStableBuild|CreationNoStableBuild/.test(reason)) refreshCreationBuild()
@@ -916,6 +979,9 @@ function creationError(error: unknown) {
   const reason = rawError(error)
   if (reason.includes('InvalidCreationName')) {
     return t('app.create.invalidName')
+  }
+  if (reason.includes('CreationManagementFolderNotAncestor')) {
+    return t('app.create.managementFolderNotAncestor')
   }
   if (/CoreNoStableBuild|CreationNoStableBuild/.test(reason)) {
     return t('app.create.noStable')
@@ -1126,11 +1192,37 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <dt>Port</dt><dd>{{ draft.port }}</dd>
           <template v-if="creationPreview.javaMajor"><dt>{{ t('app.create.suggestedJava') }}</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
           <template v-if="creationTestAdmins"><dt>{{ t('app.create.testAdmins') }}</dt><dd>{{ creationTestAdmins }}</dd></template>
-          <template v-if="creationPreview.whitelist">
-            <dt>{{ t('app.create.allowedFolder') }}</dt><dd class="selectable" translate="no">{{ createPath(creationPreview.whitelist) }}</dd>
+          <template v-if="creationPreview.managementOptions.length">
+            <dt id="create-management-folder-label">{{ t('app.create.allowedFolder') }}</dt>
+            <dd role="radiogroup" aria-labelledby="create-management-folder-label" class="create-folder-choices">
+              <label v-for="folder in creationPreview.managementOptions" :key="folder" class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="folder" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === folder"
+                  :disabled="modalBusy" @change="chooseManagementFolder(folder)">
+                <span class="selectable" translate="no">{{ createPath(folder) }}</span>
+              </label>
+              <label class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="NO_MANAGEMENT_FOLDER" :checked="selectedManagementFolder(creationManagement, creationPreview.managementOptions) === NO_MANAGEMENT_FOLDER"
+                  :disabled="modalBusy" @change="chooseManagementFolder(NO_MANAGEMENT_FOLDER)">
+                <span>{{ t('app.create.noManagementFolder') }}</span>
+              </label>
+            </dd>
+          </template>
+          <template v-if="creationPreview.managementOptions.length">
+            <dt>{{ t('app.create.alsoRegistered') }}</dt>
+            <dd v-if="!creationPreview.managementCandidates.length">{{ t('app.create.noCandidates') }}</dd>
+            <dd v-else><ul class="create-candidates">
+              <li v-for="candidate in creationPreview.managementCandidates" :key="candidate.directory">
+                <strong class="selectable" translate="no">{{ candidate.name }}</strong>
+                <span class="create-candidate-core">{{ candidate.core || t(`batchImport.${candidate.kind}`) }}</span>
+                <span v-if="candidate.port !== null" class="create-candidate-core">{{ t('batchImport.port', { port: candidate.port }) }}</span>
+                <bdi v-if="candidate.listenAddress" class="create-candidate-core selectable" translate="no">{{ candidate.listenAddress }}</bdi>
+                <span class="hint selectable create-candidate-path" translate="no">{{ createPath(candidate.directory) }}</span>
+              </li>
+            </ul></dd>
           </template>
         </dl>
-        <p v-if="creationPreview.whitelist" class="hint">{{ t('app.create.onlyFolder') }}</p>
+        <p v-if="creationPreview.managementOptions.length && !creationPreview.whitelist" class="hint">{{ t('app.create.noFolderHint') }}</p>
+        <p v-if="!creationPreview.managementScanComplete" class="form-error" role="alert">{{ t('app.create.scanIncomplete') }}</p>
         <p v-if="creationPreview.initializationDefaults === false" class="hint">{{ t('app.create.builtinDefaults') }}</p>
         
         <div v-if="creationPhase" class="creation-progress">
@@ -1145,7 +1237,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
         <p v-if="creationUnconfirmedWork" class="hint selectable">{{ t('app.create.workId') }} <bdi class="mono" translate="no">{{ creationUnconfirmedWork }}</bdi></p>
         <div class="dialog-actions">
           <button ref="createBackButton" type="button" :disabled="modalBusy" @click="cancelCreationPreview">{{ t('app.create.back') }}</button>
-          <button type="button" class="primary" :disabled="modalBusy" @click="provision">{{ t('app.create.submit') }}</button>
+          <button type="button" class="primary" :disabled="modalBusy || creationRescoping" @click="provision">{{ t('app.create.submit') }}</button>
         </div>
       </template>
       <form v-else @submit.prevent="previewCreation">
@@ -1251,4 +1343,10 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 .create-review { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .5rem 1rem; font-size: .875rem; }
 .create-review dt { color: var(--muted); }
 .create-review dd { margin: 0; overflow-wrap: anywhere; }
+.create-folder-choices { display: grid; gap: .375rem; }
+.create-folder-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; align-items: start; cursor: pointer; }
+.create-folder-choice input { margin: .2rem 0 0; }
+.create-candidates { margin: 0; padding: 0; list-style: none; display: grid; gap: .5rem; }
+.create-candidate-core { margin-inline-start: .5rem; }
+.create-candidate-path { display: block; }
 </style>
