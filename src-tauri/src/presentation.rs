@@ -1008,6 +1008,17 @@ fn open_log_folder(root: &Path, name: &str) -> Result<Value> {
     Ok(json!({"opened":true,"path":path_format::display(&folder)}))
 }
 
+/// Whether a management folder scan would register this instance again once its
+/// record is gone. A folder that no longer exists cannot be found by a scan.
+fn scanned_again(root: &Path, item: &Instance) -> Result<bool> {
+    let folder = scan_policy::registered_path(root, &item.name, item.directory.as_deref())?;
+    match fs::symlink_metadata(&folder) {
+        Ok(_) => scan_policy::load(root)?.0.manages_path(root, &folder),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(fail(error)),
+    }
+}
+
 pub(super) fn remove_management(root: &Path, name: &str, mode: &str) -> Result<Value> {
     let mut item = active_instance(root, name)?;
     stopped(root, &item)?;
@@ -1018,7 +1029,7 @@ pub(super) fn remove_management(root: &Path, name: &str, mode: &str) -> Result<V
             item.removed = true;
             save(&record, &item)?;
         }
-        "delete" if item.management_discovered => {
+        "delete" if item.management_discovered || scanned_again(root, &item)? => {
             // Keep only the opt-out identity. Otherwise the next scan would
             // immediately recreate the settings the user asked us to remove.
             item.removed = true;

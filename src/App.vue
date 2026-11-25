@@ -20,7 +20,7 @@ import CreateCorePicker from './components/CreateCorePicker.vue'
 import { catalogRefreshInterval, useCoreCatalog, type CatalogFamily } from './core-catalog'
 import {validPinOrder} from './pin-order'
 import {productTitle,type AboutInfo} from './about'
-import { managementChoice, NO_MANAGEMENT_FOLDER, selectedManagementFolder, type ManagementChoice } from './creation-management'
+import { managementChoice, NO_MANAGEMENT_FOLDER, previewedManagementChoice, selectedManagementFolder, type ManagementChoice } from './creation-management'
 import { ScopeCache } from './creation-scope-cache'
 import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
@@ -353,6 +353,13 @@ async function prefetchCreationScopes(generation: number, options: readonly stri
     }
   }
 }
+async function retryCreationScope(generation: number, selected: string, input: NonNullable<ReturnType<typeof creationInput>>) {
+  try{
+    creationScopes.set(generation,selected,await manage<CreationPreview>(['gui-create-rescope',JSON.stringify(input)],'background'))
+  }catch{
+    // The option is read again in the foreground when it is chosen next time.
+  }
+}
 async function chooseManagementFolder(selected: string) {
   const preview = creationPreview.value
   if (!preview || modalBusy.value) return
@@ -379,7 +386,14 @@ async function chooseManagementFolder(selected: string) {
     creationPreview.value=next
     previewedCreation.value=input
   }catch(e){
-    if(request===creationRescopeRequest)modalError.value=creationError(e)
+    // Select the option of the preview still on screen again, so "Create" sends what is shown.
+    if(request===creationRescopeRequest){
+      creationManagement.value=previewedManagementChoice(previewedCreation.value)
+      modalError.value=t('app.create.rescopeFailed',{error:creationError(e)})
+    }
+      // Read the chosen option once more in the background; a reply is kept in the cache,
+      // so choosing that option again shows it at once.
+      void retryCreationScope(generation,selected,input)
   }finally{
     if(request===creationRescopeRequest)creationRescoping.value=false
   }

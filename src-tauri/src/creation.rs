@@ -269,15 +269,6 @@ fn proposed_scope(root: &Path, policy: &scan_policy::Policy, parent: &Path, targ
     }
 }
 
-fn covered(root: &Path, policy: &scan_policy::Policy, target: &Path) -> Result<bool> {
-    for rule in policy.management_roots() {
-        if scan_policy::contains(&scan_policy::rule_path(root, rule)?, target) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 fn inspect(root: &Path, draft: &Draft) -> Result<Inspection> {
     inspect_source(root, draft, true)
 }
@@ -302,7 +293,7 @@ fn inspect_source(root: &Path, draft: &Draft, verify_latest: bool) -> Result<Ins
         return Err("CreationPathExcluded".into());
     }
     let mut management = Management { complete: true, ..Management::default() };
-    let added_revision = if covered(root, &policy, &target)? {
+    let added_revision = if policy.manages_path(root, &target)? {
         None
     } else {
         management.options = management_options(root, &parent, &target);
@@ -569,15 +560,33 @@ fn finish(
     } else {
         return Err("CreationPolicyChanged".into());
     };
-    let folder = chosen_folder(root, &parent, &target, &draft.management_folder)?;
-    let proposed = need_scope.map(|expected| -> Result<scan_policy::Policy> {
-        let folder = folder.as_deref().ok_or("CreationPolicyChanged")?;
-        let proposed = proposed_scope(root, &policy, &parent, &target, folder)?;
-        if &scope_revision(&proposed)? != expected || !proposed.matches(root, &draft.name, &target)?.1 {
-            return Err("CreationPolicyChanged".into());
+    let mut folder = chosen_folder(root, &parent, &target, &draft.management_folder)?;
+    // 1.0.x requests have no management folder field and always added only the new folder.
+    // The recorded revision tells which of the two scopes the confirmed preview showed.
+    let legacy = draft.management_folder.is_parent().then(|| target.clone());
+    let proposed = match need_scope {
+        None => {
+            if legacy.is_some() && publication.scope.added_revision.is_some()
+                && !policy.manages_path(root, &parent)? && policy.manages_path(root, &target)?
+            {
+                folder = legacy;
+            }
+            None
         }
-        Ok(proposed)
-    }).transpose()?;
+        Some(expected) => {
+            let mut matched = None;
+            for option in folder.iter().chain(legacy.iter()) {
+                let proposed = proposed_scope(root, &policy, &parent, &target, option)?;
+                if &scope_revision(&proposed)? == expected && proposed.matches(root, &draft.name, &target)?.1 {
+                    matched = Some((option.clone(), proposed));
+                    break;
+                }
+            }
+            let (option, proposed) = matched.ok_or("CreationPolicyChanged")?;
+            folder = Some(option);
+            Some(proposed)
+        }
+    };
 
     registration_path_available(root, &draft.name, &target)?;
     port_unassigned(root, draft.port, &draft.name)?;
@@ -979,6 +988,129 @@ mod tests {
         assert_eq!(revision, original_revision);
         assert!(policy.management_roots().is_empty());
         assert!(scan_policy::admitted(root, &draft.name).unwrap());
+    }
+
+    /// Stages a local creation that records `added_revision` and leaves it interrupted before
+    /// publication, the way a crash after the receipt was written does.
+    fn interrupted(root: &Path, draft: &Draft, raw: &str, work: &str, added_revision: Option<String>) {
+        let parent = root.join("instances").join("existing");
+        let core = root.join("stock.jar");
+        let (_, original_revision) = scan_policy::load(root).unwrap();
+        let profile = CoreProfile { unverified: false, java: None,
+            family: "SPIGOT".into(), minecraft: "1.8.8".into(), build: "fixture".into(),
+            sha256: content_revision::file_revision(&core).unwrap(),
+        };
+        let inspection = Inspection {
+            parent: parent.clone(), target: parent.join(&draft.name), core: profile,
+            assets: Assets::Local { core, mojang: None },
+            scope: Scope { original_revision, added_revision },
+            revision: "fixture".into(),
+            test_admins: TestAdmins { requested: true, configured: 0, skipped: None, grant: None },
+            management: Management::default(),
+        };
+        let (mut staged, publication) = stage(root, &inspection, draft, work, None).unwrap();
+        let receipt = Receipt {
+            arguments: vec!["gui-create-confirm".into(), draft.name.clone(), work.into(), raw.into()],
+            complete: false, output: Some(serde_json::to_value(&publication).unwrap()), created_at: None,
+        };
+        reserve_receipt(root, &root.join("jobs").join(format!("{work}.json")), &receipt).unwrap();
+        staged.journaled = true;
+        core_maintenance::write_durable(&pending_path(root, &draft.name), &work, false).unwrap();
+    }
+
+    #[test]
+    fn an_interrupted_1_0_creation_without_a_management_folder_resumes_with_the_target_scope() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let draft = draft(Source::Local { path: path_format::display(&core) });
+        let parent = root.join("instances").join("existing");
+        let target = parent.join(&draft.name);
+        other_server(&parent.join("neighbor"));
+        // 1.0.x wrote this request: no `managementFolder`, and the scope it
+        // recorded adds only the new folder itself (`with_new_child`).
+        let raw = format!(
+            r#"{{"draft":{{"name":"paper-new","parent":"instances/existing","port":{},"source":{{"kind":"local","path":{}}}}},"revision":"fixture"}}"#,
+            draft.port, serde_json::to_string(&path_format::display(&core)).unwrap(),
+        );
+        let (policy, _) = scan_policy::load(root).unwrap();
+        let legacy = scope_revision(&policy.with_new_child(root, &parent, &target).unwrap()).unwrap();
+        interrupted(root, &draft, &raw, "legacy-draft", Some(legacy.clone()));
+
+        let result = recover(root, "legacy-draft").unwrap();
+        assert_eq!(result["whitelist"], path_format::display(&target), "{result}");
+        assert_eq!(result["registration"], Value::Null, "{result}");
+        assert!(target.is_dir());
+        assert_eq!(scan_policy::load(root).unwrap().1, legacy);
+        assert!(instance(root, "neighbor").is_err(), "the 1.0.x scope does not cover the neighbor");
+    }
+
+    #[test]
+    fn an_interrupted_creation_with_the_default_folder_still_resumes_with_the_parent_scope() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let draft = draft(Source::Local { path: path_format::display(&core) });
+        let parent = root.join("instances").join("existing");
+        let raw = json!({"draft":draft,"revision":"fixture"}).to_string();
+        assert!(!raw.contains("managementFolder"), "the default choice is sent without the field");
+        let (policy, _) = scan_policy::load(root).unwrap();
+        let added = scope_revision(&policy.with_folder(root, &parent, &[]).unwrap()).unwrap();
+        interrupted(root, &draft, &raw, "default-draft", Some(added));
+
+        let result = recover(root, "default-draft").unwrap();
+        assert_eq!(result["whitelist"], path_format::display(&parent), "{result}");
+    }
+
+    #[test]
+    fn removing_a_created_instance_with_its_settings_keeps_it_out_of_the_management_folder_scan() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let draft = draft(Source::Local { path: path_format::display(&core) });
+        let parent = root.join("instances").join("existing");
+        let target = parent.join(&draft.name);
+        let raw = json!({"draft":draft,"revision":"fixture"}).to_string();
+        let (policy, _) = scan_policy::load(root).unwrap();
+        let added = scope_revision(&policy.with_folder(root, &parent, &[]).unwrap()).unwrap();
+        interrupted(root, &draft, &raw, "created", Some(added));
+        recover(root, "created").unwrap();
+        // A started server has a world; the scan imports only such folders.
+        fs::create_dir_all(target.join("world")).unwrap();
+        fs::write(target.join("world").join("level.dat"), b"world").unwrap();
+        assert!(!instance(root, &draft.name).unwrap().management_discovered);
+
+        presentation::remove_management(root, &draft.name, "delete").unwrap();
+        batch_import::sync_management_folders(root, 0).unwrap();
+
+        let item = instance(root, &draft.name).unwrap();
+        assert!(item.removed, "the scan registered the removed instance again");
+        assert!(item.core_profile.is_none());
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn removing_an_instance_whose_folder_is_gone_drops_its_record() {
+        let fixture = Fixture::new();
+        let root = &fixture.0;
+        let core = root.join("stock.jar");
+        fs::write(&core, "synthetic artifact").unwrap();
+        let draft = draft(Source::Local { path: path_format::display(&core) });
+        let target = root.join("instances").join("existing").join(&draft.name);
+        let raw = json!({"draft":draft,"revision":"fixture"}).to_string();
+        let parent = root.join("instances").join("existing");
+        let (policy, _) = scan_policy::load(root).unwrap();
+        let added = scope_revision(&policy.with_folder(root, &parent, &[]).unwrap()).unwrap();
+        interrupted(root, &draft, &raw, "gone", Some(added));
+        recover(root, "gone").unwrap();
+        // Deleting the server moves the folder away before unregistering it.
+        fs::remove_dir_all(&target).unwrap();
+
+        presentation::remove_management(root, &draft.name, "delete").unwrap();
+        assert!(!record_path(root, &draft.name).exists());
     }
 
     #[test]

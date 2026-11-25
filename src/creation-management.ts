@@ -18,3 +18,11 @@ export function selectedManagementFolder(choice: ManagementChoice | undefined, o
   if (!choice) return options[1] ?? NO_MANAGEMENT_FOLDER
   return choice.kind === 'none' ? NO_MANAGEMENT_FOLDER : choice.path
 }
+
+/**
+ * The choice to show after a preview for a newly selected option fails: the one the
+ * preview still on screen was made for, so the selection matches what "Create" sends.
+ */
+export function previewedManagementChoice(previewed: { managementFolder?: ManagementChoice } | undefined): ManagementChoice | undefined {
+  return previewed?.managementFolder
+}
