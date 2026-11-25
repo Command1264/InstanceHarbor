@@ -87,7 +87,7 @@ Release builds need the pinned console runtime and license notices; see [Windows
 The full documentation is in Traditional Chinese:
 
 - [Development guide](docs/development.md): features in detail, build, test, isolated acceptance, storage locations and rollback.
-- [1.0.1 release notes](docs/windows-1.0.1.md). The earlier [1.0.0 release notes](docs/windows-1.0.0.md) and [1.0.0-rc2 pre-release notes](docs/windows-rc2.md) remain for reference.
+- [1.1.0 release notes](docs/windows-1.1.0.md). The earlier [1.0.1 release notes](docs/windows-1.0.1.md), [1.0.0 release notes](docs/windows-1.0.0.md) and [1.0.0-rc2 pre-release notes](docs/windows-rc2.md) remain for reference.
 - [Windows distribution and licenses](docs/windows-distribution-licenses.md) (English): how to build a distribution, plus the third-party notices and corresponding MPL sources.
 
 Report problems and ideas in [GitHub Issues](https://github.com/Command1264/InstanceHarbor/issues).
