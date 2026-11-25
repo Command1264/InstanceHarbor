@@ -56,7 +56,7 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
 - 回退相容：`preferences.json` 仍保留舊的 `closeToTray` 值但不再使用。值為預設時不寫入檔案；若曾在 1.0.0 關閉此設定，
   回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
-- 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512）。`muda` 需要 comctl32 第 6 版，
+- 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512；正式版藍色、開發版紅色，見「開發版紅色圖示」）。`muda` 需要 comctl32 第 6 版，
   執行檔已帶對應 manifest；程式庫的單元測試執行檔沒有，所以系統匣程式碼不編進測試建置。
 
 ## 視窗開啟大小
@@ -625,6 +625,7 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 | 伺服器後台視窗 | 原標題 | 原標題後加上 `[InstanceHarbor Dev — <工作區名稱>]` |
 | 側欄名稱、「關於」 | `InstanceHarbor` | 側欄第一行 `InstanceHarbor Dev`，第二行工作區名稱；「關於」另列「開發工作區」與 Git commit |
 | GUI 診斷紀錄 | `InstanceHarbor\logs` | `InstanceHarbor Dev\logs\<工作區名稱>`，同時開著的 GUI 不會互搶寫入鎖與 16 MiB 容量上限 |
+| 應用程式圖示（執行檔、工作列、Alt+Tab、標題列、系統匣、側欄） | 藍色 | 紅色，形狀相同 |
 
 `<工作區名稱>` 是工作區資料夾名稱；`<工作區鍵>` 是名稱轉小寫後的 FNV-1a 64 位元雜湊（16 位十六進位），
 讓鎖名稱與 AppUserModelID 長度固定。實作集中在 `src-tauri/src/desktop_channel.rs`。
@@ -653,6 +654,43 @@ cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features de
 任何執行檔都不編譯這段，所以實際執行時的開發版限制不變。位置規則本身由 `desktop_channel` 的測試以假的 LocalAppData 在兩種設定下驗證，
 不會建立或改動真正的 `InstanceHarbor Dev` 資料夾。
 兩版同時啟動伺服器時，請為各工作區使用獨立副本，並為每台伺服器指派不同的系統連接埠。
+
+#### 開發版紅色圖示
+
+開發版的圖示由正式版的藍色圖示只轉動色相（+140°）產生，飽和度、亮度、透明度與 ICO 內每個尺寸都不變：
+
+| 正式版（藍） | 開發版（紅） | 使用位置 |
+|---|---|---|
+| `src-tauri/icons/icon.ico` | `src-tauri/icons/icon-dev.ico` | 執行檔資源 32512：檔案總管、工作列、Alt+Tab、標題列、系統匣 |
+| `src/assets/instanceharbor-brand.png` | `src/assets/instanceharbor-brand-dev.png` | 側欄品牌圖 |
+
+建置時自動選用，不需要手動切換：`build.rs` 依 `development-channel` feature 選 ICO（`src-tauri/src/app_icon.rs`），
+`build-product.ps1 -Development` 以 Vite mode `development-channel` 建置前端，`vite.config.ts` 據此選側欄圖。
+系統匣圖示讀取執行檔資源，所以跟著執行檔切換。
+
+更換藍色圖示後，在 repository 根目錄重新產生紅色版並一起提交（只用 Python 標準函式庫）：
+
+```powershell
+python generate-development-icons.py
+python generate-development-icons.py --check
+```
+
+`--check` 確認紅色檔只改了色相、尺寸與目錄欄位相同，並確認藍色版仍是藍色、紅色版是紅色。
+要調整紅色深淺，修改腳本的 `HUE_SHIFT_DEGREES` 後重新產生。
+
+防止正式版誤用紅色圖示的檢查：
+
+- `cargo test` 的 `app_icon` 測試：正式版設定必須嵌入 `icons/icon.ico`，開發版必須嵌入 `icons/icon-dev.ico`，兩檔尺寸相同但內容不同。
+- `build-product.ps1` 建置後以 `verify-app-icon.ps1` 讀出 `InstanceHarbor.exe`（或 `InstanceHarborDev.exe`）與 `ihctl.exe` 內嵌的圖示，
+  逐位元組比對該版本應使用的 ICO；並確認前端只含該版本的側欄圖。不符時建置失敗。
+
+讀出執行檔內嵌的圖示並另存為 ICO，再產生紅藍對照圖：
+
+```powershell
+./verify-app-icon.ps1 -Binary <正式版 exe> -Export $env:TEMP/product.ico
+./verify-app-icon.ps1 -Binary <開發版 exe> -Export $env:TEMP/development.ico
+python generate-development-icons.py --comparison $env:TEMP/icon-comparison.png --product $env:TEMP/product.ico --development $env:TEMP/development.ico
+```
 
 ### 版本與 commit
 

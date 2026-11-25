@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import brandLogo from './assets/instanceharbor-brand.png?no-inline'
+import brandLogo from '@brand-logo?no-inline'
 import InstancesPage from './InstancesPage.vue'
 import SettingsPage from './SettingsPage.vue'
 import ActivityPage from './ActivityPage.vue'
