@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import InitialQueryProgress from './InitialQueryProgress.vue'
 import OperationButton from './OperationButton.vue'
 import { useAppLanguage } from '../i18n'
+import { coreBuildText } from '../core-display'
 import type { CatalogBuild, CatalogEntry, CatalogFamily } from '../core-catalog'
 
 const family = defineModel<'' | CatalogFamily>('family', { required: true })
@@ -57,7 +58,7 @@ function changeFamily(event: Event) {
       </div>
       <template v-if="version && !selectedUnavailable">
         <InitialQueryProgress v-if="visibleProgress === 'build'" id="catalog-build-progress" :label="t('components.createCore.checkingBuild')" />
-        <p v-else-if="build?.value" class="catalog-build">{{ t('components.createCore.latestBuild') }} <strong>Build {{ build.value.build }}</strong></p>
+        <p v-else-if="build?.value" class="catalog-build">{{ t('components.createCore.latestBuild') }} <strong>{{ coreBuildText(build.value.build) }}</strong></p>
         <p v-else-if="build?.value === null" class="hint" role="status">{{ t('components.createCore.noStableBuild') }}</p>
         <div v-if="build?.failed" class="catalog-error">
           <p class="form-error" role="status">{{ t('components.createCore.buildFailed') }}</p>

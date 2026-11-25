@@ -233,6 +233,9 @@ ZIP 目錄記錄每個項目的 CRC，任一項目內容改變都會使目錄改
 都無法辨識時顯示「尚未核對」，不沿用登記中的舊版本。原因以代碼回傳（`CorePathUnverified`、`CoreUnreadable`、`CoreProfileUnverified`），
 由前端 `src/core-display.ts` 翻譯，顯示在清單儲存格的滑鼠提示與詳細面板。新增代碼時 `src/core-display.test.mjs` 會要求補上翻譯。
 
+核心名稱與 build 一律經 `src/core-display.ts` 的 `coreFamilyName`、`coreBuildText`、`coreVersionText` 顯示，例如 `Paper 26.2 · Build 134`。
+登記資料仍存 `PAPER`、`FOLIA` 等原始寫法，比對不分大小寫；未知的種類照原樣顯示。`src/core-display.test.mjs` 會在畫面直接插入 `.family` 或手寫 `Build` 時失敗。
+
 每次啟動前，登記的檔名不存在時，會依上述規則重新尋找並更新登記，例如 Velocity 換成檔名帶有新 build 的 JAR。新核心的雜湊與登記不同時，同家族的核心會被接受（離線時以未核對方式接受）；遊戲伺服器另外要求 Minecraft 版本相同，避免世界被意外升級。其他情況維持原本的錯誤，例如 `CoreArtifactChanged`。
 
 登記、匯入預覽與 V1 移交都會用 Windows Restart Manager 查詢哪些程式開著核心 JAR。其他程式（通常是仍在執行的伺服器）開著時回報 `CoreInUse`，不檢查 Port 也不登記。查詢只讀取，不會要求程式關閉。

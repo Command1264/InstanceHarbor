@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { errorText, manage, type CoreSource } from '../manager'
 import { formatDisplayTime, useAppLanguage, type TimeFormat } from '../i18n'
 import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
+import { coreBuildText, coreVersionText } from '../core-display'
 import OperationButton from './OperationButton.vue'
 import PathPickerButton from './PathPickerButton.vue'
 const props = defineProps<{
@@ -32,7 +33,7 @@ const path = ref('')
 const currentVersion = computed(() => {
   const core = state.value?.installed ?? state.value?.identified
   if (!core) return t('components.coreMaintenance.notChecked')
-  const text = [core.family, core.minecraft, ...(core.build ? ['build', core.build] : [])].join(' ')
+  const text = coreVersionText(core)
   return state.value?.installed ? text : text + t('components.coreMaintenance.offline')
 })
 const sha = ref('')
@@ -188,7 +189,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
     <h2 id="core-dialog-title">{{ t('components.coreMaintenance.title', { name }) }}</h2>
     <dl class="import-preview">
       <dt>{{ t('components.coreMaintenance.currentVersion') }}</dt><dd>{{ currentVersion }}</dd>
-      <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ source?.remoteBuild ?? candidate?.build ?? t('components.coreMaintenance.notChecked') }}</dd>
+      <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ (source?.remoteBuild ?? candidate?.build) ? coreBuildText(source?.remoteBuild ?? candidate?.build ?? '') : t('components.coreMaintenance.notChecked') }}</dd>
       <dt>{{ t('components.coreMaintenance.checkedAt') }}</dt><dd>{{ sourceTime }}</dd>
       <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
     </dl>
@@ -217,7 +218,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       </div>
       <div class="field"><label for="local-core-sha256">SHA-256</label><input id="local-core-sha256" v-model.trim="sha" name="local-core-sha256" autocomplete="off" spellcheck="false"></div>
       <button :disabled="!state?.canWrite || !path || !/^[0-9a-f]{64}$/i.test(sha)" @click="ask('core-install')">{{ t('components.coreMaintenance.update') }}</button>
-      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">Build {{ backup.profile.build }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
+      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">{{ coreBuildText(backup.profile.build) }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
       <details v-if="state" class="detail-section">
         <summary>{{ t('core.diagnostics.show') }}</summary>
         <pre class="selectable" tabindex="0" :aria-label="t('core.diagnostics.show')" translate="no">{{ diagnosticText }}</pre>
