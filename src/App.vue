@@ -1139,13 +1139,18 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
           <template v-if="creationPreview.javaMajor"><dt>{{ t('app.create.suggestedJava') }}</dt><dd>Java {{ creationPreview.javaMajor }}</dd></template>
           <template v-if="creationTestAdmins"><dt>{{ t('app.create.testAdmins') }}</dt><dd>{{ creationTestAdmins }}</dd></template>
           <template v-if="creationPreview.managementOptions.length">
-            <dt><label for="create-management-folder">{{ t('app.create.allowedFolder') }}</label></dt>
-            <dd>
-              <select id="create-management-folder" :value="creationPreview.whitelist ?? NO_MANAGEMENT_FOLDER" :disabled="modalBusy"
-                @change="chooseManagementFolder(($event.target as HTMLSelectElement).value)">
-                <option v-for="folder in creationPreview.managementOptions" :key="folder" :value="folder" translate="no">{{ createPath(folder) }}</option>
-                <option :value="NO_MANAGEMENT_FOLDER">{{ t('app.create.noManagementFolder') }}</option>
-              </select>
+            <dt id="create-management-folder-label">{{ t('app.create.allowedFolder') }}</dt>
+            <dd role="radiogroup" aria-labelledby="create-management-folder-label" class="create-folder-choices">
+              <label v-for="folder in creationPreview.managementOptions" :key="folder" class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="folder" :checked="creationPreview.whitelist === folder"
+                  :disabled="modalBusy" @change="chooseManagementFolder(folder)">
+                <span class="selectable" translate="no">{{ createPath(folder) }}</span>
+              </label>
+              <label class="create-folder-choice">
+                <input type="radio" name="create-management-folder" :value="NO_MANAGEMENT_FOLDER" :checked="!creationPreview.whitelist"
+                  :disabled="modalBusy" @change="chooseManagementFolder(NO_MANAGEMENT_FOLDER)">
+                <span>{{ t('app.create.noManagementFolder') }}</span>
+              </label>
             </dd>
           </template>
           <template v-if="creationPreview.managementCandidates.length">
@@ -1275,6 +1280,8 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 .create-review { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .5rem 1rem; font-size: .875rem; }
 .create-review dt { color: var(--muted); }
 .create-review dd { margin: 0; overflow-wrap: anywhere; }
-.create-review select { max-width: 100%; }
+.create-folder-choices { display: grid; gap: .375rem; }
+.create-folder-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .5rem; align-items: start; cursor: pointer; }
+.create-folder-choice input { margin: .2rem 0 0; }
 .create-candidates { margin: 0; padding-left: 1.1rem; }
 </style>
