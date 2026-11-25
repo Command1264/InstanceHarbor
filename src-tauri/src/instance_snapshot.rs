@@ -72,7 +72,7 @@ fn project(
         let name = path
             .file_stem()
             .and_then(|entry| entry.to_str())
-            .filter(|name| token(name));
+            .filter(|name| instance_name(name));
         let record = bytes
             .as_ref()
             .map_err(Clone::clone)

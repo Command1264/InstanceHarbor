@@ -42,7 +42,7 @@ fn entry(path: &Path) -> Result<Option<fs::Metadata>> {
 }
 
 fn plan(root: &Path, name: &str, directory: &str) -> Result<Plan> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidInstanceName".into());
     }
     if entry(&record_path(root, name))?.is_some() {
@@ -208,7 +208,7 @@ fn register(root: &Path, name: &str, request: &str, java: &str, plan: &Plan, lis
 }
 
 fn rollback(root: &Path, name: &str) -> Result<Value> {
-    if !token(name) {
+    if !instance_name(name) {
         return Err("InvalidInstanceName".into());
     }
     let directory = instance_path(root, name)?;
