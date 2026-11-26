@@ -152,7 +152,7 @@ fn configured_paper_user_agent() -> Result<String> {
     paper_user_agent(std::env::var_os(CONTACT_ENV).as_deref())
 }
 
-fn system_curl() -> Result<PathBuf> {
+pub(super) fn system_curl() -> Result<PathBuf> {
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn GetSystemDirectoryW(buffer: *mut u16, size: u32) -> u32;

@@ -12,7 +12,7 @@ const translator = language => (id, values = {}) => {
 const zh = translator(0)
 const status = (patch = {}) => ({
   currentVersion: '1.1.0', channel: 'stable', autoCheck: true, platform: 'windows-x64', install: 'setup',
-  lastAttempt: 100, lastSuccess: 100, lastError: null, due: false, update: null, ...patch,
+  lastAttempt: 100, lastSuccess: 100, lastError: null, due: false, update: null, download: null, ...patch,
 })
 const update = (patch = {}) => ({ version: '1.2.0', tag: 'v1.2.0', prerelease: false, publishedAt: null,
   asset: { name: 'InstanceHarbor-1.2.0-windows-x64-setup.exe', url: 'x', size: 1, digest: 'sha256:x' }, problem: null, ...patch })
@@ -66,4 +66,38 @@ test('automatic checks stay quiet; only a manual check shows progress', () => {
   assert.match(startup, /'app-update-check', 'auto'], 'background', true/)
   assert.doesNotMatch(startup, /updateChecking|updateFeedback/)
   assert.match(read('./App.vue'), /onMounted\(\(\)=>\{void startupUpdateCheck\(\)\}\)/)
+})
+
+test('the update row offers one action: download, then install or show the folder', async () => {
+  const { updateAction } = await import('./app-update.ts')
+  assert.equal(updateAction(undefined), null)
+  assert.equal(updateAction(status()), null)
+  assert.equal(updateAction(status({ update: update({ asset: null, problem: 'NoMatchingAsset' }) })), null)
+  assert.equal(updateAction(status({ update: update() })), 'download')
+  const downloaded = { version: '1.2.0', name: 'InstanceHarbor-1.2.0-windows-x64-setup.exe' }
+  assert.equal(updateAction(status({ update: update(), download: downloaded })), 'install')
+  assert.equal(updateAction(status({ install: 'portable', update: update(), download: downloaded })), 'reveal')
+  // A download of another version does not count.
+  assert.equal(updateAction(status({ update: update(), download: { ...downloaded, version: '1.1.5' } })), 'download')
+})
+
+test('every download, install and open failure the backend reports has its own text', async () => {
+  const { updateActionText } = await import('./app-update.ts')
+  const backend = read('../src-tauri/src/app_update.rs')
+  const codes = new Set([...backend.matchAll(/"(Update(?:Download|Install|Reveal|NotAvailable|AssetUnavailable)[A-Za-z]*)"/g)].map(match => match[1]))
+  // Refusals the page never causes: it offers install only to Setup builds and the folder only to portable ones.
+  for (const internal of ['UpdateInstallNeedsSetup', 'UpdateRevealNeedsPortable', 'UpdateDownloadInvalid']) codes.delete(internal)
+  for (const code of codes) assert.notEqual(updateActionText(code, zh), code, code)
+  assert.equal(updateActionText('UpdateInstallFailed: os error 2', zh), '無法啟動安裝程式')
+  assert.equal(updateActionText('UpdateDownloadDigestMismatch', zh), '下載的檔案與 GitHub 公布的 SHA-256 不符，已刪除，不會執行')
+  assert.equal(updateActionText('something else', zh), 'something else')
+})
+
+test('installing asks first and the GUI removes old downloads at start', () => {
+  const panel = read('./components/AppUpdatePanel.vue')
+  assert.match(panel, /if \(action\.value === 'install'\) \{\s*confirmDialog\.value\?\.showModal\(\)/)
+  assert.match(panel, /async function confirmInstall\(\)[\s\S]*installUpdate\(update\.tag\)/)
+  const store = read('./app-update-store.ts')
+  const startup = store.slice(store.indexOf('export async function startupUpdateCheck'), store.indexOf('export async function checkForUpdateNow'))
+  assert.match(startup, /manage\(\['app-update-cleanup'\], 'background'\)/)
 })

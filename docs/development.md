@@ -851,9 +851,10 @@ GitHub 按鈕用預設瀏覽器開啟固定的 `https://github.com/Command1264/I
 授權按鈕用記事本開啟執行檔旁的 `LICENSE` 與 `THIRD-PARTY-NOTICES.txt`。開發版與本機建置沒有這兩個檔案，按鈕會停用。
 GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 
-### 應用程式更新（檢查與通知）
+### 應用程式更新
 
-「應用程式設定 → 應用程式更新」檢查 GitHub Releases 是否有比目前更新的 InstanceHarbor（#65）。這一版只檢查與通知，不下載也不安裝。
+「應用程式設定 → 應用程式更新」檢查 GitHub Releases 是否有比目前更新的 InstanceHarbor（#65），由使用者決定是否下載與安裝。
+不會自動下載或安裝。
 
 - **更新通道**：「正式版」（預設）只看正式版；「預發行版（包含正式版）」也看預發行版。版號支援預發行字尾，
   依 SemVer 排序，字尾中的數字以數值比較，所以 `1.0.0-rc2` < `1.0.0-rc10` < `1.0.0`、`1.1.0-rc.1` < `1.1.0`
@@ -880,10 +881,31 @@ GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 - **儲存**：設定與上次結果寫在工作區的 `app-update.json`（以 `app-update.lock` 序列化讀改寫），不放進 `preferences.json`，
   所以回退到不認識這些欄位的舊版仍能讀取外觀設定。檔案讀不到或不是 JSON 時視為預設值。
   上次讀到的 Release 清單也存在這裡，所以重開 GUI 或切換通道不必重新查詢。
-- **IPC**：`app-update-status`、`app-update-check auto|manual`（`auto` 只在到期時查詢）、`app-update-settings <stable|prerelease> <true|false>`。
+- **IPC**：`app-update-status`、`app-update-check auto|manual`（`auto` 只在到期時查詢）、`app-update-settings <stable|prerelease> <true|false>`，
+  以及下面的 `app-update-download`、`app-update-install`、`app-update-reveal`、`app-update-cleanup`。
 
-開發版可用 `IH_DEV_UPDATE_RELEASES=<JSON 檔>` 改從本機檔案讀取 Release 清單（格式同 GitHub API 回應），用來驗收而不連線 GitHub。
-這個環境變數只在 `development-channel` feature 編譯，正式版沒有這段程式。
+下載與安裝（「最新版本」列的第一個按鈕依狀態顯示「下載更新」、「安裝更新」或「開啟所在資料夾」）：
+
+- **下載**（`app-update-download <tag>`）：只下載上次檢查選出的檔案（tag 必須相同，網址與 `digest` 的規則同上）。
+  經系統 `curl.exe` 下載：只允許 HTTPS（含轉址，GitHub 會轉到它的檔案主機）、最多轉址 5 次、連線 10 秒、總計 15 分鐘、
+  大小上限為 GitHub 公布的大小。先寫成 `<檔名>.part`，大小與 SHA-256 都和 GitHub 公布的相同才改名為正式檔名；
+  不符時刪除並回報（「下載的檔案與 GitHub 公布的 SHA-256 不符，已刪除，不會執行」）。同一時間只允許一個下載（`app-update-download.lock`）。
+- **位置與清理**：工作區的 `staging/updates/<版本>/<檔名>`，最多保留一個版本：下載新版本前刪除其他版本資料夾。
+  GUI 每次啟動先執行 `app-update-cleanup`，刪除版本小於或等於目前版本的資料夾，也就是更新完成後的下一次啟動會刪除安裝檔。
+  只處理名稱是版號的資料夾，略過連結與 junction；「清除快取」不處理這個資料夾。
+- **安裝版**（`app-update-install <tag>`）：按「安裝更新」先顯示確認視窗（「安裝 InstanceHarbor X？」，說明會關閉 InstanceHarbor 與管理服務、
+  有伺服器在執行時安裝程式會等待且不替使用者停止伺服器）。確認後以拒絕寫入的方式開啟檔案，再核對一次大小與 SHA-256，
+  持有這個檔案直到 Setup 啟動，所以核對過的檔案就是執行的檔案。之後的流程是 #61 的 Setup：關閉 GUI 與 Manager，有伺服器在執行時顯示台數並等待。
+  Setup 尚未簽章，SHA-256 只能證明檔案和 GitHub Release 上的一致。
+- **便攜版**（`app-update-reveal <tag>`）：不替換執行中的檔案。核對後用檔案總管開啟所在資料夾並選取 ZIP，
+  由使用者結束 InstanceHarbor 後自行解壓縮替換。
+- 安裝版與便攜版依執行檔旁是否有 `instanceharbor.install` 判斷；後端拒絕便攜版安裝與安裝版開啟資料夾。
+
+開發版可用下列環境變數改從本機檔案讀取，用來驗收而不連線 GitHub、不下載真正的 Release 檔案。
+這兩個環境變數只在 `development-channel` feature 編譯，正式版沒有這段程式。
+
+- `IH_DEV_UPDATE_RELEASES=<JSON 檔>`：Release 清單（格式同 GitHub API 回應）。
+- `IH_DEV_UPDATE_ASSETS=<資料夾>`：下載時改從這個資料夾複製同名檔案，之後一樣核對大小與 SHA-256。
 
 ### 儲存位置
 

@@ -77,6 +77,16 @@ pub(super) fn file_md5(path: &Path) -> Result<String> {
 fn file_digest(path: &Path, algorithm_name: &str, size: usize) -> Result<String> {
     no_redirect(path)?;
     let mut file = File::open(path).map_err(|error| file_error("open-core", path, error))?;
+    digest_open(&mut file, path, algorithm_name, size)
+}
+
+/// The SHA-256 of a file the caller already holds open, so the bytes checked are the
+/// bytes the caller then uses (#65). Reads from the current position.
+pub(super) fn open_file_revision(file: &mut File, path: &Path) -> Result<String> {
+    digest_open(file, path, "SHA256", 32)
+}
+
+fn digest_open(file: &mut File, path: &Path, algorithm_name: &str, size: usize) -> Result<String> {
     if file.metadata().map_err(fail)?.len() > 512 * 1024 * 1024 {
         return Err("CoreArtifactTooLarge".into());
     }
