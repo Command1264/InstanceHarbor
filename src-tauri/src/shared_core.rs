@@ -183,6 +183,12 @@ fn same_drive(left: &Path, right: &Path) -> bool {
     drive(left).is_some_and(|letter| drive(right) == Some(letter))
 }
 
+/// Whether two paths are names of the same file.
+pub(super) fn same_file(left: &Path, right: &Path) -> bool {
+    let identity = |path: &Path| inspect(path).ok().and_then(|file| information(&file).ok()).map(|(volume, index, _)| (volume, index));
+    identity(left).is_some_and(|left| identity(right) == Some(left))
+}
+
 /// How many names besides its own the stored file of an instance core has, when
 /// `jar` is a name of the stored file of `sha256`. The detail panel shows it.
 pub(super) fn users(root: &Path, jar: &Path, sha256: &str) -> Option<u32> {

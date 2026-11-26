@@ -1145,7 +1145,7 @@ fn checked_import_inner(
     if !core.is_file() {
         return Err("MissingCoreArtifact".into());
     }
-    core_artifact::assert_unused(&core)?;
+    core_artifact::assert_unused(root, &core)?;
     let velocity = if proxy {
         Some(core_artifact::identify(&core)?
             .profile

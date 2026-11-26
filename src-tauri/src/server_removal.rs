@@ -182,7 +182,7 @@ fn delete_server(root: &Path, name: &str, confirmation: &str) -> Result<Value> {
     check_no_links(&folder)?;
     let core = core_artifact::jar(&folder, &item);
     if core.is_file() {
-        core_artifact::assert_unused(&core)?;
+        core_artifact::assert_unused(root, &core)?;
     }
     recycle(&folder)?;
     // The folder is in the Recycle Bin now. Unregister it the same way as

@@ -1445,6 +1445,50 @@ mod tests {
         assert!(shared_core::stored(&fixture.0, &second.sha256).unwrap().is_none());
     }
 
+    // #62: the Restart Manager reports a process that opened another name of
+    // the same file. A peer's live run on the shared core does not make this
+    // folder's core "in use"; for the peer's own folder it still does.
+    #[test]
+    fn a_peer_running_on_the_shared_core_does_not_block_this_folder() {
+        let fixture = Fixture::new();
+        let target = fixture.workspace();
+        let source = fixture.0.join("first.jar");
+        fs::write(&source, b"first").unwrap();
+        let sha = profile(b"first", "112").sha256;
+        fs::remove_file(target.jar()).unwrap();
+        shared_core::place(&fixture.0, &source, &sha, &target.jar()).unwrap();
+        let peer_directory = fixture.0.join("instances").join("peer");
+        fs::create_dir(&peer_directory).unwrap();
+        let peer_jar = peer_directory.join("server.jar");
+        shared_core::place(&fixture.0, &source, &sha, &peer_jar).unwrap();
+        let mut peer = target.config.clone();
+        peer.name = "peer".into();
+        save(&record_path(&fixture.0, "peer"), &peer).unwrap();
+        let script = format!("$f=[IO.File]::Open('{}','Open','Read','ReadWrite'); Start-Sleep 30", peer_jar.display());
+        let mut child = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).spawn().unwrap();
+        let mut seen = false;
+        for _ in 0..100 {
+            if core_artifact::holders(&target.jar()).unwrap().iter().any(|(pid, _)| *pid == child.id()) {
+                seen = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let unknown = core_artifact::assert_unused(&fixture.0, &target.jar());
+        let runs = fixture.0.join("runs").join("peer");
+        fs::create_dir_all(&runs).unwrap();
+        let run = Run { id: "peer-run".into(), host: identity(std::process::id()).unwrap().unwrap(), java: identity(child.id()).unwrap().unwrap() };
+        save(&runs.join("identity.json"), &run).unwrap();
+        let shared = core_artifact::assert_unused(&fixture.0, &target.jar());
+        let own = core_artifact::assert_unused(&fixture.0, &peer_jar);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(seen, "another name of the file is reported");
+        assert_eq!(unknown.unwrap_err(), "CoreInUse", "an unknown holder still counts");
+        shared.unwrap();
+        assert_eq!(own.unwrap_err(), "CoreInUse", "the peer's own folder is in use");
+    }
+
     // #62 with #112: an official name follows the update and stays a name of
     // the stored core; the old name of the shared file is simply removed.
     #[test]
