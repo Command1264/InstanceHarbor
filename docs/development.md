@@ -517,6 +517,15 @@ Velocity 沒有這行輸出：在後台做過 Host 無法讀回的編輯後按 E
 核心維護支援同核心與同版本線的單台替換、備份還原及中斷核對。
 Velocity 可在同一個 Velocity 版本內換 build（例如 4.2.1-SNAPSHOT build 38 → 43），Port 以 `velocity.toml` 的 `bind` 核對。
 `-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。核心檔名沿用登記的名稱，不改寫。
+已核對的 Velocity 也可以換到較新的 Velocity 版本（例如 4.2.1-SNAPSHOT → 4.3.1），入口是核心維護的「更換 Velocity 版本」，分兩步確認：
+
+1. 選擇目標版本（`core-velocity-versions`）。版本清單取自 fill API 的 `projects/velocity`，依 API 回傳順序判斷新舊，只列出比目前新的版本；SNAPSHOT 照常列出並標示。
+2. 摘要頁（`core-velocity-target`）列出「目前版本 → 目標版本」、目標版本最新可用的 build 與發布頻道，以及風險：插件可能需要更新、不備份 `plugins` 與插件資料、會備份 `velocity.toml` 與 `forwarding.secret`。
+   勾選「我了解跨版本更新的風險」後才能確認，確認後執行 `core-install-version`。
+
+跨版本更新沿用同版本更新的停止條件與交易，另外把 `velocity.toml` 與 `forwarding.secret` 備份在該請求的 `proxy-files`。
+還原跨版本的備份時，先保留目前的這兩個檔案，再放回備份當時的檔案並替換核心；替換沒有完成時，核對會放回目前的檔案。
+批次更新只處理同版本的候選，不會包含跨版本更新。
 Purpur 以官方 API（`api.purpurmc.org/v2/purpur/<版本>?detailed=true`）檢查同一個 Minecraft 版本線的新 build，只接受 `result` 為 `SUCCESS` 的 build。
 API 只提供 MD5，所以目前 JAR 的 build 以 MD5 比對官方清單找出；找不到相符的 build 時不提供更新（`CoreSourceUnverifiedLocalHash`）。
 候選以官方 MD5 指定，下載走 HTTPS，內容須與該 MD5 相符；之後計算 SHA-256 登記為已核對，往後的核對都用 SHA-256。

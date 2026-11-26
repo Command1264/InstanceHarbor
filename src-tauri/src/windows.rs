@@ -2742,6 +2742,17 @@ fn dispatch_with_progress(
         let [name, request, current, candidate] = args else { return Err("InvalidCoreArguments".into()); };
         return core_source::install_latest(&root, name, request, current, candidate, core_progress);
     }
+    if verb == "core-velocity-versions" {
+        let [name] = args else { return Err("InvalidCoreArguments".into()); };
+        return core_source::velocity_versions(&root, name);
+    }
+    if verb == "core-velocity-target" {
+        let [name, version] = args else { return Err("InvalidCoreArguments".into()); };
+        return core_source::velocity_target(&root, name, version);
+    }
+    if verb == "core-install-version" {
+        return core_source::install_version(&root, args, core_progress);
+    }
     if verb == "core-catalog-versions" {
         let [family] = args else { return Err("InvalidCoreArguments".into()); };
         return core_source::creation_versions(family);

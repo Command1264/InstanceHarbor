@@ -45,8 +45,54 @@ pub(super) fn no_progress(_: CoreUpdatePhase) {}
     deny_unknown_fields
 )]
 enum Action {
-    Install { candidate_sha256: String },
+    Install {
+        candidate_sha256: String,
+        /// A Velocity update to another Velocity version, confirmed twice (#41).
+        #[serde(default, skip_serializing_if = "is_false")]
+        cross_version: bool,
+    },
     Restore { backup_id: String },
+}
+
+/// Velocity files backed up and restored with a cross-version change (#41).
+/// The `plugins` folder is not: the confirmation says so.
+const PROXY_FILES: [&str; 2] = ["velocity.toml", "forwarding.secret"];
+const PROXY_BACKUP: &str = "proxy-files";
+
+/// Whether a change moves a Velocity proxy to another Velocity version.
+fn crosses_versions(before: &CoreProfile, after: &CoreProfile) -> bool {
+    before.family == "VELOCITY" && after.family == "VELOCITY" && before.minecraft != after.minecraft
+}
+
+/// Copies the proxy files that exist in `from` into the new folder `to`.
+fn backup_proxy_files(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir(to).map_err(|error| file_error("create-proxy-backup", to, error))?;
+    for name in PROXY_FILES {
+        let source = from.join(name);
+        if checked_entry(&source, false)? {
+            let copy = to.join(name);
+            fs::copy(&source, &copy).map_err(|error| file_error("backup-proxy-file", &copy, error))?;
+            OpenOptions::new().write(true).open(&copy).and_then(|file| file.sync_all()).map_err(fail)?;
+        }
+    }
+    Ok(())
+}
+
+/// Puts the proxy files of a backup folder back into the proxy folder.
+fn restore_proxy_files(backup: &Path, directory: &Path) -> Result<()> {
+    existing(backup, true)?;
+    for name in PROXY_FILES {
+        let saved = backup.join(name);
+        if !checked_entry(&saved, false)? {
+            continue;
+        }
+        let destination = directory.join(name);
+        let temporary = directory.join(format!("{name}.{}.{}.tmp", std::process::id(), clock()));
+        fs::copy(&saved, &temporary).map_err(|error| file_error("restore-proxy-file", &temporary, error))?;
+        OpenOptions::new().write(true).open(&temporary).and_then(|file| file.sync_all()).map_err(fail)?;
+        move_durable(&temporary, &destination, checked_entry(&destination, false)?)?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -294,21 +340,29 @@ pub(super) fn purpur_identity(config: &Instance, jar: &Path, sha256: &str) -> Op
 }
 
 fn verify_pair(before: &CoreProfile, after: &CoreProfile, action: &Action) -> Result<()> {
+    // Another version is allowed only for Velocity: an install confirmed as
+    // cross-version, or the restore of a recorded backup (#41).
+    let cross = crosses_versions(before, after);
+    let cross_allowed = match action {
+        Action::Install { cross_version, .. } => *cross_version,
+        Action::Restore { .. } => true,
+    };
     if !valid_hash(&before.sha256)
         || !valid_hash(&after.sha256)
         || before.family != after.family
-        || before.minecraft != after.minecraft
+        || (before.minecraft != after.minecraft && !(cross && cross_allowed))
         || before.sha256 == after.sha256
-        || before.build == after.build
+        || (!cross && before.build == after.build)
+        || matches!(action, Action::Install { cross_version: true, .. } if !cross)
     {
         return Err("CoreCandidateIncompatible".into());
     }
-    if let Action::Install { candidate_sha256 } = action {
+    if let Action::Install { candidate_sha256, .. } = action {
         if candidate_sha256 != &after.sha256 {
             return Err("CoreArtifactHashMismatch".into());
         }
-        if let (Ok(current), Ok(candidate)) =
-            (before.build.parse::<u64>(), after.build.parse::<u64>())
+        if let (false, Ok(current), Ok(candidate)) =
+            (cross, before.build.parse::<u64>(), after.build.parse::<u64>())
         {
             if candidate <= current {
                 return Err("CoreCandidateIsNotNewer".into());
@@ -527,7 +581,8 @@ fn state(root: &Path, name: &str) -> Result<Value> {
                     && installed.as_ref().is_some_and(|profile| {
                         profile.sha256 != result.intent.before.sha256
                             && profile.family == result.intent.before.family
-                            && profile.minecraft == result.intent.before.minecraft
+                            && (profile.minecraft == result.intent.before.minecraft
+                                || crosses_versions(profile, &result.intent.before))
                     })
                 {
                     backups.push((
@@ -541,7 +596,9 @@ fn state(root: &Path, name: &str) -> Result<Value> {
     }
     backups.sort_by(|left, right| (right.0, &right.1).cmp(&(left.0, &left.1)));
     let backups: Vec<Value> = backups.into_iter().map(|(created_at, id, profile)| {
-        json!({"createdAt": created_at, "id": id, "profile": profile})
+        // A restore to another Velocity version also restores its proxy files.
+        let cross = installed.as_ref().is_some_and(|current| crosses_versions(current, &profile));
+        json!({"createdAt": created_at, "id": id, "profile": profile, "crossVersion": cross})
     }).collect();
     let pending = pending.map(|intent| {
         json!({"request":intent.request, "kind":kind(&intent.action), "action":intent.action,
@@ -638,6 +695,18 @@ fn finish(root: &Path, target: &Target, intent: Intent, replayed: bool) -> Resul
         write_durable(&result_path, &result, false)?;
     }
     if result.outcome == Outcome::NotApplied {
+        // A restore may have put back proxy files before the JAR stayed: undo it.
+        let proxy = folder.join(PROXY_BACKUP);
+        if checked_entry(&proxy, true)? {
+            restore_proxy_files(&proxy, &target.directory)?;
+            for name in PROXY_FILES {
+                let saved = proxy.join(name);
+                if checked_entry(&saved, false)? {
+                    fs::remove_file(&saved).map_err(|error| file_error("discard-unapplied-core", &saved, error))?;
+                }
+            }
+            fs::remove_dir(&proxy).map_err(|error| file_error("discard-unapplied-core", &proxy, error))?;
+        }
         for name in ["next.jar", "before.jar"] {
             let unused = folder.join(name);
             if checked_entry(&unused, false)? {
@@ -763,6 +832,18 @@ fn run_action(
             &folder.join("before.jar"),
             &intent.before.sha256,
         )?;
+        if crosses_versions(&intent.before, &intent.after) {
+            // The current proxy files are kept with this request; a restore
+            // to the other version then puts back the files of its backup.
+            backup_proxy_files(&target.directory, &folder.join(PROXY_BACKUP))?;
+            target.stopped(root)?;
+            if let Action::Restore { backup_id } = &intent.action {
+                let saved = store.join(backup_id).join(PROXY_BACKUP);
+                if checked_entry(&saved, true)? {
+                    restore_proxy_files(&saved, &target.directory)?;
+                }
+            }
+        }
         target.stopped(root)?;
         if registration_revision(root, &target.config.name)? != intent.registration_revision {
             return Err("CoreMaintenanceRegistrationChanged".into());
@@ -809,12 +890,31 @@ pub(super) fn install_verified_guarded(
         expected_current_sha256,
         Action::Install {
             candidate_sha256: profile.sha256.clone(),
+            cross_version: false,
         },
         Some((candidate_path, profile)),
         None,
         progress,
         begin_commit,
     )
+}
+
+/// Moves a stopped Velocity proxy to `profile`, a build of another Velocity
+/// version that the user confirmed twice (#41). velocity.toml and
+/// forwarding.secret are backed up with the request and restored with it.
+pub(super) fn install_cross_version(
+    root: &Path,
+    name: &str,
+    request: &str,
+    expected_current_sha256: &str,
+    candidate_path: &Path,
+    profile: &CoreProfile,
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Result<Value> {
+    let target = Target::resolve(root, name)?;
+    let action = Action::Install { candidate_sha256: profile.sha256.clone(), cross_version: true };
+    run_action(root, target, request, expected_current_sha256, action,
+        Some((candidate_path, profile)), None, progress, || Ok(()))
 }
 
 /// Installs `after` over an unverified Purpur whose build is `before` (#41).
@@ -831,7 +931,7 @@ pub(super) fn install_identified(
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
     let target = Target::resolve(root, name)?;
-    let action = Action::Install { candidate_sha256: after.sha256.clone() };
+    let action = Action::Install { candidate_sha256: after.sha256.clone(), cross_version: false };
     run_action(root, target, request, expected_current_sha256, action,
         Some((candidate_path, after)), Some(before), progress, begin_commit)
 }
@@ -1132,6 +1232,55 @@ mod tests {
         assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "CoreProfileUnverified");
     }
 
+    // #41: a confirmed cross-version change keeps velocity.toml and
+    // forwarding.secret with the request; its restore puts them back.
+    #[test]
+    fn velocity_cross_version_change_backs_up_and_restores_proxy_files() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let directory = target.directory.clone();
+        fs::remove_file(directory.join("server.properties")).unwrap();
+        let velocity = |bytes: &[u8], version: &str, build: &str| CoreProfile {
+            family: "VELOCITY".into(), minecraft: version.into(), ..profile(bytes, build) };
+        target.config.core_profile = Some(velocity(b"first", "4.2.1-SNAPSHOT", "43"));
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        let toml = format!("bind = \"127.0.0.1:{}\"\nconfig-version = \"2.7\"\n", target.config.port);
+        fs::write(directory.join("velocity.toml"), &toml).unwrap();
+        fs::write(directory.join("forwarding.secret"), b"secret-a").unwrap();
+        let (before, after) = (velocity(b"first", "4.2.1-SNAPSHOT", "43"), velocity(b"second", "4.3.1", "45"));
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        // A plain install never crosses versions; a cross-version one must.
+        assert_eq!(install_verified(&fixture.0, "server", "plain", &before.sha256, &candidate, &after).unwrap_err(),
+            "CoreCandidateIncompatible");
+        let same = velocity(b"second", "4.2.1-SNAPSHOT", "45");
+        assert_eq!(install_cross_version(&fixture.0, "server", "same", &before.sha256, &candidate, &same, &no_progress).unwrap_err(),
+            "CoreCandidateIncompatible");
+        install_cross_version(&fixture.0, "server", "cross", &before.sha256, &candidate, &after, &no_progress).unwrap();
+        let saved = target.store().join("cross").join(PROXY_BACKUP);
+        assert_eq!(fs::read_to_string(saved.join("velocity.toml")).unwrap(), toml);
+        assert_eq!(fs::read(saved.join("forwarding.secret")).unwrap(), b"secret-a");
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["minecraft"], "4.3.1");
+        // The new version rewrites its files; the restore puts back the old ones.
+        let migrated = format!("bind = \"127.0.0.1:{}\"\nconfig-version = \"2.8\"\n", target.config.port);
+        fs::write(directory.join("velocity.toml"), &migrated).unwrap();
+        fs::write(directory.join("forwarding.secret"), b"secret-b").unwrap();
+        let backups = state(&fixture.0, "server").unwrap()["backups"].clone();
+        assert_eq!((&backups[0]["id"], &backups[0]["crossVersion"]), (&json!("cross"), &json!(true)));
+        let args = ["server".into(), "undo".into(), after.sha256.clone(), "cross".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(target.jar()).unwrap(), b"first");
+        assert_eq!(fs::read_to_string(directory.join("velocity.toml")).unwrap(), toml);
+        assert_eq!(fs::read(directory.join("forwarding.secret")).unwrap(), b"secret-a");
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["minecraft"], "4.2.1-SNAPSHOT");
+        // The restore kept the newer files, so undoing it brings them back.
+        assert_eq!(fs::read(target.store().join("undo").join(PROXY_BACKUP).join("forwarding.secret")).unwrap(), b"secret-b");
+        // Paper never crosses Minecraft versions, even through this entry.
+        let paper = (profile(b"a", "1"), CoreProfile { minecraft: "26.3".into(), ..profile(b"b", "2") });
+        let action = Action::Install { candidate_sha256: paper.1.sha256.clone(), cross_version: true };
+        assert_eq!(verify_pair(&paper.0, &paper.1, &action).unwrap_err(), "CoreCandidateIncompatible");
+    }
+
     // #60: the dialog names each step after the download.
     #[test]
     fn install_and_restore_report_verify_backup_and_replace_in_order() {
@@ -1173,6 +1322,7 @@ mod tests {
                 request: "interrupted".into(),
                 action: Action::Install {
                     candidate_sha256: after.sha256.clone(),
+                    cross_version: false,
                 },
                 name: "server".into(),
                 directory: target.directory.clone(),
@@ -1216,6 +1366,7 @@ mod tests {
         let mut after = profile(b"second", "134");
         let action = Action::Install {
             candidate_sha256: after.sha256.clone(),
+            cross_version: false,
         };
         assert!(verify_pair(&before, &after, &action).is_ok());
         after.minecraft = "26.3".into();
