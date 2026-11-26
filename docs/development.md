@@ -122,6 +122,37 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 - 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。
 - `OverlayScroll` 的捲動區只在內容需要捲動時才能用 Tab 選到，讓鍵盤可以捲動；不需要捲動時，Tab 直接跳到裡面的控制項，不會停在整個容器上。
 
+## 用 DevTools 檢查 GUI 畫面
+
+GUI 是 WebView2 裡的網頁。開發版 GUI 啟動時若帶有 WebView2 的除錯參數，就能用 Chrome DevTools Protocol（CDP）連進去，
+讀取 DOM、無障礙樹與 CSS，截圖，或在頁面執行檢查程式。不需要改程式碼，也不需要重新建置。
+
+1. 建置開發版（`./build-product.ps1 -Development`），並準備隔離的 Agent 工作區。
+2. 以環境變數啟動 GUI，除錯 Port 只綁定本機：
+
+   ```powershell
+   $bin = 'src-tauri/target/x86_64-pc-windows-msvc/dev-channel'
+   $workspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-devtools'
+   & "$bin/ihctl.exe" $workspace init
+   $start = [Diagnostics.ProcessStartInfo]::new((Resolve-Path "$bin/InstanceHarborDev.exe").Path)
+   $start.UseShellExecute = $false
+   $start.Environment['IH_WORKSPACE'] = $workspace
+   $start.Environment['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = '--remote-debugging-address=127.0.0.1 --remote-debugging-port=9222'
+   [Diagnostics.Process]::Start($start)
+   ```
+
+3. 確認 `http://127.0.0.1:9222/json/version` 有回應，頁面是 `http://tauri.localhost/`。
+4. 用任何 CDP 用戶端連線。Agent 可用 [chrome-devtools-mcp](https://github.com/ChromeDevTools/chrome-devtools-mcp)，
+   以 `--browser-url=http://127.0.0.1:9222` 連到既有的瀏覽器，不另外啟動 Chrome。常用工具：`take_snapshot`（無障礙樹）、
+   `take_screenshot`、`evaluate_script`（例如找出超出容器的元素）、`get_css_styles`、`emulate`（切換深淺色）。
+5. 檢查完成後執行 `ihctl <工作區> app-exit`，結束 GUI 與該工作區的 Manager，除錯 Port 隨之關閉。
+
+注意事項：
+
+- 只在開發版與隔離工作區使用。除錯 Port 能控制整個頁面，包括呼叫管理指令；不要綁定 `127.0.0.1` 以外的位址。
+- 同一時間只有一個 GUI 能使用 9222。同時檢查多個工作區時，改用不同 Port，並讓用戶端連到對應的位址。
+- `tests/measure-gui-cold-start.ps1 -BrowserArguments` 與 `tests/verify-native-file-access.mjs` 也用同一個環境變數傳入 WebView2 參數。
+
 ## Windows 檔案存取與部分清單
 
 - `ihctl WORKSPACE list` 保留 JSON 陣列，個別登記無法讀取時會把原因寫到標準錯誤。
