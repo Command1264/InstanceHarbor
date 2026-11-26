@@ -39,14 +39,14 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 滑鼠停在圖示上會顯示執行中的伺服器台數，右鍵選單第一行也會顯示（每 5 秒更新，算法與清單的「可停止」相同）。
   選單文字依「語言與外觀」的語言設定。
 - 左鍵點圖示，或右鍵選「開啟 InstanceHarbor」，會以這個工作區開啟 GUI；GUI 已在執行時則叫回它的視窗。
-- 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗。伺服器與 Host 是獨立程序，會繼續執行。
+- 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗與伺服器後台視窗。伺服器與 Host 是獨立程序，會繼續執行。
   還有批次工作或核心更新在進行時，Manager 不結束，改為跳出說明，請等工作完成後再結束；這與 `manager-exit` 回報
   `ManagerHasActiveWork` 的條件相同。
   只要有伺服器不是「已停止」（包含啟動中、工作階段未定，或狀態讀不到），會先跳出確認（預設為「否」）。
   其中開啟自動重啟的伺服器會另外說明：自動重啟由 Manager 執行，
   結束後這些伺服器當機或意外結束不會自動重啟，要等 Manager 下次啟動才恢復。按「是」後會再核對一次批次工作。
   CLI 的 `manager-exit` 不詢問，只套用批次工作的條件。
-  CLI 的 `app-exit` 與「結束」同一套流程（結束 Manager 並關閉已登記的 GUI 視窗），同樣不詢問、只套用批次工作的條件；Setup 更新時使用它。
+  CLI 的 `app-exit` 與「結束」同一套流程（結束 Manager，關閉已登記的 GUI 視窗與伺服器後台視窗），同樣不詢問、只套用批次工作的條件；Setup 更新時使用它。
 - 「結束」只關閉仍是原登記程序的 GUI：`gui-attach` 記下 PID、Windows 程序建立時間與 GUI 執行檔路徑，
   送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
 - 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
@@ -54,7 +54,14 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 「結束」與 `app-exit` 只對 GUI 的應用程式視窗送 `WM_CLOSE`，略過工具視窗（`WS_EX_TOOLWINDOW`）。
   GUI 事件迴圈有一個可見的工具視窗（Tao 的「Thread Event Target」）負責接收結束請求；1.1.0 及更早的版本中它也會收到 `WM_CLOSE` 而被銷毀，
   GUI 收不到結束請求，每次都要等下面的看門狗 10 秒後才結束（#92）。
-- 伺服器後台視窗是另一個 GUI 程序（`native-console`），不向 Manager 登記，「結束」與 `app-exit` 不會關閉它；伺服器繼續執行，後台也留著。
+- 伺服器後台視窗是另一個 GUI 程序（`native-console`），不向 Manager 登記：按它的 X 只隱藏視窗，隱藏的視窗也收不到 `WM_CLOSE`。
+  所以「結束」與 `app-exit` 改經後台自己的 Named Pipe（只接受同一安裝的 `ihctl.exe`）送出結束要求，後台程序隨即結束（#114）。
+  Manager 先拒絕新的請求（`ManagerExiting`，包含會重新開啟後台的 `console-open`），再通知 GUI 與後台，通知完成後才結束。
+  後台不在時直接略過；後台沒有確認時只寫入診斷紀錄（`console-viewer-quit`），Manager 照常結束。
+  每台伺服器的後台由它的 Host 持有，後台程序結束不影響伺服器；之後開啟 GUI 再按「後台」會重新開啟分頁。
+  獨立主控台視窗（後台元件無法使用時的備用方式，見「伺服器後台」）屬於 Host，「結束」不會關閉它：關閉它會立即停止伺服器。
+- 伺服器停止（或被新的 run 取代）時，後台的分頁自動關閉；最後一個分頁關閉時後台程序結束。前端判斷在 `src/console-session.js`，
+  分頁與結束條件在 `console_viewer.rs` 的 `Tabs::close`，兩者都有回歸測試。
 - 結束看門狗：主視窗關閉後，GUI 暫停向 Manager 登記，避免重新啟動使用者剛結束的 Manager。
   10 秒後程序仍在、且已沒有任何可見視窗時，記錄 `gui-exit-watchdog` 並直接結束程序；仍有可見視窗代表關閉被取消，看門狗解除。
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
