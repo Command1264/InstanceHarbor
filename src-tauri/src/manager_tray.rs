@@ -327,6 +327,7 @@ fn pump_messages() {
 }
 
 /// Asks the windows of attached GUI processes to close, as their X button would.
+/// Only their application windows: see `closes_on_quit`.
 pub(super) fn close_gui_windows(pids: &[u32]) {
     if pids.is_empty() {
         return;
@@ -344,10 +345,24 @@ unsafe extern "system" fn collect_windows(window: RawWindow, context: isize) -> 
     let context = &mut *(context as *mut (&[u32], Vec<RawWindow>));
     let mut pid = 0;
     GetWindowThreadProcessId(window, &mut pid);
-    if context.0.contains(&pid) && IsWindowVisible(window) != 0 {
+    if context.0.contains(&pid)
+        && closes_on_quit(IsWindowVisible(window) != 0, GetWindowLongPtrW(window, GWL_EXSTYLE))
+    {
         context.1.push(window);
     }
     1
+}
+
+const GWL_EXSTYLE: i32 = -20;
+const WS_EX_TOOLWINDOW: isize = 0x80;
+
+/// A shown window that is not a tool window. The GUI's event loop keeps a helper window
+/// (Tao's "Thread Event Target") that is visible but a tool window; a WM_CLOSE destroys
+/// it, after which Tauri can no longer end the event loop and the process only ended
+/// through the exit watchdog, 10 s later (#92). Tool windows never show on the taskbar
+/// and have no X button, so they are not what Quit means to close.
+fn closes_on_quit(visible: bool, extended_style: isize) -> bool {
+    visible && extended_style & WS_EX_TOOLWINDOW == 0
 }
 
 type RawWindow = *mut std::ffi::c_void;
@@ -379,12 +394,22 @@ unsafe extern "system" {
     fn EnumWindows(callback: unsafe extern "system" fn(RawWindow, isize) -> i32, context: isize) -> i32;
     fn GetWindowThreadProcessId(window: RawWindow, pid: *mut u32) -> u32;
     fn IsWindowVisible(window: RawWindow) -> i32;
+    fn GetWindowLongPtrW(window: RawWindow, index: i32) -> isize;
     fn PostMessageW(window: RawWindow, message: u32, wparam: usize, lparam: isize) -> i32;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_closes_shown_application_windows_but_not_tool_windows() {
+        // WS_EX_APPWINDOW | WS_EX_WINDOWEDGE: a normal top-level window such as the GUI's.
+        assert!(closes_on_quit(true, 0x40000 | 0x100));
+        assert!(!closes_on_quit(false, 0));
+        // Tao's event target: WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW.
+        assert!(!closes_on_quit(true, 0x0800_0000 | 0x20 | 0x80000 | 0x80));
+    }
 
     #[test]
     fn quit_label_is_short_and_refusal_explains_servers_keep_running() {
