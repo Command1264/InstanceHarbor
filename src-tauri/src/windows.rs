@@ -16,6 +16,8 @@ mod compatibility_probe;
 mod prepare;
 #[path = "creation.rs"]
 mod creation;
+#[path = "creation_defaults.rs"]
+mod creation_defaults;
 pub use creation::CreationPhase;
 #[path = "prepare_diagnostics.rs"]
 mod prepare_diagnostics;
@@ -2651,6 +2653,9 @@ pub fn dispatch_with_creation_progress(
         return Err("UnsupportedWorkspace".into());
     }
     if let Some(result) = global_java::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = creation_defaults::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = test_admins::dispatch(&root, verb, args) {

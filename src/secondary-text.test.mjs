@@ -14,6 +14,8 @@ const ALLOWED_ALWAYS_VISIBLE = [
   "SettingsPage.vue: {{ t('settingsPage.worldApplyNotice') }}",
   "SettingsPage.vue: {{ t('settingsPage.yamlChangedFiles') }}",
   "SettingsPage.vue: {{ t('settingsPage.scanHelp') }}",
+  // Saving a new default must not suggest that existing servers move.
+  "SettingsPage.vue: {{ t('settingsPage.creationParentHelp') }}",
   "App.vue: {{ selectedLog?.path ?? logs?.path ?? t('app.logs.noPath') }}",
   // Starting in a console window needs this consequence stated before the user decides.
   "App.vue: {{ t('console.confirm.warning') }}",
