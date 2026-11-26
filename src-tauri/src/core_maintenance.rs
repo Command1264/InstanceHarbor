@@ -19,6 +19,24 @@ unsafe extern "system" {
     fn GetDriveTypeW(root: *const u16) -> u32;
 }
 
+/// The step a core update or restore is in, reported to the GUI (#60).
+/// `Downloading` carries the official size when the source states one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum CoreUpdatePhase {
+    Checking,
+    Downloading { received: u64, total: Option<u64> },
+    /// The candidate with this SHA-256 was already downloaded, for example by
+    /// an earlier item of the same batch or by the prefetch setting.
+    Reusing,
+    Verifying,
+    BackingUp,
+    Replacing,
+}
+
+/// A progress sink that ignores every update.
+pub(super) fn no_progress(_: CoreUpdatePhase) {}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     rename_all = "camelCase",
@@ -610,6 +628,7 @@ fn run_action(
     expected_current_sha256: &str,
     action: Action,
     candidate: Option<(&Path, &CoreProfile)>,
+    progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
     if !token(request) || !valid_hash(expected_current_sha256) {
@@ -653,6 +672,7 @@ fn run_action(
         _ => return Err("InvalidCoreMaintenanceRequest".into()),
     };
     verify_pair(&before, &after, &action)?;
+    progress(CoreUpdatePhase::Verifying);
     require_hash(&source, &after.sha256)?;
     begin_commit()?;
     if !checked_entry(&store, true)? {
@@ -690,6 +710,7 @@ fn run_action(
     let prepare_and_replace = || -> Result<()> {
         let stage = folder.join("next.jar");
         copy_verified(&source, &stage, &intent.after.sha256)?;
+        progress(CoreUpdatePhase::BackingUp);
         copy_verified(
             &target.jar(),
             &folder.join("before.jar"),
@@ -701,6 +722,7 @@ fn run_action(
         }
         require_hash(&stage, &intent.after.sha256)?;
         require_hash(&target.jar(), &intent.before.sha256)?;
+        progress(CoreUpdatePhase::Replacing);
         move_durable(&stage, &target.jar(), true)
     };
     prepare_and_replace()
@@ -709,6 +731,7 @@ fn run_action(
         .map_err(|cause| format!("CoreMaintenancePending: reconcile request {request}: {cause}"))
 }
 
+#[cfg(test)]
 pub(super) fn install_verified(
     root: &Path,
     name: &str,
@@ -717,7 +740,7 @@ pub(super) fn install_verified(
     candidate_path: &Path,
     profile: &CoreProfile,
 ) -> Result<Value> {
-    install_verified_guarded(root, name, request, expected_current_sha256, candidate_path, profile, || Ok(()))
+    install_verified_guarded(root, name, request, expected_current_sha256, candidate_path, profile, &no_progress, || Ok(()))
 }
 
 pub(super) fn install_verified_guarded(
@@ -727,6 +750,7 @@ pub(super) fn install_verified_guarded(
     expected_current_sha256: &str,
     candidate_path: &Path,
     profile: &CoreProfile,
+    progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
     let target = Target::resolve(root, name)?;
@@ -739,6 +763,7 @@ pub(super) fn install_verified_guarded(
             candidate_sha256: profile.sha256.clone(),
         },
         Some((candidate_path, profile)),
+        progress,
         begin_commit,
     )
 }
@@ -750,9 +775,10 @@ fn install_pinned(
     current: &str,
     candidate: &str,
     expected: &str,
+    progress: &dyn Fn(CoreUpdatePhase),
 ) -> Result<Value> {
     let profile = pinned_core_profile(expected.to_owned()).ok_or("CoreCandidateUnverified")?;
-    install_verified(root, name, request, current, Path::new(candidate), &profile)
+    install_verified_guarded(root, name, request, current, Path::new(candidate), &profile, progress, || Ok(()))
 }
 
 fn reconcile(root: &Path, name: &str, request: &str) -> Result<Value> {
@@ -774,10 +800,19 @@ fn reconcile(root: &Path, name: &str, request: &str) -> Result<Value> {
 }
 
 pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Result<Value>> {
+    dispatch_with_progress(root, verb, args, &no_progress)
+}
+
+pub(super) fn dispatch_with_progress(
+    root: &Path,
+    verb: &str,
+    args: &[String],
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Option<Result<Value>> {
     Some(match (verb, args) {
         ("core-state", [name]) => state(root, name),
         ("core-install", [name, id, before, path, after]) => {
-            install_pinned(root, name, id, before, path, after)
+            install_pinned(root, name, id, before, path, after, progress)
         }
         ("core-restore", [name, id, before, backup]) => {
             Target::resolve(root, name).and_then(|target| {
@@ -790,6 +825,7 @@ pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Resul
                         backup_id: backup.clone(),
                     },
                     None,
+                    progress,
                     || Ok(()),
                 )
             })
@@ -900,6 +936,7 @@ mod tests {
                 backup_id: "update".into(),
             },
             None,
+            &no_progress,
             || Ok(()),
         )
         .unwrap();
@@ -918,6 +955,31 @@ mod tests {
             b"unmodified data"
         );
         assert!(assert_start_allowed(&target.directory).is_ok());
+    }
+
+    // #60: the dialog names each step after the download.
+    #[test]
+    fn install_and_restore_report_verify_backup_and_replace_in_order() {
+        let fixture = Fixture::new();
+        fixture.workspace();
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let (before, after) = (profile(b"first", "112"), profile(b"second", "134"));
+        let steps = std::cell::RefCell::new(Vec::new());
+        let record = |step| steps.borrow_mut().push(step);
+        install_verified_guarded(&fixture.0, "server", "update", &before.sha256, &candidate, &after, &record, || Ok(()))
+            .unwrap();
+        use CoreUpdatePhase::*;
+        assert_eq!(steps.take(), [Verifying, BackingUp, Replacing]);
+        let args = ["server".into(), "restore".into(), after.sha256.clone(), "update".into()];
+        dispatch_with_progress(&fixture.0, "core-restore", &args, &record).unwrap().unwrap();
+        assert_eq!(steps.take(), [Verifying, BackingUp, Replacing]);
+        // A rejected candidate stops at verification and never backs up.
+        fs::write(&candidate, b"tampered").unwrap();
+        let third = profile(b"third", "140");
+        assert!(install_verified_guarded(&fixture.0, "server", "bad", &before.sha256, &candidate, &third, &record, || Ok(()))
+            .is_err());
+        assert_eq!(steps.take(), [Verifying]);
     }
 
     #[test]

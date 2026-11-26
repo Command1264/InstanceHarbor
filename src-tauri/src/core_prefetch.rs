@@ -38,10 +38,17 @@ fn partial_active(entry: &fs::DirEntry) -> Result<bool> {
 
 pub(super) struct Store(PathBuf);
 
+/// Batch update candidates that the prefetch store does not hold (#60).
+const BATCH_STORE: &str = "core-batch-candidates";
+
 impl Store {
     fn open(root: &Path, create: bool) -> Result<Option<Self>> {
+        Self::open_named(root, "core-prefetch", create)
+    }
+
+    fn open_named(root: &Path, name: &str, create: bool) -> Result<Option<Self>> {
         let stage = child_directory(root, "staging")?;
-        let directory = stage.join("core-prefetch");
+        let directory = stage.join(name);
         if create {
             match fs::create_dir(&directory) {
                 Ok(()) => (),
@@ -51,7 +58,13 @@ impl Store {
         } else if !present(&directory)? {
             return Ok(None);
         }
-        Ok(Some(Self(child_directory(&stage, "core-prefetch")?)))
+        Ok(Some(Self(child_directory(&stage, name)?)))
+    }
+
+    /// The candidate store of batch updates. Each SHA-256 is downloaded once and
+    /// reused by later items, until `collect_batch` finds no active item needs it.
+    pub(super) fn batch(root: &Path) -> Result<Self> {
+        Self::open_named(root, BATCH_STORE, true)?.ok_or_else(|| "CoreDownloadCacheInvalid".into())
     }
 
     pub(super) fn enabled(root: &Path) -> Result<Option<Self>> {
@@ -112,6 +125,12 @@ impl Store {
             .values()
             .map(|item| item.profile.sha256.as_str())
             .collect();
+        self.collect_except(&needed)
+    }
+
+    /// Removes candidates and stale partial downloads outside `needed`. A file
+    /// whose lease is held elsewhere is left for a later pass.
+    fn collect_except(&self, needed: &BTreeSet<&str>) -> Result<()> {
         for entry in fs::read_dir(&self.0).map_err(fail)? {
             let entry = entry.map_err(fail)?;
             let name = entry.file_name();
@@ -141,6 +160,14 @@ impl Store {
             }
         }
         Ok(())
+    }
+}
+
+/// Removes batch candidates that no active batch item still needs.
+pub(super) fn collect_batch(root: &Path, needed: &BTreeSet<&str>) -> Result<()> {
+    match Store::open_named(root, BATCH_STORE, false)? {
+        Some(store) => store.collect_except(needed),
+        None => Ok(()),
     }
 }
 

@@ -599,8 +599,8 @@ fn result(name: &str, profile: &CoreProfile, metadata: &Metadata) -> Value {
                                     == 1 =>
                             {
                                 row["status"] = json!("UpdateAvailable");
-                                row["candidate"] =
-                                    json!({"build":newest.id.to_string(),"sha256":hash,"url":url});
+                                row["candidate"] = json!({"build":newest.id.to_string(),
+                                    "sha256":hash,"url":url,"size":newest.size});
                             }
                             _ => row["reason"] = json!("CoreSourceUnverifiedCandidate"),
                         }
@@ -730,12 +730,31 @@ pub(super) fn install_latest(
     request: &str,
     expected_current: &str,
     expected_candidate: &str,
+    progress: &dyn Fn(CoreUpdatePhase),
 ) -> Result<Value> {
     if !instance_name(name) || !token(request) {
         return Err("InvalidCoreMaintenanceRequest".into());
     }
     let registration = registration_revision(root, name)?;
-    install_latest_guarded(root, name, request, expected_current, expected_candidate, &registration, || Ok(()))
+    install_latest_guarded(
+        root, name, request, expected_current, expected_candidate, &registration,
+        CandidateCache::Private, progress, || Ok(()),
+    )
+}
+
+/// Where a downloaded update candidate is kept between installs (#60).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CandidateCache {
+    /// One install: a Paper candidate is shared only through the prefetch store.
+    Private,
+    /// A batch item: a candidate that the prefetch store does not hold is kept in
+    /// the batch candidate store, so a later item with the same SHA-256 reuses it.
+    Batch,
+}
+
+/// Reports bytes as `Downloading`. `total` is the official size, when known.
+fn report_download(progress: &dyn Fn(CoreUpdatePhase)) -> impl Fn(u64, Option<u64>) + '_ {
+    move |received, total| progress(CoreUpdatePhase::Downloading { received, total })
 }
 
 pub(super) fn install_latest_guarded(
@@ -745,6 +764,8 @@ pub(super) fn install_latest_guarded(
     expected_current: &str,
     expected_candidate: &str,
     registration: &str,
+    cache: CandidateCache,
+    progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
     if !instance_name(name) || !token(request) {
@@ -755,16 +776,18 @@ pub(super) fn install_latest_guarded(
     if let (Some(store), Some(lease)) = (&store, &lease) {
         if let Some(demand) = store.prepared(name, expected_current, registration, expected_candidate)? {
             if let Some(candidate) = lease.ready(expected_candidate)? {
+                progress(CoreUpdatePhase::Reusing);
                 let _writer = instance_writer_lock(root, name)?;
                 if registration_revision(root, name)? != registration {
                     return Err("RegistrationChanged".into());
                 }
                 return core_maintenance::install_verified_guarded(
-                    root, name, request, expected_current, candidate, &demand.profile, begin_commit,
+                    root, name, request, expected_current, candidate, &demand.profile, progress, begin_commit,
                 );
             }
         }
     }
+    progress(CoreUpdatePhase::Checking);
     let agent = configured_paper_user_agent()?;
     let response = check_with_agent(root, &[name.to_owned()], Ok(&agent))?;
     let row = response["rows"]
@@ -791,6 +814,7 @@ pub(super) fn install_latest_guarded(
     let build = candidate["build"]
         .as_str()
         .ok_or("CoreCandidateUnverified")?;
+    let size = artifact_size(candidate);
     let profile = CoreProfile { unverified: false, java: None,
         family: family.to_owned(),
         minecraft: minecraft.to_owned(),
@@ -798,16 +822,32 @@ pub(super) fn install_latest_guarded(
         sha256: hash.to_owned(),
     };
 
-    if let Some(lease) = lease.filter(|_| profile.family == "PAPER") {
-        let candidate = lease.ensure(&profile.sha256, |path|
-            download_verified(url, &agent, path, &profile.sha256)
-        )?;
+    // The prefetch store only prepares Paper. A batch keeps any other candidate
+    // in its own store, so each SHA-256 is downloaded once per batch.
+    let lease = match lease.filter(|_| profile.family == "PAPER") {
+        Some(lease) => Some(lease),
+        None if cache == CandidateCache::Batch => {
+            Some(core_prefetch::Store::batch(root)?.lease(&profile.sha256)?)
+        }
+        None => None,
+    };
+    if let Some(lease) = lease {
+        let report = report_download(progress);
+        let candidate = match lease.ready(&profile.sha256)? {
+            Some(candidate) => {
+                progress(CoreUpdatePhase::Reusing);
+                candidate
+            }
+            None => lease.ensure(&profile.sha256, |path|
+                download_verified_with(url, &agent, path, &profile.sha256, size, Some(&report))
+            )?,
+        };
         let _writer = instance_writer_lock(root, name)?;
         if registration_revision(root, name)? != registration {
             return Err("RegistrationChanged".into());
         }
         return core_maintenance::install_verified_guarded(
-            root, name, request, expected_current, candidate, &profile, begin_commit,
+            root, name, request, expected_current, candidate, &profile, progress, begin_commit,
         );
     }
 
@@ -816,18 +856,14 @@ pub(super) fn install_latest_guarded(
     fs::create_dir(&stage).map_err(fail)?;
     let output = stage.join("candidate.jar");
     let outcome = (|| {
-        download_verified(
-            url,
-            &agent,
-            &output,
-            &profile.sha256,
-        )?;
+        let report = report_download(progress);
+        download_verified_with(url, &agent, &output, &profile.sha256, size, Some(&report))?;
         let _writer = instance_writer_lock(root, name)?;
         if registration_revision(root, name)? != registration {
             return Err("RegistrationChanged".into());
         }
         core_maintenance::install_verified_guarded(
-            root, name, request, expected_current, &output, &profile, begin_commit,
+            root, name, request, expected_current, &output, &profile, progress, begin_commit,
         )
     })();
     if let Err(error) = fs::remove_file(&output) {
@@ -863,6 +899,19 @@ fn artifact_size(metadata: &Value) -> Option<u64> {
 
 fn download_verified(url: &str, agent: &str, output: &Path, expected: &str) -> Result<()> {
     complete_download(download_command(url, agent, output)?, output, expected, None)
+}
+
+/// Like `download_verified`, and reports the received bytes to `report`.
+fn download_verified_with(
+    url: &str,
+    agent: &str,
+    output: &Path,
+    expected: &str,
+    size: Option<u64>,
+    report: Option<&dyn Fn(u64, Option<u64>)>,
+) -> Result<()> {
+    let progress = report.map(|emit| (size, emit));
+    complete_download(download_command(url, agent, output)?, output, expected, progress)
 }
 
 fn download_command(url: &str, agent: &str, output: &Path) -> Result<Command> {
@@ -902,20 +951,24 @@ fn download_command(url: &str, agent: &str, output: &Path) -> Result<Command> {
     Ok(command)
 }
 
+/// Runs a download and, with `progress`, reports the bytes written so far.
+/// `total` is the size the official source states. Without one, only the
+/// received bytes are reported, never a guessed total.
 fn complete_download(
     mut command: Command,
     output: &Path,
     expected: &str,
-    progress: Option<(u64, &dyn Fn(u64, u64))>,
+    progress: Option<(Option<u64>, &dyn Fn(u64, Option<u64>))>,
 ) -> Result<()> {
     let mut child = command.spawn().map_err(fail)?;
+    // The last reported byte count, so each report is strictly larger.
+    let mut last = 0;
     if let Some((total, emit)) = progress {
         emit(0, total);
-        let mut last = 0;
         while child.try_wait().map_err(fail)?.is_none() {
             if let Ok(metadata) = fs::metadata(output) {
                 let length = metadata.len();
-                if length > last && length < total {
+                if length > last && total.is_none_or(|total| length < total) {
                     emit(length, total);
                     last = length;
                 }
@@ -931,10 +984,13 @@ fn complete_download(
         return Err("CoreArtifactDigestMismatch".into());
     }
     if let Some((total, emit)) = progress {
-        if fs::metadata(output).map_err(fail)?.len() != total {
+        let length = fs::metadata(output).map_err(fail)?.len();
+        if total.is_some_and(|total| length != total) {
             return Err("CoreArtifactSizeMismatch".into());
         }
-        emit(total, total);
+        if length > last || total.is_some() {
+            emit(length, total);
+        }
     }
     Ok(())
 }
@@ -1151,22 +1207,21 @@ mod tests {
             let metadata = if known { json!({ "size": chunk.len() * 3 }) } else { json!({}) };
             let received = std::cell::RefCell::new(Vec::new());
             let report = |bytes, limit| received.borrow_mut().push((bytes, limit));
-            let progress = artifact_size(&metadata).map(|total| (total, &report as &dyn Fn(u64, u64)));
+            // #60: without an official size, bytes are still reported, with no total.
+            let progress = Some((artifact_size(&metadata), &report as &dyn Fn(u64, Option<u64>)));
             let result = complete_download(command, &output, &expected, progress);
             if output.exists() {
                 fs::remove_file(&output).unwrap();
             }
             result.unwrap();
             let totals = received.into_inner();
-            if known {
-                let total = (chunk.len() * 3) as u64;
-                assert_eq!(totals.first(), Some(&(0, total)));
-                assert_eq!(totals.last(), Some(&(total, total)));
-                assert!(totals.len() > 2, "{totals:?}");
-                assert!(totals.windows(2).all(|pair| pair[0].0 < pair[1].0));
-            } else {
-                assert!(totals.is_empty());
-            }
+            let length = (chunk.len() * 3) as u64;
+            let total = known.then_some(length);
+            assert_eq!(totals.first(), Some(&(0, total)));
+            assert_eq!(totals.last(), Some(&(length, total)));
+            assert!(totals.len() > 2, "{totals:?}");
+            assert!(totals.windows(2).all(|pair| pair[0].0 < pair[1].0));
+            assert!(totals.iter().all(|(_, limit)| *limit == total));
         }
         server.join().unwrap();
         fs::remove_dir(&fixture).unwrap();

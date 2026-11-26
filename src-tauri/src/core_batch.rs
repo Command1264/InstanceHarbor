@@ -1,12 +1,14 @@
 //! Persist the confirmed batch before contacting an update source.
 use super::*;
-use std::collections::HashSet;
+use std::{cell::Cell, collections::{BTreeSet, HashSet}};
 
 const DIRECTORY: &str = "core-batches";
 const MAX_TARGETS: usize = 64;
 const MAX_ACTIVE_BATCHES: usize = 6;
 const MAX_RECENT_BATCHES: usize = 6;
 const MAX_JOURNAL_BYTES: u64 = 128 * 1024;
+/// The fastest rate at which byte counts reach the progress file.
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(400);
 
 #[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -82,14 +84,28 @@ impl Batch {
     }
 
     fn view(&self) -> Value {
+        self.view_with(None)
+    }
+
+    /// The batch, with the reported step of the item in progress (#60).
+    fn view_with(&self, progress: Option<&ItemProgress>) -> Value {
         let items: Vec<_> = self
             .items
             .iter()
             .map(|item| {
-                json!({
+                let mut row = json!({
                     "name": item.target.name, "request": item.request, "phase": item.phase,
                     "reason": item.reason
-                })
+                });
+                if let Some(progress) = progress.filter(|progress| {
+                    progress.request == item.request && matches!(item.phase, Phase::Preparing | Phase::Sending)
+                }) {
+                    row["progress"] = json!(progress.progress);
+                    if progress.reused {
+                        row["reused"] = json!(true);
+                    }
+                }
+                row
             })
             .collect();
         let state = if self.active() {
@@ -101,6 +117,79 @@ impl Batch {
         };
         json!({"id":self.id,"action":"core-batch-install","createdAt":self.created_at,
             "instance":"core maintenance","state":state,"items":items})
+    }
+}
+
+/// The step of one batch item, kept apart from the durable journal. It is only
+/// a display hint: a missing or stale file never changes what the batch does.
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ItemProgress {
+    request: String,
+    progress: core_maintenance::CoreUpdatePhase,
+    /// Stays true after `Reusing`, so the list still says the item used the
+    /// downloaded core while it verifies and replaces it.
+    #[serde(default)]
+    reused: bool,
+}
+
+fn progress_path(directory: &Path, id: &str) -> PathBuf {
+    directory.join(format!("{id}.progress"))
+}
+
+fn read_progress(directory: &Path, id: &str) -> Option<ItemProgress> {
+    let path = progress_path(directory, id);
+    no_redirect(&path).ok()?;
+    let mut bytes = Vec::new();
+    File::open(&path).ok()?.take(4096).read_to_end(&mut bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn write_progress(root: &Path, id: &str, progress: &ItemProgress) -> Result<()> {
+    let directory = journal_directory(root)?.ok_or("CoreBatchNotFound")?;
+    let path = progress_path(&directory, id);
+    let temporary = directory.join(format!("{id}.progress.tmp"));
+    fs::write(&temporary, serde_json::to_vec(progress).map_err(fail)?).map_err(fail)?;
+    fs::rename(&temporary, &path).map_err(fail)
+}
+
+fn remove_progress(root: &Path, id: &str) {
+    let Ok(Some(directory)) = journal_directory(root) else { return };
+    let path = progress_path(&directory, id);
+    if let Err(error) = fs::remove_file(&path) {
+        if error.kind() != io::ErrorKind::NotFound {
+            eprintln!("Core batch progress cleanup failed: {error}");
+        }
+    }
+}
+
+type PhaseKind = std::mem::Discriminant<core_maintenance::CoreUpdatePhase>;
+
+/// Publishes the steps of `work` for `core-batch-list`. A new step is written
+/// at once; byte counts of the same step at most every `PROGRESS_INTERVAL`.
+pub(super) fn progress_reporter<'a>(
+    root: &'a Path,
+    work: &'a Work,
+) -> impl Fn(core_maintenance::CoreUpdatePhase) + 'a {
+    let last: Cell<Option<(Instant, PhaseKind)>> = Cell::new(None);
+    let reused = Cell::new(false);
+    move |progress| {
+        if progress == core_maintenance::CoreUpdatePhase::Reusing {
+            reused.set(true);
+        }
+        let kind = std::mem::discriminant(&progress);
+        let finished = matches!(progress,
+            core_maintenance::CoreUpdatePhase::Downloading { received, total: Some(total) } if received == total);
+        if last.get().is_some_and(|(written, previous)| {
+            previous == kind && !finished && written.elapsed() < PROGRESS_INTERVAL
+        }) {
+            return;
+        }
+        last.set(Some((Instant::now(), kind)));
+        let item = ItemProgress { request: work.item.request.clone(), progress, reused: reused.get() };
+        if let Err(error) = write_progress(root, &work.batch, &item) {
+            eprintln!("Core batch progress could not be written: {error}");
+        }
     }
 }
 
@@ -354,8 +443,21 @@ impl Journal {
             Outcome::Unconfirmed(error) => (Phase::Unconfirmed, Some(error)),
         };
         persist(root, &changed, true)?;
+        let done = !changed.active();
         *batch = changed;
+        if done {
+            remove_progress(root, &work.batch);
+        }
         Ok(())
+    }
+
+    /// Removes batch candidates that no active item still needs (#60).
+    pub(super) fn collect_candidates(&self, root: &Path) -> Result<()> {
+        let needed: BTreeSet<&str> = self.0.iter().flat_map(|batch| &batch.items)
+            .filter(|item| item.phase.active())
+            .map(|item| item.target.candidate_sha256.as_str())
+            .collect();
+        core_prefetch::collect_batch(root, &needed)
     }
 }
 
@@ -411,7 +513,12 @@ fn after_install_error(root: &Path, item: &Item, error: &str) -> Outcome {
     }
 }
 
-pub(super) fn perform(root: &Path, work: &Work, begin_commit: impl FnOnce() -> Result<()>) -> Outcome {
+pub(super) fn perform(
+    root: &Path,
+    work: &Work,
+    progress: &dyn Fn(core_maintenance::CoreUpdatePhase),
+    begin_commit: impl FnOnce() -> Result<()>,
+) -> Outcome {
     let item = &work.item;
     if work.recovering {
         // A previous Manager may already have replaced the artifact. Only the durable
@@ -425,12 +532,19 @@ pub(super) fn perform(root: &Path, work: &Work, begin_commit: impl FnOnce() -> R
         &item.target.current_sha256,
         &item.target.candidate_sha256,
         &item.registration,
+        core_source::CandidateCache::Batch,
+        progress,
         begin_commit,
     );
     match result {
         Err(error) => after_install_error(root, item, &error),
         receipt => classify_receipt(item, receipt),
     }
+}
+
+fn live_view(directory: &Path, batch: &Batch) -> Value {
+    let progress = batch.active().then(|| read_progress(directory, &batch.id)).flatten();
+    batch.view_with(progress.as_ref())
 }
 
 pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> {
@@ -442,17 +556,21 @@ pub(super) fn client(root: &Path, verb: &str, args: &[String]) -> Result<Value> 
             if !journal_path(&directory, id).exists() {
                 return Err("CoreBatchNotFound".into());
             }
-            read_batch(&directory, id).map(|batch| batch.view())
+            read_batch(&directory, id).map(|batch| live_view(&directory, &batch))
         }
         ("core-batch-list", []) => {
             let batches = load_batches(root)?;
+            let directory = journal_directory(root)?;
             let recent: Vec<_> = batches
                 .iter()
                 .rev()
                 .filter(|batch| batch.active())
                 .chain(batches.iter().rev().filter(|batch| !batch.active()))
                 .take(MAX_RECENT_BATCHES)
-                .map(Batch::view)
+                .map(|batch| match &directory {
+                    Some(directory) => live_view(directory, batch),
+                    None => batch.view(),
+                })
                 .collect();
             Ok(json!(recent))
         }
@@ -617,7 +735,7 @@ mod tests {
         let received = restarted.next(&fixture.0).unwrap().unwrap();
         assert!(received.recovering);
         assert_eq!(received.item.request, sent.item.request);
-        let outcome = perform(&fixture.0, &received, || panic!("recovery cannot enter commit"));
+        let outcome = perform(&fixture.0, &received, &core_maintenance::no_progress, || panic!("recovery cannot enter commit"));
         assert!(matches!(outcome, Outcome::Unconfirmed(_)));
         restarted.finish(&fixture.0, &received, outcome).unwrap();
         let next = restarted.next(&fixture.0).unwrap().unwrap();
@@ -647,7 +765,7 @@ mod tests {
         fs::write(&candidate, b"candidate artifact").unwrap();
         let error = core_maintenance::install_verified_guarded(
             &fixture.0, "first", &resumed.item.request, &resumed.item.target.current_sha256,
-            &candidate, &profile(b"candidate artifact", "101"), || {
+            &candidate, &profile(b"candidate artifact", "101"), &core_maintenance::no_progress, || {
                 let canceled = journal.cancel(&fixture.0, "batch-cancel").unwrap();
                 assert_eq!(canceled["items"][0]["phase"], "Cancelled");
                 assert_eq!(canceled["items"][1]["phase"], "Cancelled");
@@ -684,7 +802,7 @@ mod tests {
         fs::write(&candidate, b"candidate artifact").unwrap();
         let result = core_maintenance::install_verified_guarded(
             &fixture.0, "first", &work.item.request, &work.item.target.current_sha256,
-            &candidate, &profile(b"candidate artifact", "101"), || {
+            &candidate, &profile(b"candidate artifact", "101"), &core_maintenance::no_progress, || {
                 journal.begin_commit(&fixture.0, &work)?;
                 let canceled = journal.cancel(&fixture.0, "batch-boundary")?;
                 assert_eq!(canceled["items"][0]["phase"], "Sending");
@@ -697,7 +815,7 @@ mod tests {
         assert!(recovered.recovering);
         assert_eq!(recovered.item.request, work.item.request);
         assert!(matches!(classify_receipt(&work.item, result), Outcome::Completed));
-        let outcome = perform(&fixture.0, &recovered, || panic!("cannot commit again"));
+        let outcome = perform(&fixture.0, &recovered, &core_maintenance::no_progress, || panic!("cannot commit again"));
         journal.finish(&fixture.0, &recovered, outcome).unwrap();
         let result = journal.cancel(&fixture.0, "batch-boundary").unwrap();
         assert_eq!(result["items"][0]["phase"], "Completed");
@@ -741,12 +859,83 @@ mod tests {
         ));
         let mut restarted = Journal::open(&fixture.0).unwrap();
         let recovered = restarted.next(&fixture.0).unwrap().unwrap();
-        let outcome = perform(&fixture.0, &recovered, || panic!("recovery cannot enter commit"));
+        let outcome = perform(&fixture.0, &recovered, &core_maintenance::no_progress, || panic!("recovery cannot enter commit"));
         assert!(matches!(outcome, Outcome::Completed));
         restarted.finish(&fixture.0, &recovered, outcome).unwrap();
         let result = client(&fixture.0, "core-batch-status", &["batch-receipt".into()]).unwrap();
         assert_eq!(result["state"], "Completed");
         assert_eq!(result["items"][0]["request"], sent.item.request);
         assert!(restarted.next(&fixture.0).unwrap().is_none());
+    }
+
+    // #60: the list shows the step of the item in progress, only while it runs.
+    #[test]
+    fn list_shows_the_reported_step_of_the_running_item_only() {
+        use core_maintenance::CoreUpdatePhase::*;
+        let fixture = Fixture::new();
+        fixture.add("first");
+        fixture.add("second");
+        let mut journal = Journal::open(&fixture.0).unwrap();
+        journal.submit(&fixture.0, "batch-progress", &arguments(&[target("first"), target("second")])).unwrap();
+        let work = journal.next(&fixture.0).unwrap().unwrap();
+        let report = progress_reporter(&fixture.0, &work);
+        let list = || client(&fixture.0, "core-batch-list", &[]).unwrap()[0].clone();
+        report(Downloading { received: 0, total: Some(300) });
+        assert_eq!(list()["items"][0]["progress"], json!({"phase":"downloading","received":0,"total":300}));
+        // Byte counts of the same step are throttled; a finished download and a new step are not.
+        report(Downloading { received: 100, total: Some(300) });
+        assert_eq!(list()["items"][0]["progress"]["received"], 0);
+        report(Downloading { received: 300, total: Some(300) });
+        assert_eq!(list()["items"][0]["progress"]["received"], 300);
+        report(Verifying);
+        assert_eq!(list()["items"][0]["progress"], json!({"phase":"verifying"}));
+        assert!(list()["items"][1].get("progress").is_none());
+        let status = client(&fixture.0, "core-batch-status", &["batch-progress".into()]).unwrap();
+        assert_eq!(status["items"][0]["progress"], json!({"phase":"verifying"}));
+        // A download without an official size reports bytes and no total.
+        report(Downloading { received: 5, total: None });
+        assert_eq!(list()["items"][0]["progress"], json!({"phase":"downloading","received":5,"total":null}));
+        assert!(list()["items"][0].get("reused").is_none());
+        // After reusing a downloaded candidate, later steps still say so.
+        report(Reusing);
+        report(Replacing);
+        assert_eq!((&list()["items"][0]["progress"], &list()["items"][0]["reused"]), (&json!({"phase":"replacing"}), &json!(true)));
+        journal.finish(&fixture.0, &work, Outcome::Failed("CoreDownloadUnverified".into())).unwrap();
+        assert!(list()["items"][0].get("progress").is_none());
+        let next = journal.next(&fixture.0).unwrap().unwrap();
+        assert!(list()["items"][1].get("progress").is_none(), "an old step never moves to the next item");
+        journal.finish(&fixture.0, &next, Outcome::Failed("CoreDownloadUnverified".into())).unwrap();
+        assert!(!fixture.0.join("core-batches/batch-progress.progress").exists());
+    }
+
+    // #60: one candidate per SHA-256 serves every item of the batch, and is
+    // removed once no active item needs it.
+    #[test]
+    fn batch_candidates_stay_while_an_active_item_needs_them() {
+        let fixture = Fixture::new();
+        fixture.add("first");
+        fixture.add("second");
+        let mut journal = Journal::open(&fixture.0).unwrap();
+        journal.submit(&fixture.0, "batch-shared", &arguments(&[target("first"), target("second")])).unwrap();
+        let candidate = target("first").candidate_sha256;
+        let store = core_prefetch::Store::batch(&fixture.0).unwrap();
+        let downloads = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            let lease = store.lease(&candidate).unwrap();
+            lease.ensure(&candidate, |path| {
+                downloads.set(downloads.get() + 1);
+                fs::write(path, b"candidate artifact").map_err(fail)
+            }).unwrap();
+        }
+        assert_eq!(downloads.get(), 1, "the second item reuses the downloaded candidate");
+        let directory = fixture.0.join("staging/core-batch-candidates");
+        let unused = directory.join(format!("{}.jar", "c".repeat(64)));
+        fs::write(&unused, b"left by an earlier batch").unwrap();
+        journal.collect_candidates(&fixture.0).unwrap();
+        assert!(directory.join(format!("{candidate}.jar")).exists());
+        assert!(!unused.exists());
+        journal.cancel(&fixture.0, "batch-shared").unwrap();
+        journal.collect_candidates(&fixture.0).unwrap();
+        assert!(!directory.join(format!("{candidate}.jar")).exists());
     }
 }

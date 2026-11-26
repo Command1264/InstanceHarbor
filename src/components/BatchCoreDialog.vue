@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { isMessageId, useAppLanguage, type MessageId } from '../i18n'
 import { canCancelCoreBatchItem, manage, rawError, type CoreBatch, type CoreSource, type Instance, type InstanceMeta } from '../manager'
+import CoreUpdateProgressBar from './CoreUpdateProgressBar.vue'
 import OperationButton from './OperationButton.vue'
 import OverlayScroll from './OverlayScroll.vue'
 
@@ -51,6 +52,9 @@ const scopeTooLarge = computed(() => scope.value.length > maximumTargets)
 const total = computed(() => resultBatch.value?.items.length ?? scope.value.length)
 const processed = computed(() => resultBatch.value?.items.filter(item => item.phase !== 'Sending' && !canCancelCoreBatchItem(item)).length ?? 0)
 const canCancel = computed(() => resultBatch.value?.items.some(canCancelCoreBatchItem) ?? false)
+// The item the Manager works on now, with the step it reported (#60).
+const working = computed(() => phase.value === 'running'
+  ? resultBatch.value?.items.find(item => item.phase === 'Preparing' || item.phase === 'Sending') : undefined)
 const cancelling = computed(() => !!requestId.value && props.cancelling === requestId.value)
 const formattedCount = (value: number) => new Intl.NumberFormat(locale.value).format(value)
 
@@ -190,6 +194,8 @@ defineExpose({ open })
     <template v-if="resultBatch">
       <p role="status">{{ t('core.batch.progress', { finished: formattedCount(processed), total: formattedCount(total) }) }}</p>
       <progress v-if="phase === 'running'" :value="processed" :max="total" :aria-label="t('core.batch.heading')"></progress>
+      <CoreUpdateProgressBar v-if="working" :progress="working.progress" :reused="working.reused" :prefix="working.name"
+        :fallback="working.phase === 'Sending' ? 'core.batch.Sending' : 'core.batch.Preparing'" />
       <p v-if="canCancel" id="batch-core-cancel-help" class="hint">{{ t('core.batch.cancelHelp') }}</p>
       <dl class="import-preview" :aria-label="t('core.batch.results')">
         <template v-for="item in resultBatch.items" :key="item.name">

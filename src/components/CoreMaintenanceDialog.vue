@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { errorText, manage, type CoreSource } from '../manager'
+import { errorText, manage, manageCoreWithProgress, type CoreSource } from '../manager'
+import type { CoreUpdateProgress } from '../core-progress'
+import CoreUpdateProgressBar from './CoreUpdateProgressBar.vue'
 import { formatDisplayTime, useAppLanguage, type TimeFormat } from '../i18n'
 import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
 import { coreBuildText, coreVersionText } from '../core-display'
@@ -42,6 +44,9 @@ const error = ref('')
 const checking = ref(false)
 const busy = ref(false)
 const confirming = ref(false)
+// The step the running install or restore reported last (#60).
+const step = ref<CoreUpdateProgress>()
+const reused = ref(false)
 const { locale, t } = useAppLanguage()
 const lastRequest = ref<string>()
 const copyFeedback = ref<'copied'|'failed'>()
@@ -166,8 +171,15 @@ async function apply() {
     progress.value?.showModal()
     progress.value?.focus()
   }, 250)
+  step.value = undefined
+  reused.value = false
   try {
-    const outcome = await manage<{ outcome: string }>(args)
+    const outcome = selected.action === 'core-reconcile'
+      ? await manage<{ outcome: string }>(args)
+      : await manageCoreWithProgress<{ outcome: string }>(args, update => {
+        step.value = update
+        if (update.phase === 'reusing') reused.value = true
+      })
     result.value = outcome.outcome === 'applied' ? t('components.coreMaintenance.verified') : t('components.coreMaintenance.notReplaced')
     manualSource.value = undefined
     emit('changed')
@@ -179,6 +191,7 @@ async function apply() {
     progress.value?.close()
     confirming.value = false
     busy.value = false
+    step.value = undefined
   }
 }
 function close() { if (!busy.value) { dialog.value?.close(); emit('close') } }
@@ -241,7 +254,8 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
     </div>
   </dialog>
   <dialog ref="progress" class="compact" tabindex="-1" aria-labelledby="core-progress-title" @cancel.prevent @keydown.esc.stop.prevent>
-    <h2 id="core-progress-title">{{ t('components.coreMaintenance.progressTitle') }}</h2><p>{{ t('components.coreMaintenance.progressBody') }}</p><progress :aria-label="t('components.coreMaintenance.progressLabel')"></progress>
+    <h2 id="core-progress-title">{{ t('components.coreMaintenance.progressTitle') }}</h2><p>{{ t('components.coreMaintenance.progressBody') }}</p>
+    <CoreUpdateProgressBar :progress="step" :reused="reused" fallback="components.coreMaintenance.progressLabel" />
   </dialog>
 </template>
 <style scoped>

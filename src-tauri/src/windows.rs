@@ -10,6 +10,7 @@ mod content_revision;
 mod deferred_settings;
 #[path = "core_maintenance.rs"]
 mod core_maintenance;
+pub use core_maintenance::CoreUpdatePhase;
 #[path = "compatibility_probe.rs"]
 mod compatibility_probe;
 #[path = "prepare.rs"]
@@ -2624,10 +2625,25 @@ pub fn dispatch(arguments: &[String]) -> Result<Value> {
     dispatch_with_creation_progress(arguments, &|_| {})
 }
 
-
 pub fn dispatch_with_creation_progress(
     arguments: &[String],
     progress: &dyn Fn(CreationPhase),
+) -> Result<Value> {
+    dispatch_with_progress(arguments, progress, &core_maintenance::no_progress)
+}
+
+/// Runs a core install or restore and reports its steps to `progress` (#60).
+pub fn dispatch_with_core_progress(
+    arguments: &[String],
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Result<Value> {
+    dispatch_with_progress(arguments, &|_| {}, progress)
+}
+
+fn dispatch_with_progress(
+    arguments: &[String],
+    progress: &dyn Fn(CreationPhase),
+    core_progress: &dyn Fn(CoreUpdatePhase),
 ) -> Result<Value> {
     let [workspace, verb, args @ ..] = arguments else {
         return Err("Usage: ihctl WORKSPACE ACTION ...".into());
@@ -2725,7 +2741,7 @@ pub fn dispatch_with_creation_progress(
     }
     if verb == "core-install-latest" {
         let [name, request, current, candidate] = args else { return Err("InvalidCoreArguments".into()); };
-        return core_source::install_latest(&root, name, request, current, candidate);
+        return core_source::install_latest(&root, name, request, current, candidate, core_progress);
     }
     if verb == "core-catalog-versions" {
         let [family] = args else { return Err("InvalidCoreArguments".into()); };
@@ -2915,7 +2931,7 @@ pub fn dispatch_with_creation_progress(
             }
         }
     }
-    if let Some(result) = core_maintenance::dispatch(&root, verb, args) {
+    if let Some(result) = core_maintenance::dispatch_with_progress(&root, verb, args, core_progress) {
         return result;
     }
     if let Some(result) = server_removal::dispatch(&root, verb, args) {
