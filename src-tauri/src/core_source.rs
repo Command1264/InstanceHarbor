@@ -850,6 +850,7 @@ fn report_download(progress: &dyn Fn(CoreUpdatePhase)) -> impl Fn(u64, Option<u6
     move |received, total| progress(CoreUpdatePhase::Downloading { received, total })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn install_latest_guarded(
     root: &Path,
     name: &str,
@@ -1112,6 +1113,10 @@ fn download_command(url: &str, agent: &str, output: &Path) -> Result<Command> {
     Ok(command)
 }
 
+/// Where a download reports its bytes: the official size, when known, and the
+/// callback that receives `(received, total)`.
+type DownloadProgress<'a> = Option<(Option<u64>, &'a dyn Fn(u64, Option<u64>))>;
+
 /// Runs a download and, with `progress`, reports the bytes written so far.
 /// `total` is the size the official source states. Without one, only the
 /// received bytes are reported, never a guessed total.
@@ -1119,7 +1124,7 @@ fn complete_download(
     mut command: Command,
     output: &Path,
     expected: &str,
-    progress: Option<(Option<u64>, &dyn Fn(u64, Option<u64>))>,
+    progress: DownloadProgress,
 ) -> Result<()> {
     let mut child = command.spawn().map_err(fail)?;
     // The last reported byte count, so each report is strictly larger.
