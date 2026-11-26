@@ -13,6 +13,12 @@ mod startup_prefetch;
 mod startup_theme;
 mod startup_timing;
 #[cfg(windows)]
+mod startup_guard;
+#[cfg(windows)]
+mod webview_events;
+#[cfg(windows)]
+mod webview_start;
+#[cfg(windows)]
 mod exit_watchdog;
 #[cfg(windows)]
 mod manager_attach;
@@ -240,6 +246,8 @@ fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(
         startup_timing::mark("window-shown");
     }
     WINDOW_REVEALED.store(true, Ordering::SeqCst);
+    #[cfg(windows)]
+    startup_guard::mark_revealed();
     #[cfg(windows)]
     caption?;
     Ok(())
@@ -597,6 +605,9 @@ fn attach_to_manager() {
 
 fn main() {
     startup_timing::mark("main");
+    // Before any thread or child process starts: read once and drop from the environment.
+    #[cfg(windows)]
+    let simulate = webview_start::simulation();
     #[cfg(windows)]
     let _installation = match instanceharbor::installation::acquire() {
         Ok(lease) => lease,
@@ -656,15 +667,20 @@ fn main() {
     #[cfg(windows)]
     let _gui_lease = match instanceharbor::gui_singleton::acquire() {
         Ok(Some(lease)) => lease,
-        Ok(None) => {
-            let existing_window_found = instanceharbor::gui_singleton::focus_existing();
-            if let Ok(log) = diagnostics::global() {
-                diagnostic_write(log.record(
-                    json!({"type":"gui-duplicate","existingWindowFound":existing_window_found}),
-                ));
+        Ok(None) => match replace_stuck_gui() {
+            Ok(lease) => lease,
+            Err(holder) => {
+                let existing_window_found = instanceharbor::gui_singleton::focus_existing();
+                if let Ok(log) = diagnostics::global() {
+                    diagnostic_write(log.record(json!({
+                        "type":"gui-duplicate",
+                        "existingWindowFound":existing_window_found,
+                        "holder":holder,
+                    })));
+                }
+                return;
             }
-            return;
-        }
+        },
         Err(error) => {
             eprintln!("InstanceHarbor GUI instance check failed: {error}");
             std::process::exit(1);
@@ -681,6 +697,23 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    // Publish this GUI as the lock holder, so a later launch can replace it if it never
+    // shows its window, and end it if that window is not shown in time (#117).
+    #[cfg(windows)]
+    {
+        let lock = desktop_channel::gui_lock_name(desktop_channel::workspace_name().as_deref());
+        if let Err(error) = startup_guard::publish(
+            &lock,
+            startup_guard::current_workspace(|| None),
+            simulate != Some(webview_start::Simulate::HangDeaf),
+        ) {
+            eprintln!("GUI owner record unavailable: {error}");
+            if let Ok(log) = diagnostics::global() {
+                diagnostic_write(log.record(json!({"type":"gui-owner-record","error":diagnostics::safe_error(&error)})));
+            }
+        }
+        startup_guard::start_deadline(startup_timing::since_start);
     }
     match diagnostics::global(){
         Ok(log)=>diagnostic_write(log.record(json!({"type":"gui-start","pid":std::process::id(),"version":env!("CARGO_PKG_VERSION"),"commit":instanceharbor::about::COMMIT,"executableFingerprint":std::env::current_exe().ok().map(|p|diagnostics::path_fingerprint(&p)),"workspaceFingerprint":std::env::var("IH_WORKSPACE").ok().map(|p|diagnostics::path_fingerprint(std::path::Path::new(&p)))}))),
@@ -757,12 +790,24 @@ fn main() {
                 let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
                     .theme(Some(if dark { tauri::Theme::Dark } else { tauri::Theme::Light }))
                     .background_color(background_color(dark));
+                // configure_desktop always names the profile folder. Without one, Tauri picks
+                // its own default, so wry creates the environment as before.
                 let window = match workspace_binding::webview_data_directory() {
-                    Some(folder) => window.data_directory(folder),
+                    Some(folder) => {
+                        startup_timing::mark("webview-environment");
+                        let environment = webview_start::environment(&folder, simulate)?;
+                        window.data_directory(folder).with_environment(environment)
+                    }
                     None => window,
-                }
-                .build()?;
+                };
+                startup_timing::mark("webview-controller");
+                webview_events::step("controller", "started", None);
+                let window = window.build().inspect_err(|_| webview_events::step("controller", "failed", None))?;
+                webview_events::step("controller", "created", None);
                 startup_timing::mark("window-built");
+                if let Err(error) = window.with_webview(move |webview| webview_start::watch(webview, simulate)) {
+                    eprintln!("Could not watch the WebView2 processes: {error}");
+                }
                 let size = window_placement::LogicalSize {
                     width: config.width,
                     height: config.height,
@@ -830,6 +875,58 @@ fn main() {
             std::process::exit(1)
         }
     }
+}
+
+/// The GUI lock is held by a GUI of this installation and workspace that started more
+/// than 15 seconds ago and never showed its window: end it and take the lock (#117).
+/// Otherwise returns what was seen about the holder, for the `gui-duplicate` record.
+#[cfg(windows)]
+fn replace_stuck_gui() -> Result<std::os::windows::io::OwnedHandle, serde_json::Value> {
+    let lock = desktop_channel::gui_lock_name(desktop_channel::workspace_name().as_deref());
+    let owner = startup_guard::read(&lock);
+    let holder = owner.as_ref().and_then(startup_guard::open_verified);
+    let workspace = startup_guard::current_workspace(|| workspace_binding::default_workspace().ok());
+    let now = startup_guard::now();
+    let seen = owner.map(|owner| json!({
+        "verified":holder.is_some(),
+        "sameWorkspace":owner.workspace == workspace,
+        "revealed":owner.revealed,
+        "ageMs":now.saturating_sub(owner.created) / 10_000,
+    }));
+    let (startup_guard::Takeover::Replace(owner), Some(holder)) =
+        (startup_guard::decide(owner, now, workspace, holder.is_some()), holder.as_ref())
+    else {
+        return Err(seen.unwrap_or(serde_json::Value::Null));
+    };
+    let ended = startup_guard::end(&lock, holder);
+    // The lock is released when the holder's process ends; give Windows a moment.
+    let mut lease = None;
+    if matches!(ended, startup_guard::Ended::Quit | startup_guard::Ended::Terminated) {
+        for _ in 0..20 {
+            match instanceharbor::gui_singleton::acquire() {
+                Ok(Some(acquired)) => {
+                    lease = Some(acquired);
+                    break;
+                }
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(error) => {
+                    eprintln!("InstanceHarbor GUI instance check failed: {error}");
+                    break;
+                }
+            }
+        }
+    }
+    if let Ok(log) = diagnostics::global() {
+        let age = startup_guard::now().saturating_sub(owner.created) / 10_000;
+        diagnostic_write(log.record(json!({
+            "type":"gui-takeover",
+            "holderPid":owner.pid,
+            "holderAgeMs":age,
+            "ended":ended.name(),
+            "lockTaken":lease.is_some(),
+        })));
+    }
+    lease.ok_or_else(|| json!({"takeover":ended.name()}))
 }
 
 #[cfg(test)]

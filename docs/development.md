@@ -67,6 +67,23 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 結束看門狗：主視窗關閉後，GUI 暫停向 Manager 登記，避免重新啟動使用者剛結束的 Manager。
   10 秒後程序仍在、且已沒有任何可見視窗時，記錄 `gui-exit-watchdog` 並直接結束程序；仍有可見視窗代表關閉被取消，看門狗解除。
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
+- 啟動卡住的 GUI（#117，`src-tauri/src/startup_guard.rs`）：取得單一 GUI 鎖的 GUI 會在具名共享記憶體（鎖名加 `-Owner`）
+  公布自己的 PID、Windows 程序建立時間、工作區與「是否已顯示過主視窗」。
+  - 新開的 GUI 拿不到鎖時讀這份紀錄。持有者是同一個執行檔（同一安裝）、建立時間相符、同一工作區，已啟動超過 15 秒卻從未顯示主視窗時，
+    新 GUI 經具名事件（鎖名加 `-Quit`）請它結束，2 秒內沒結束就強制結束，再取得鎖正常開啟，並記錄 `gui-takeover`（`ended` 為 `quit`／`terminated`）。
+    不詢問使用者：舊 GUI 沒有視窗，沒有可遺失的內容。持有者在這段期間顯示了視窗時不結束它（`revealed`）。
+  - 顯示過主視窗的 GUI 之後再隱藏（例如縮到系統匣）仍算已顯示，不會被當成卡住；沒有紀錄的舊版 GUI 照舊只叫回視窗。
+  - 啟動期限：程序建立 20 秒後仍沒有顯示主視窗時，GUI 記錄 `gui-startup-deadline`（`stage` 是最後到達的啟動階段，
+    `webview` 是下列 WebView2 事件），然後結束程序、釋放鎖。
+  - WebView2 事件（`type` 為 `webview2`）：主視窗的 WebView2 環境由 InstanceHarbor 自己建立（`src-tauri/src/webview_start.rs`，
+    選項與 wry 0.55 自建時相同），所以能分別記錄環境建立與控制項建立的開始、完成或失敗（HRESULT），並記錄 `ProcessFailed`（哪種程序結束、原因與結束代碼）。
+  - 開發版測試開關：環境變數 `IH_DEV_SIMULATE_WEBVIEW2=hang` 讓環境建立永遠不完成，`=hang-deaf` 再加上不理會接手的結束請求（驗證 2 秒後強制結束），`=exit` 在控制項建立後結束 WebView2 瀏覽器程序。
+    GUI 讀取後立即從自己的環境移除，它啟動的 Manager 與之後從系統匣開啟的 GUI 不會繼承。正式版不編入。
+  - 實測：`tests/verify-stuck-gui.ps1` 對兩種模擬分別檢查期限、15 秒後從系統匣開啟會接手、15 秒內開啟不會接手，以及正常顯示的 GUI 不會被結束。
+
+  ```powershell
+  ./tests/verify-stuck-gui.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-117')
+  ```
 - 結束計時：`tests/measure-gui-exit.ps1` 以 `app-exit`、系統匣「結束」、視窗關閉鈕三種方式反覆開關 GUI，記錄每次從送出到程序結束的時間，
   並檢查期間的 GUI 診斷紀錄沒有 `gui-exit-watchdog`。系統匣「結束」是對該工作區 Manager 的系統匣視窗送出選單命令（muda 依建立順序編號，「結束」為 1002）。
 

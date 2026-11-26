@@ -33,6 +33,11 @@ crc32fast = "=1.5.1"
 # The resident Manager draws its own notification-area icon without a webview.
 # Pinned to the version tauri uses, so both share one build.
 tray-icon = { version = "=0.24.2", default-features = false }
+# The main window creates its WebView2 environment itself, so diagnostics can tell its
+# steps apart and see WebView2 processes end (#117). Pinned to the versions wry uses.
+[target.'cfg(windows)'.dependencies]
+webview2-com = "=0.38.2"
+windows-core = "=0.61.2"
 [profile.dev]
 debug = 0
 incremental = false
