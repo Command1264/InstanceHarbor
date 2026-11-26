@@ -252,7 +252,7 @@ fn demand(row: &Value) -> Option<Demand> {
     let current = field("sha256")?;
     let registration = field("registrationRevision")?;
     if row["status"] != "UpdateAvailable"
-        || row["family"] != "PAPER"
+        || !row["family"].as_str().is_some_and(core_source::prefetch_family)
         || !digest(&sha256)
         || !digest(&current)
         || !digest(&registration)
