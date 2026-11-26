@@ -290,7 +290,10 @@ export type CoreSource = {
   sha256?: string
   registrationRevision?: string
   remoteBuild?: string
-  candidate?: { build: string; sha256: string }
+  /** A Purpur candidate has only the official MD5 until it is downloaded (#41). */
+  candidate?: { build: string; sha256?: string; md5?: string }
+  /** `purpurMd5` when the source publishes MD5 only. */
+  verification?: string
   reason?: string
   checkedAt?: number
   nativeVersion?: { status: string; behind?: number }

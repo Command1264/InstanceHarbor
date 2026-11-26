@@ -123,6 +123,8 @@ async function check() {
       if (!source) return { name, result: 'core.batch.checkFailed' }
       if (source.status === 'Current') return { name, result: 'core.source.current' }
       if (!source.candidate || !source.sha256) return { name, result: sourceMessage(source) }
+      // A Purpur candidate has no SHA-256 before download, so it is updated one at a time (#41).
+      if (!source.candidate.sha256) return { name, result: 'core.batch.singleOnly' }
       if (instanceByName.value.get(name)?.state !== 'Stopped') return { name, result: 'core.batch.notStopped' }
       if (props.blockedNames.has(name)) return { name, result: 'core.batch.operationPending' }
       return { name, source, result: 'core.batch.updateTo' }

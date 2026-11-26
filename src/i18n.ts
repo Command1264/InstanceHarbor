@@ -456,6 +456,7 @@ const baseMessages = {
   'core.batch.Unconfirmed': ['結果未確認，請至核心維護核對', 'Outcome unconfirmed. Check Core Maintenance.'],
   'core.batch.Cancelled': ['已取消', 'Canceled'],
   'core.batch.close': ['關閉', 'Close'],
+  'core.batch.singleOnly': ['請在單台核心維護更新（Purpur 下載後才能取得 SHA-256）', 'Update it in Core Maintenance (Purpur has a SHA-256 only after download)'],
   'core.batch.itemProgress': ['{name}：{step}', '{name}: {step}'],
   'core.progress.checking': ['正在核對更新來源', 'Checking the update source'],
   'core.progress.downloading': ['正在下載核心', 'Downloading the core'],

@@ -151,12 +151,18 @@ pub(super) fn move_durable_with_stage(source: &Path, destination: &Path, replace
     let to: Vec<_> = destination.as_os_str().encode_wide().chain([0]).collect();
     // WRITE_THROUGH and, only for an already-verified destination, REPLACE_EXISTING.
     let flags = 0x8 | u32::from(replace);
-    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
-        return Err(file_error(
-            stage,
-            destination,
-            io::Error::last_os_error(),
-        ));
+    // Replacing fails while any handle to the destination is open, even a
+    // short read-only one: the list hashing a core it cannot identify offline,
+    // or a virus scanner. Wait for such readers, for at most 5 seconds.
+    let mut attempts = 0;
+    while unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
+        let error = io::Error::last_os_error();
+        attempts += 1;
+        // ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION.
+        if !replace || !matches!(error.raw_os_error(), Some(5 | 32)) || attempts >= 50 {
+            return Err(file_error(stage, destination, error));
+        }
+        thread::sleep(Duration::from_millis(100));
     }
     Ok(())
 }
@@ -266,6 +272,24 @@ pub(super) fn trusted_profile(config: &Instance, sha256: String) -> Option<CoreP
             .as_ref()
             .filter(|profile| profile.sha256 == sha256 && !profile.unverified)
             .cloned()
+    })
+}
+
+/// A Purpur core that may be updated although it is not verified (#41): the
+/// registered Purpur profile of this exact JAR, or else what the JAR states
+/// about itself. Its build is confirmed by the official MD5 before an update.
+pub(super) fn purpur_identity(config: &Instance, jar: &Path, sha256: &str) -> Option<CoreProfile> {
+    if let Some(profile) = config.core_profile.as_ref().filter(|profile| profile.sha256 == sha256) {
+        return (profile.family == "PURPUR").then(|| profile.clone());
+    }
+    let claim = core_artifact::claim(jar).filter(|claim| claim.family == "PURPUR")?;
+    Some(CoreProfile {
+        family: claim.family,
+        minecraft: claim.minecraft,
+        build: String::new(),
+        sha256: sha256.to_owned(),
+        unverified: true,
+        java: claim.java,
     })
 }
 
@@ -468,9 +492,14 @@ fn state(root: &Path, name: &str) -> Result<Value> {
                 (sha == &pending.after.sha256).then(|| pending.after.clone())
             })
         });
+    // An unverified Purpur may still be updated: the source check confirms its
+    // build by the official MD5, and the update registers it as verified (#41).
+    let purpur = installed.is_none().then(|| {
+        current.as_ref().ok().and_then(|sha| purpur_identity(&target.config, &target.jar(), sha))
+    }).flatten();
     let reason = if pending.is_some() {
         Some("CoreMaintenancePending".to_owned())
-    } else if installed.is_none() {
+    } else if installed.is_none() && purpur.is_none() {
         Some(
             current
                 .as_ref()
@@ -529,7 +558,8 @@ fn state(root: &Path, name: &str) -> Result<Value> {
         .flatten()
         .map(|identity| {
             json!({"family":identity.family,"minecraft":identity.minecraft_version,"build":identity.build})
-        });
+        })
+        .or_else(|| purpur.as_ref().map(|profile| json!({"family":profile.family,"minecraft":profile.minecraft,"build":null})));
     Ok(
         json!({"name":name,"installed":installed,"identified":identified,"currentSha256":current.ok(),"pending":pending,
         "backups":backups,"canWrite":reason.is_none(),"reason":reason,"prepared":prepared}),
@@ -634,6 +664,7 @@ fn run_action(
     expected_current_sha256: &str,
     action: Action,
     candidate: Option<(&Path, &CoreProfile)>,
+    known_before: Option<&CoreProfile>,
     progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
@@ -657,7 +688,16 @@ fn run_action(
     if before_sha != expected_current_sha256 {
         return Err("CoreCurrentChanged".into());
     }
-    let before = trusted_profile(&target.config, before_sha).ok_or("CoreProfileUnverified")?;
+    // `known_before` is an unverified Purpur whose build the source matched by
+    // its official MD5; it must still be the registered core.
+    let before = trusted_profile(&target.config, before_sha.clone())
+        .or_else(|| {
+            let registered = purpur_identity(&target.config, &target.jar(), &before_sha)?;
+            known_before.filter(|known| {
+                known.sha256 == before_sha && known.family == registered.family && known.minecraft == registered.minecraft
+            }).cloned()
+        })
+        .ok_or("CoreProfileUnverified")?;
     let store = target.store();
     let (source, after) = match (&action, candidate) {
         (Action::Install { .. }, Some((source, profile))) => {
@@ -769,9 +809,29 @@ pub(super) fn install_verified_guarded(
             candidate_sha256: profile.sha256.clone(),
         },
         Some((candidate_path, profile)),
+        None,
         progress,
         begin_commit,
     )
+}
+
+/// Installs `after` over an unverified Purpur whose build is `before` (#41).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_identified(
+    root: &Path,
+    name: &str,
+    request: &str,
+    expected_current_sha256: &str,
+    candidate_path: &Path,
+    before: &CoreProfile,
+    after: &CoreProfile,
+    progress: &dyn Fn(CoreUpdatePhase),
+    begin_commit: impl FnOnce() -> Result<()>,
+) -> Result<Value> {
+    let target = Target::resolve(root, name)?;
+    let action = Action::Install { candidate_sha256: after.sha256.clone() };
+    run_action(root, target, request, expected_current_sha256, action,
+        Some((candidate_path, after)), Some(before), progress, begin_commit)
 }
 
 fn install_pinned(
@@ -830,6 +890,7 @@ pub(super) fn dispatch_with_progress(
                     Action::Restore {
                         backup_id: backup.clone(),
                     },
+                    None,
                     None,
                     progress,
                     || Ok(()),
@@ -942,6 +1003,7 @@ mod tests {
                 backup_id: "update".into(),
             },
             None,
+            None,
             &no_progress,
             || Ok(()),
         )
@@ -992,6 +1054,80 @@ mod tests {
         assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"first");
         fs::write(directory.join("velocity.toml"), "bind = \"127.0.0.1:1\"\n").unwrap();
         assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "PortChanged");
+    }
+
+    // #41: an unverified Purpur can be updated once its build is known by the
+    // official MD5; the update registers it as verified, and it restores.
+    #[test]
+    fn unverified_purpur_updates_to_a_verified_registration_and_restores() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let purpur = |bytes: &[u8], build: &str| CoreProfile { family: "PURPUR".into(), minecraft: "26.3".into(), ..profile(bytes, build) };
+        target.config.core_profile = Some(CoreProfile { unverified: true, ..purpur(b"first", "") });
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        let state_now = state(&fixture.0, "server").unwrap();
+        assert_eq!((&state_now["canWrite"], &state_now["installed"]), (&json!(true), &Value::Null));
+        assert_eq!(state_now["identified"], json!({"family":"PURPUR","minecraft":"26.3","build":null}));
+        let candidate = fixture.0.join("purpur-26.3-2660.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let (before, after) = (purpur(b"first", "2634"), purpur(b"second", "2660"));
+        // Without the matched build the core stays unverified, as before.
+        assert_eq!(install_verified(&fixture.0, "server", "plain", &before.sha256, &candidate, &after).unwrap_err(),
+            "CoreProfileUnverified");
+        let paper = CoreProfile { family: "PAPER".into(), ..before.clone() };
+        assert_eq!(install_identified(&fixture.0, "server", "wrong", &before.sha256, &candidate, &paper, &after, &no_progress, || Ok(()))
+            .unwrap_err(), "CoreProfileUnverified");
+        install_identified(&fixture.0, "server", "purpur", &before.sha256, &candidate, &before, &after, &no_progress, || Ok(()))
+            .unwrap();
+        let registered = instance(&fixture.0, "server").unwrap().core_profile.unwrap();
+        assert_eq!((registered.build.as_str(), registered.unverified), ("2660", false));
+        let state_now = state(&fixture.0, "server").unwrap();
+        assert_eq!(state_now["installed"]["build"], "2660");
+        assert_eq!(state_now["backups"][0]["profile"]["build"], "2634");
+        let args = ["server".into(), "purpur-restore".into(), after.sha256.clone(), "purpur".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(target.jar()).unwrap(), b"first");
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["build"], "2634");
+    }
+
+    // A short read-only reader of the destination (the list hashing a core it
+    // cannot identify offline, or a virus scanner) must not fail a replacement.
+    #[test]
+    fn replacement_waits_for_a_short_reader_of_the_destination() {
+        let fixture = Fixture::new();
+        let (source, destination) = (fixture.0.join("next.jar"), fixture.0.join("server.jar"));
+        fs::write(&destination, b"old").unwrap();
+        fs::write(&source, b"new").unwrap();
+        let reader = File::open(&destination).unwrap();
+        let held = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            drop(reader);
+        });
+        move_durable(&source, &destination, true).unwrap();
+        held.join().unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        // A reader that stays open is still reported, after a bounded wait.
+        fs::write(&source, b"newer").unwrap();
+        let _reader = File::open(&destination).unwrap();
+        assert!(move_durable(&source, &destination, true).is_err());
+    }
+
+    // #41: an imported Purpur usually has no registered profile; what its JAR
+    // states is enough to allow the update, never another family.
+    #[test]
+    fn unregistered_purpur_is_writable_by_its_own_claim() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        target.config.core_profile = None;
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        let list = "versions\ta\tb\tc\t26.2/server-26.2.jar\t26.2/server.patch\t26.2/purpur-26.2.jar\n";
+        core_artifact::tests::jar_with(&target.jar(), &[("META-INF/patches.list", list.as_bytes())]);
+        let state_now = state(&fixture.0, "server").unwrap();
+        assert_eq!(state_now["identified"], json!({"family":"PURPUR","minecraft":"26.2","build":null}));
+        assert_eq!(state_now["reason"], Value::Null);
+        let paper = list.replace("purpur-26.2", "paper-26.2");
+        core_artifact::tests::jar_with(&target.jar(), &[("META-INF/patches.list", paper.as_bytes())]);
+        assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "CoreProfileUnverified");
     }
 
     // #60: the dialog names each step after the download.
