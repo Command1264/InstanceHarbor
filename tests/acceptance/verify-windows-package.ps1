@@ -26,8 +26,8 @@ $logs = Join-Path $fixture 'logs'
 $null = [IO.Directory]::CreateDirectory($logs)
 $log = Join-Path $logs 'session.log'
 [IO.File]::WriteAllText($log, 'retained fixture log')
-$pack = Join-Path $PSScriptRoot 'pack-windows.ps1'
-$install = Join-Path $PSScriptRoot 'install-windows.ps1'
+$pack = Join-Path $PSScriptRoot '../../packaging/pack-windows.ps1'
+$install = Join-Path $PSScriptRoot '../../packaging/install-windows.ps1'
 $first = if ($LegacyPackage) {
     @{ packagePath = (Resolve-Path -LiteralPath $LegacyPackage).Path; sha256 = $LegacyPackageSha256.ToLowerInvariant() }
 } else {

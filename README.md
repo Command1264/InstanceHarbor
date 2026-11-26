@@ -66,8 +66,8 @@ Prerequisites: 64-bit Windows, PowerShell 7, Node.js 24 with npm, the stable Rus
 ```powershell
 npm ci
 cargo fetch --manifest-path src-tauri/Cargo.toml
-./build-product.ps1 -Development
-./launch-development.ps1
+./packaging/build-product.ps1 -Development
+./scripts/launch-development.ps1
 ```
 
 The development build uses its own data folder, `%LOCALAPPDATA%\InstanceHarbor Dev`, so it never touches the installed app's servers.

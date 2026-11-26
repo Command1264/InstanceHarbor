@@ -6,7 +6,7 @@ param(
     [string]$Fault = 'None',
     [switch]$PrepareOnly,
     [switch]$BatchLifecycle,
-    [string]$BinaryDirectory = (Join-Path $PSScriptRoot 'src-tauri/target/debug')
+    [string]$BinaryDirectory = (Join-Path $PSScriptRoot '../../src-tauri/target/debug')
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -57,7 +57,7 @@ function Batch([string]$id) {
 function Gate([string]$name) {
     New-Item -ItemType File -Path (Join-Path $root "instances/$name/fixture-ready") -Force | Out-Null
 }
-& rustc --edition 2021 (Join-Path $PSScriptRoot 'tests/controlled-server.rs') -o $java
+& rustc --edition 2021 (Join-Path $PSScriptRoot '../controlled-server.rs') -o $java
 if ($LASTEXITCODE -ne 0) { throw 'Fixture compilation failed.' }
 Ih @('init') | Out-Null
 $policy = Join-Path $root 'scan-policy.json'
@@ -80,7 +80,7 @@ foreach ($name in $names) {
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Evidence 'fixture-manifest.json')
 if ($PrepareOnly) { return }
 if ($BatchLifecycle) {
-    . (Join-Path $PSScriptRoot 'tests/verify-batch-lifecycle.ps1')
+    . (Join-Path $PSScriptRoot 'verify-batch-lifecycle.ps1')
     return
 }
 $targets = @($names | ForEach-Object { @{name=$_;guard=@{previousRun=$null;stopToken=$null}} })

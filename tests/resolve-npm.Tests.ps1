@@ -1,6 +1,6 @@
 # Run: Invoke-Pester ./tests/resolve-npm.Tests.ps1   (plain assertions: works on Pester 3 and 5)
-Describe 'resolve-npm.ps1' {
-    $resolver = Join-Path (Split-Path -Parent $PSScriptRoot) 'resolve-npm.ps1'
+Describe 'packaging/resolve-npm.ps1' {
+    $resolver = Join-Path (Split-Path -Parent $PSScriptRoot) 'packaging/resolve-npm.ps1'
     function Resolve-WithPath($dir, $name) {
         $old = $env:PATH
         try { $env:PATH = $dir; & $resolver -Search $name } finally { $env:PATH = $old }

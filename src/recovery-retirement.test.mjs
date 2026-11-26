@@ -5,7 +5,7 @@ import { translate } from './i18n.ts'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
 
-// Stage 1 of #96. verify-recovery-pin.ps1 checks the same rules against real processes.
+// Stage 1 of #96. tests/acceptance/verify-recovery-pin.ps1 checks the same rules against real processes.
 test('a new start never writes a recovery pin', () => {
   const windows = read('../src-tauri/src/windows.rs')
   const plan = windows.match(/struct StartPlan \{[^}]*\}/)[0]

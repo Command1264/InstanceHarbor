@@ -1,5 +1,5 @@
 # Link the Microsoft C runtime into the Windows binaries so they never need the
-# Visual C++ Redistributable (VCRUNTIME140.dll). pack-windows.ps1 refuses a
+# Visual C++ Redistributable (VCRUNTIME140.dll). packaging/pack-windows.ps1 refuses a
 # stable version whose executables import it.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

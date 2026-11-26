@@ -1,13 +1,13 @@
 # InstanceHarbor Windows 1.1.0
 
-新候選使用 `build-product.ps1` 建置並核對內嵌 Vite 資產；`launch-product.ps1` 只開啟本次已核對的隔離 Agent 工作區。
+新候選使用 `packaging/build-product.ps1` 建置並核對內嵌 Vite 資產；`scripts/launch-product.ps1` 只開啟本次已核對的隔離 Agent 工作區。
 舊的 `preview/` 與無框架 `index.html` 保留為純模擬對照，不會自動切換到真實控制。
 
 本專案是 Windows 第一版功能候選。Vue／Tauri 與 PowerShell 呼叫的 Rust CLI 使用相同的 Rust 管理入口。分開執行的 Rust Host 持有 Java 的標準輸入與日誌。GUI 或 CLI 退出後，Host 仍能持有原程序。重新核對使用 run ID、PID、Windows 程序建立時間和本機 TCP 監聽者。正常停止經有期限的 Named Pipe，驗證雙方程序身分。重啟需先確認原 Java 和 Host 退出、正常結束且埠已釋放。
 
 ## 建置與隔離驗證
 
-`build-product.ps1` 經 `resolve-npm.ps1` 在 PATH 上尋找 npm，`npm.cmd`（官方安裝）與 `npm.exe`（mise 等版本管理工具的 shim）都可用；找不到時會提示安裝 Node.js 或檢查 PATH，腳本不會修改 PATH。解析邏輯的測試：`Invoke-Pester ./tests/resolve-npm.Tests.ps1`。
+`packaging/build-product.ps1` 經 `packaging/resolve-npm.ps1` 在 PATH 上尋找 npm，`npm.cmd`（官方安裝）與 `npm.exe`（mise 等版本管理工具的 shim）都可用；找不到時會提示安裝 Node.js 或檢查 PATH，腳本不會修改 PATH。解析邏輯的測試：`Invoke-Pester ./tests/resolve-npm.Tests.ps1`。
 
 在 repository 根目錄執行下列命令。驗證腳本使用 SHA-256 核對 Paper 26.3 build 205 和 Mojang 依賴，唯讀取用既有 JAR 快取。所有新工作區和證據寫入根目錄的 .evidence。
 
@@ -15,17 +15,48 @@
 npm ci --offline
 npm run build
 cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
-./launch-acceptance.ps1
+./scripts/launch-acceptance.ps1
 ```
 
-驗證器建立一台實例，驗證重試，移除管理登記，再重新匯入原目錄。它模擬其他程序占用埠，啟動 Paper 至 Done，關閉與重開原生 Tauri，從 GUI 發出重啟，最後經 CLI 正常停止並確認埠釋放。已驗證的工作區可直接用 launch-acceptance.ps1 開啟。啟動 GUI 本身只讀取清單。
+驗證器建立一台實例，驗證重試，移除管理登記，再重新匯入原目錄。它模擬其他程序占用埠，啟動 Paper 至 Done，關閉與重開原生 Tauri，從 GUI 發出重啟，最後經 CLI 正常停止並確認埠釋放。已驗證的工作區可直接用 scripts/launch-acceptance.ps1 開啟。啟動 GUI 本身只讀取清單。
 
 ## 驗收步驟
 
-1. 關閉可能仍開著的 2.0 驗收視窗，執行 launch-acceptance.ps1。選取 paper-agent，應顯示已停止。
+1. 關閉可能仍開著的 2.0 驗收視窗，執行 scripts/launch-acceptance.ps1。選取 paper-agent，應顯示已停止。
 2. 點啟動，應先看到原位處理回饋，接著出現 run 和監聽 PID。關閉並重新開啟 GUI，核對同一個 run。
 3. 點重新啟動。正常停止並啟動成功後，核對 run 已變更。點工作紀錄確認可查到作業。
 4. 最後點正常停止，確認清單回到已停止。如果出現工作階段未確認或停止逾時，保留現場並回報畫面與工作 ID。
+
+## 腳本位置
+
+repository 根目錄只放專案設定、Vite 入口（`index.html`、`console.html`）與說明文件。腳本依用途分開放（#97）：
+
+| 資料夾 | 內容 |
+| --- | --- |
+| `packaging/` | 建置、核對與封裝：`build-product.ps1` 與它呼叫的 `resolve-npm.ps1`、`verify-no-local-paths.ps1`、`verify-app-icon.ps1`、`provision-console-runtime.ps1`、`save-release-symbols.ps1`；ConPTY 釘選紀錄 `console-runtime.json`；開發版圖示 `generate-development-icons.py`；發行封裝 `pack-windows.ps1`、`install-windows.ps1`、`pack-windows-setup.ps1`、`prepare-windows-notices.py`；Setup 的 NSIS 腳本 `windows-setup.nsi` 與 `windows-setup-*.nsh`；ZIP 內附的 `WINDOWS-GETTING-STARTED.txt`；上游授權原文 `windows-upstream-notices/`。 |
+| `scripts/` | 啟動與維運：`launch-development.ps1`（`npm run dev`）、`launch-acceptance.ps1`、`launch-product.ps1`、`manage-recovery-backup.ps1`（#96 第 2 階段移除）。 |
+| `tests/` | 自動化測試的輔助檔與量測腳本，例如 `controlled-server.rs`、`verify-windows-setup-version.ps1`、`measure-*.ps1`。 |
+| `tests/acceptance/` | 需要真實程序、原生視窗或伺服器 JAR 的手動驗收腳本，見下一節。 |
+| `src/vendor/xterm/` | 原生後台視窗載入的 xterm.js 與 Unicode graphemes add-on，以及兩者的授權檔。 |
+
+腳本都以自己的位置找 repository 根目錄，可以從任何目前目錄執行。`scripts/launch-development.ps1` 的自動工作區仍以 checkout 根目錄計算，搬移前後使用同一個工作區。
+
+## 手動驗收腳本（tests/acceptance/）
+
+這些腳本不在 CI 執行。它們啟動真實的 ihctl、Host、Manager 或 GUI，只寫入指定的新證據資料夾或 checkout 根目錄的 `.evidence/`。需要伺服器 JAR 的腳本以 SHA-256 核對輸入，只讀取既有快取，不下載。執行檔預設取 `src-tauri/target/debug`，可用 `-BinaryDirectory` 指定。
+
+| 腳本 | 驗證內容 | 必要輸入與注意事項 |
+| --- | --- | --- |
+| `verify-agent-profile.ps1` | Agent 建服設定檔：準備、啟動、Manager 連線與未知設定檔的拒絕 | Paper 26.3、Mojang 依賴、Spigot、LuckPerms 與舊版 LuckPerms JAR |
+| `verify-agent-rebuild.ps1` | 以新版核心重建 Agent 實例並封存原始資料 | Java、新舊 Paper、Vanilla、LuckPerms JAR |
+| `verify-core-prefetch.ps1` | 核心檢查更新、安裝最新版與還原 | Java、Paper JAR、Mojang 依賴；`-Contact` 是查詢官方 API 時附上的聯絡資訊，會連線到 PaperMC |
+| `verify-world-live.ps1` | 綁定目前 run 的即時世界變更 | Paper 26.3 或 Folia 26.1.2（`-Profile`）、Mojang 依賴、Java |
+| `verify-batch-import.ps1 -ManagementFolders` | 新增管理資料夾：原生資料夾選擇器、預覽、回條與逐列導覽 | Java、Paper、Mojang、Velocity 與 Paper 依賴；呼叫同資料夾的 `verify-batch-import-window.mjs` 與 `verify-management-folder-picker.ps1`。不加 `-ManagementFolders` 的模式操作已移除的批次匯入對話框，目前無法通過 |
+| `verify-native-console.ps1 -Mode Fixture` | 原生後台視窗（xterm）的顯示與輸入；先核對 `-Runtime` 的 ConPTY 雜湊 | 證據資料夾必須是 `.evidence/native-console-<id>`；呼叫 `verify-resident-manager.ps1 -PrepareOnly` 與 `verify-native-console-window.mjs`。`-Mode Paper` 依賴已不存在的 `verify-resident-paper.ps1`，目前無法使用 |
+| `verify-resident-manager.ps1` | 常駐 Manager、批次作業與故障注入（`-Fault`、`-MissingReceipt`、`-BatchLifecycle`） | 以 `tests/controlled-server.rs` 編譯測試替身，不需要伺服器 JAR；`-BatchLifecycle` 載入同資料夾的 `verify-batch-lifecycle.ps1` |
+| `verify-resident-batch-window.mjs` | GUI 的全部操作、多選重新啟動與重開後的工作紀錄 | 先執行 `verify-resident-manager.ps1 -PrepareOnly -Evidence <資料夾>`，再執行 `node tests/acceptance/verify-resident-batch-window.mjs <同一資料夾>` |
+| `verify-recovery-pin.ps1` | 復原金鑰 pin 的退場規則（#96 第 1 階段） | 測試替身；`-LegacyBinaryDirectory` 指定 1.1.0 以前的建置以驗證舊 run |
+| `verify-windows-package.ps1` | 便攜安裝器以真實執行檔與空工作區安裝、更新與回退 | `-FixtureRoot` 必須是新資料夾；舊版套件需同時提供 `-LegacyPackageSha256` |
 
 ## 系統匣
 
@@ -122,9 +153,9 @@ cdbX64 -pv -p $manager -y "srv*$symbols" -c ".lines -e; .reload /f ihctl.exe; ~*
 ### PDB 保存位置
 
 PDB 含本機建置路徑，**只留在建置的電腦**：不 commit、不上傳 GitHub、不放進 ZIP 或 Setup
-（`pack-windows.ps1` 只收列出的檔名，不會帶入 PDB）。
+（`packaging/pack-windows.ps1` 只收列出的檔名，不會帶入 PDB）。
 
-- `build-product.ps1 -Release` 建置後呼叫 `save-release-symbols.ps1`，把 `InstanceHarbor.exe`、`ihctl.exe`
+- `packaging/build-product.ps1 -Release` 建置後呼叫 `packaging/save-release-symbols.ps1`，把 `InstanceHarbor.exe`、`ihctl.exe`
   與對應的 PDB 複製到符號資料夾，採 Windows 符號伺服器的目錄結構（`ihctl.pdb/<GUID><Age>/ihctl.pdb`、
   `ihctl.exe/<時間戳記><大小>/ihctl.exe`），所以同一個資料夾可以存放每個版本，`cdb` 會依執行檔自動找到相符的 PDB。
   `index.jsonl` 每行記錄版本、commit、SHA-256 與 PDB 鍵值。同一位置已有不同內容時腳本失敗，不覆寫。
@@ -133,18 +164,18 @@ PDB 含本機建置路徑，**只留在建置的電腦**：不 commit、不上�
 - 發行設定的 PDB 帶有函式名稱與行號（`Cargo.toml` 的 `[profile.release] debug = "line-tables-only"`）。
   MSVC 把除錯資訊放在 PDB，執行檔大小不變。
 - 執行檔只記錄 PDB 的檔名：`build.rs` 對 MSVC 執行檔明確傳 `/PDBALTPATH:%_PDB%`（rustc 預設也會傳），
-  `save-release-symbols.ps1` 發現執行檔記錄了絕對路徑時會失敗。
+  `packaging/save-release-symbols.ps1` 發現執行檔記錄了絕對路徑時會失敗。
 - 執行檔不得含建置電腦的資料夾路徑。標準程式庫與依賴套件的 panic 位置原本帶著
   `<使用者資料夾>\.rustup\...` 與 `<使用者資料夾>\.cargo\registry\...`（1.1.0 及更早的版本都有）。
-  `build-product.ps1 -Release` 與 `-Development` 以 `--remap-path-prefix` 把 rustc sysroot、`CARGO_HOME` 與 checkout
+  `packaging/build-product.ps1 -Release` 與 `-Development` 以 `--remap-path-prefix` 把 rustc sysroot、`CARGO_HOME` 與 checkout
   改寫成 `/rust`、`/cargo`、`/instanceharbor`（經 `CARGO_ENCODED_RUSTFLAGS`，路徑含空白也可以；它取代 `.cargo/config.toml`
   的 rustflags，所以同時帶上 `+crt-static`）。PDB 內的原始檔路徑也因此改寫，`cdb` 的 `.lines` 仍顯示檔名與行號。
 - GUI 執行檔原本也含 checkout 的 `src-tauri` 絕對路徑：專案用 cargo 直接建置、沒有開 Tauri 的 `custom-protocol` feature，
   Tauri 因此把每次建置都當成 `tauri dev`，`generate_context!` 寫入設定檔所在資料夾。`Cargo.toml` 現在開啟這個 feature。
   本專案沒有 `devUrl`，所以頁面網址（`http://tauri.localhost`）、CSP 與內嵌的前端資產都與之前相同。
-- `verify-no-local-paths.ps1 -Binary <exe>...` 以 ASCII 與 UTF-16LE 搜尋執行檔，找到含磁碟代號的 `.pdb` 路徑、checkout
+- `packaging/verify-no-local-paths.ps1 -Binary <exe>...` 以 ASCII 與 UTF-16LE 搜尋執行檔，找到含磁碟代號的 `.pdb` 路徑、checkout
   （repository、主 checkout 或任何 worktree）、使用者資料夾、`CARGO_HOME`、`RUSTUP_HOME` 或 rustc sysroot 時失敗。
-  `build-product.ps1 -Release`／`-Development` 建置後與 `pack-windows.ps1` 封裝前都會執行；`pack-windows.ps1` 也拒絕任何 `.pdb`。
+  `packaging/build-product.ps1 -Release`／`-Development` 建置後與 `packaging/pack-windows.ps1` 封裝前都會執行；`packaging/pack-windows.ps1` 也拒絕任何 `.pdb`。
 - 已發布的舊版（1.1.0 及更早）沒有保存 PDB，只能讀到 Windows 模組的函式名稱。
 
 ### 稽核結果
@@ -183,7 +214,7 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 | `page-preferences-read`、`page-window-presented` | `page` | 收到外觀設定、`present_window` 回傳 |
 | `page-first-list-read`、`page-first-list-rendered`、`page-first-list-painted` | `page` | 收到第一份實例清單、DOM 更新、第一次繪製 |
 
-量測方式：建置開發版（`./build-product.ps1 -Development`，`dev-channel` 繼承 release 最佳化），再執行
+量測方式：建置開發版（`./packaging/build-product.ps1 -Development`，`dev-channel` 繼承 release 最佳化），再執行
 
 ```powershell
 ./tests/measure-gui-cold-start.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-cold-start') -Runs 10
@@ -270,7 +301,7 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 GUI 是 WebView2 裡的網頁。開發版 GUI 啟動時若帶有 WebView2 的除錯參數，就能用 Chrome DevTools Protocol（CDP）連進去，
 讀取 DOM、無障礙樹與 CSS，截圖，或在頁面執行檢查程式。不需要改程式碼，也不需要重新建置。
 
-1. 建置開發版（`./build-product.ps1 -Development`），並準備隔離的 Agent 工作區。
+1. 建置開發版（`./packaging/build-product.ps1 -Development`），並準備隔離的 Agent 工作區。
 2. 以環境變數啟動 GUI，除錯 Port 只綁定本機：
 
    ```powershell
@@ -817,11 +848,11 @@ RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。1.0.0 起執行
 ### Windows x64 發行版封裝（1.0.0-rc2 與正式版）
 
 完整步驟（取得 ConPTY 套件、建置、授權通知、ZIP 與 Setup）見 [docs/windows-distribution-licenses.md](windows-distribution-licenses.md) 的「Build a distribution」。
-從 repository 根目錄以 PowerShell 7 執行 `./build-product.ps1 -Release -ConsoleRuntimeSource <ConPTY .nupkg>`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
-用 `pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
+從 repository 根目錄以 PowerShell 7 執行 `./packaging/build-product.ps1 -Release -ConsoleRuntimeSource <ConPTY .nupkg>`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
+用 `packaging/pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
 `1.0.0-rc2` 與正式版號（例如 `1.0.0`）是發行版：必須附授權通知與啟動說明；正式版另必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
-`build-product.ps1 -Release` 沒有 `-ConsoleRuntimeSource`（或環境變數 `IH_CONSOLE_RUNTIME_SOURCE`）時會失敗，詳見「伺服器後台」。
-接著用 `pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
+`packaging/build-product.ps1 -Release` 沒有 `-ConsoleRuntimeSource`（或環境變數 `IH_CONSOLE_RUNTIME_SOURCE`）時會失敗，詳見「伺服器後台」。
+接著用 `packaging/pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
 Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
 Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本的 `msedgewebview2.exe` 都要存在，與程式啟動時找到的相同）；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」的 x64 版，
 可直接開啟 Microsoft 下載，並在寫入前停止（靜默安裝回傳退出碼 3）。InstanceHarbor 每次啟動也做同樣檢查，
@@ -848,7 +879,7 @@ Setup 的對話框用同一條系統語言規則。
   等待頁只提供「開啟 InstanceHarbor」與「取消」；取消時退出碼為 4，不改動已安裝的檔案。標記檔釋放後自動進入安裝頁。
 - 靜默安裝（`/S`）不等待伺服器：有伺服器沒有停止或狀態讀不到時立即失敗，退出碼為 5，不改動已安裝的檔案。
   伺服器都已停止時自動關閉 GUI 與 Manager，最多等 30 秒標記檔釋放，仍被占用時退出碼為 2。
-- 等待頁各狀態的文字對應（`windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
+- 等待頁各狀態的文字對應（`packaging/windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
 Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
 Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
@@ -859,11 +890,11 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 解除安裝前先從 GUI 正常停止各台伺服器，再從系統匣選「結束」，一併關閉 GUI 與該工作區的 Manager。
 也可以改用該安裝的 `ihctl.exe WORKSPACE manager-exit`。
 卸載會保留工作區與日誌。要測試回退可先備份工作區，解除安裝 Setup，再用已驗證的舊 ZIP 開啟同一工作區。
-便攜安裝可用 `install-windows.ps1 -Action Rollback` 切回已安裝的前一版，包含 GUI 檔名仍為 `instanceharbor-v2.exe` 的候選。保留工作區中的新舊設定，重開後先核對再啟動伺服器。
+便攜安裝可用 `packaging/install-windows.ps1 -Action Rollback` 切回已安裝的前一版，包含 GUI 檔名仍為 `instanceharbor-v2.exe` 的候選。保留工作區中的新舊設定，重開後先核對再啟動伺服器。
 
 ### 同時使用正式版與開發版
 
-在 repository 根目錄執行 `npm run dev` 或 `./launch-development.ps1`。第一次會建置開發版，
+在 repository 根目錄執行 `npm run dev` 或 `./scripts/launch-development.ps1`。第一次會建置開發版，
 並依 checkout 路徑建立專用工作區。後續會使用同一工作區。從 Windows「開始」的 Setup 捷徑啟動時，
 會使用正式版與正式預設工作區。兩版可同時開啟，再次啟動同一版時會定位該版原視窗。
 
@@ -892,9 +923,9 @@ Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已
 需要重新建置開發版，或手動指定另一個開發工作區時，可使用下列入口。
 
 ```powershell
-./launch-development.ps1 -Build
+./scripts/launch-development.ps1 -Build
 $devWorkspace = Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/my-feature'
-./launch-development.ps1 -Workspace $devWorkspace -Initialize
+./scripts/launch-development.ps1 -Workspace $devWorkspace -Initialize
 ```
 
 開發工作區必須是 `%LOCALAPPDATA%/InstanceHarbor Dev/workspaces` 的直接子目錄，
@@ -923,14 +954,14 @@ cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features de
 | `src/assets/instanceharbor-brand.png` | `src/assets/instanceharbor-brand-dev.png` | 側欄品牌圖 |
 
 建置時自動選用，不需要手動切換：`build.rs` 依 `development-channel` feature 選 ICO（`src-tauri/src/app_icon.rs`），
-`build-product.ps1 -Development` 以 Vite mode `development-channel` 建置前端，`vite.config.ts` 據此選側欄圖。
+`packaging/build-product.ps1 -Development` 以 Vite mode `development-channel` 建置前端，`vite.config.ts` 據此選側欄圖。
 系統匣圖示讀取執行檔資源，所以跟著執行檔切換。
 
 更換藍色圖示後，在 repository 根目錄重新產生紅色版並一起提交（只用 Python 標準函式庫）：
 
 ```powershell
-python generate-development-icons.py
-python generate-development-icons.py --check
+python packaging/generate-development-icons.py
+python packaging/generate-development-icons.py --check
 ```
 
 `--check` 確認紅色檔只改了色相、尺寸與目錄欄位相同，並確認藍色版仍是藍色、紅色版是紅色。
@@ -939,15 +970,15 @@ python generate-development-icons.py --check
 防止正式版誤用紅色圖示的檢查：
 
 - `cargo test` 的 `app_icon` 測試：正式版設定必須嵌入 `icons/icon.ico`，開發版必須嵌入 `icons/icon-dev.ico`，兩檔尺寸相同但內容不同。
-- `build-product.ps1` 建置後以 `verify-app-icon.ps1` 讀出 `InstanceHarbor.exe`（或 `InstanceHarborDev.exe`）與 `ihctl.exe` 內嵌的圖示，
+- `packaging/build-product.ps1` 建置後以 `packaging/verify-app-icon.ps1` 讀出 `InstanceHarbor.exe`（或 `InstanceHarborDev.exe`）與 `ihctl.exe` 內嵌的圖示，
   逐位元組比對該版本應使用的 ICO；並確認前端只含該版本的側欄圖。不符時建置失敗。
 
 讀出執行檔內嵌的圖示並另存為 ICO，再產生紅藍對照圖：
 
 ```powershell
-./verify-app-icon.ps1 -Binary <正式版 exe> -Export $env:TEMP/product.ico
-./verify-app-icon.ps1 -Binary <開發版 exe> -Export $env:TEMP/development.ico
-python generate-development-icons.py --comparison $env:TEMP/icon-comparison.png --product $env:TEMP/product.ico --development $env:TEMP/development.ico
+./packaging/verify-app-icon.ps1 -Binary <正式版 exe> -Export $env:TEMP/product.ico
+./packaging/verify-app-icon.ps1 -Binary <開發版 exe> -Export $env:TEMP/development.ico
+python packaging/generate-development-icons.py --comparison $env:TEMP/icon-comparison.png --product $env:TEMP/product.ico --development $env:TEMP/development.ico
 ```
 
 ### 版本與 commit
@@ -956,10 +987,10 @@ python generate-development-icons.py --comparison $env:TEMP/icon-comparison.png 
 工作目錄有未提交的變更（包括未追蹤的檔案）時加上 `-dirty`，例如 `33dfd35-dirty`。
 沒有 Git 或不在 Git checkout 時，值為 `unknown`，建置不會失敗。
 
-- `build-product.ps1` 讀取 `git rev-parse HEAD` 與 `git status --porcelain`，把結果放進 `IH_BUILD_COMMIT` 傳給 Rust 建置，
+- `packaging/build-product.ps1` 讀取 `git rev-parse HEAD` 與 `git status --porcelain`，把結果放進 `IH_BUILD_COMMIT` 傳給 Rust 建置，
   建置後確認 `ihctl --version` 報告同一個值，並寫入 `build-manifest.json` 的 `commit`。
 - 直接執行 `cargo build` 時，`src-tauri/build.rs` 自己向 Git 查詢。它在 commit、切換分支或暫存變更後重新查詢，
-  但只修改檔案、沒有暫存時不會重新查詢，所以 `-dirty` 可能沒有更新。需要準確的值時使用 `build-product.ps1`。
+  但只修改檔案、沒有暫存時不會重新查詢，所以 `-dirty` 可能沒有更新。需要準確的值時使用 `packaging/build-product.ps1`。
 - 手動設定 `IH_BUILD_COMMIT` 時，值必須是七位小寫十六進位（可加 `-dirty`）或 `unknown`，否則 Rust 建置失敗。
 
 `ihctl --version` 輸出 `InstanceHarbor CLI 1.0.0 (33dfd35)`，開發版為 `InstanceHarbor Dev CLI 1.0.0 (33dfd35)`。
@@ -1072,7 +1103,7 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 `ihctl WORKSPACE recovery-key-status` 可讀取本機 DPAPI 金鑰狀態，
 `ihctl WORKSPACE recovery-key-rotate GENERATION` 依目前世代輪替金鑰，
 首次建立傳入 `none`。桌面 PowerShell 7 可使用
-`manage-recovery-backup.ps1` 透過安全提示輸入密碼，執行匯出、核對或回復金鑰。
+`scripts/manage-recovery-backup.ps1` 透過安全提示輸入密碼，執行匯出、核對或回復金鑰。
 備份只供同一個絕對工作區路徑復原，回復前須核對公開金鑰與世代。
 應用程式設定的「復原金鑰」可操作同一套保管功能。
 已釘住復原金鑰的工作階段可從原生介面或 PowerShell 接管。流程見可信 Host 接管。
@@ -1085,12 +1116,12 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
   用 `ihctl WORKSPACE host-recover NAME RUN`（或設定頁「執行中工作階段」）以金鑰簽名的 `RecoverChallenge`／`RecoverProof` 接手。
   正常停止再啟動後，這台伺服器就不再依賴金鑰。
 - 設定頁的「復原金鑰」分頁只在工作區已有金鑰時顯示，並說明此功能即將移除。沒有金鑰的工作區看不到這個分頁，
-  `recovery-key-*` 指令與 `manage-recovery-backup.ps1` 仍可使用，第 2 階段才移除。
+  `recovery-key-*` 指令與 `scripts/manage-recovery-backup.ps1` 仍可使用，第 2 階段才移除。
 - 金鑰檔（工作區根目錄的 `recovery-key.dpapi.json`）與匯出的 `.ihrecovery` 備份檔不會被自動刪除。
   確認沒有仍在執行、已釘住的 run（`runs/<實例>/recovery-pin.json` 所在的實例仍在執行）後，可以手動刪除；
   刪除金鑰檔後設定頁不再顯示「復原金鑰」分頁。
 
-`verify-recovery-pin.ps1` 用測試替身（`tests/controlled-server.rs`）驗證這些行為：無金鑰工作區、有金鑰時新啟動的 run 沒有 pin，
+`tests/acceptance/verify-recovery-pin.ps1` 用測試替身（`tests/controlled-server.rs`）驗證這些行為：無金鑰工作區、有金鑰時新啟動的 run 沒有 pin，
 以及搭配 `-LegacyBinaryDirectory`（指向 1.1.0 或更早的建置）時，舊版釘住的 run 仍能由重啟後的 Manager 接管與停止。
 `-Evidence` 必須是新的資料夾。開發版建置只開啟 `InstanceHarbor Dev\workspaces\<名稱>`，所以另以 `-Workspace` 指定新的隔離工作區。
 
@@ -1193,10 +1224,10 @@ Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>
 - 世界時間不在此範圍，維持下次啟動套用。
 方向鍵、Tab 補全等無法讀回的編輯會讓該行維持「非空」直到按 Enter。
 
-**tier 1 runtime 來源**：`console-runtime.json` 固定 Microsoft ConPTY NuGet `1.25.260930003` 的 x64 檔案雜湊與簽署者，
-`native_console.rs`、`pack-windows.ps1`、`install-windows.ps1` 的雜湊由測試核對一致。
-`provision-console-runtime.ps1 -Source <資料夾或本機 .nupkg> -Destination <執行檔資料夾>` 核對 SHA-256、x64 與 Microsoft Authenticode 簽章後複製，不下載任何檔案；
-目的地已有不同內容的同名檔時拒絕覆寫。`build-product.ps1` 以 `-ConsoleRuntimeSource` 呼叫它；開發版缺少來源時只警告（改用 tier 2），`-Release` 會失敗。
+**tier 1 runtime 來源**：`packaging/console-runtime.json` 固定 Microsoft ConPTY NuGet `1.25.260930003` 的 x64 檔案雜湊與簽署者，
+`native_console.rs`、`packaging/pack-windows.ps1`、`packaging/install-windows.ps1` 的雜湊由測試核對一致。
+`packaging/provision-console-runtime.ps1 -Source <資料夾或本機 .nupkg> -Destination <執行檔資料夾>` 核對 SHA-256、x64 與 Microsoft Authenticode 簽章後複製，不下載任何檔案；
+目的地已有不同內容的同名檔時拒絕覆寫。`packaging/build-product.ps1` 以 `-ConsoleRuntimeSource` 呼叫它；開發版缺少來源時只警告（改用 tier 2），`-Release` 會失敗。
 
 **測試各層**：開發版 Host 讀取環境變數 `IH_CONSOLE_TIER_LIMIT=system|window|plain`，跳過較高的層（原因 `ConsoleTierLimited`）。正式版忽略此變數。
 `ihctl WORKSPACE console-plan <實例>` 回傳下次啟動預計的層、跳過原因與是否需要確認。

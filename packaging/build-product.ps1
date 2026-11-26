@@ -7,7 +7,9 @@
 param([switch]$Acceptance,[switch]$Release,[switch]$Development,[string]$ConsoleRuntimeSource=$env:IH_CONSOLE_RUNTIME_SOURCE,[string]$SymbolDirectory=$env:IH_SYMBOL_DIRECTORY)
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
-Push-Location $PSScriptRoot
+# This script lives in packaging/; it builds from the repository root.
+$repositoryRoot=Split-Path -Parent $PSScriptRoot
+Push-Location $repositoryRoot
 try {
     if (@($Release, $Acceptance, $Development).Where({ $_ }).Count -gt 1) {
         throw 'Release, Acceptance and Development are mutually exclusive.'
@@ -18,8 +20,8 @@ try {
     # uncommitted changes, or `unknown` without Git. build.rs checks the format.
     $commit='unknown'
     try{
-        $hash=(& git -C $PSScriptRoot rev-parse HEAD 2>$null|Out-String).Trim()
-        $changes=(& git -C $PSScriptRoot status --porcelain 2>$null|Out-String).Trim()
+        $hash=(& git -C $repositoryRoot rev-parse HEAD 2>$null|Out-String).Trim()
+        $changes=(& git -C $repositoryRoot status --porcelain 2>$null|Out-String).Trim()
         if($hash -cmatch '^[0-9a-f]{40,64}$'){$commit=$hash.Substring(0,7)+$(if($changes){'-dirty'}else{''})}
     }catch{}
     if($commit -eq 'unknown'){Write-Warning '無法從 Git 取得 commit，執行檔會標示為 unknown。'}
@@ -36,12 +38,12 @@ try {
     $cargoArgs=@('build','--offline','--locked','--manifest-path','src-tauri/Cargo.toml')
     if($Development){
         $cargoArgs+=@('--profile','dev-channel','--target','x86_64-pc-windows-msvc','--features','development-channel')
-        $binaryDirectory=Join-Path $PSScriptRoot 'src-tauri/target/x86_64-pc-windows-msvc/dev-channel'
+        $binaryDirectory=Join-Path $repositoryRoot 'src-tauri/target/x86_64-pc-windows-msvc/dev-channel'
     }elseif($Release){
         $cargoArgs+=@('--release','--target','x86_64-pc-windows-msvc')
-        $binaryDirectory=Join-Path $PSScriptRoot 'src-tauri/target/x86_64-pc-windows-msvc/release'
+        $binaryDirectory=Join-Path $repositoryRoot 'src-tauri/target/x86_64-pc-windows-msvc/release'
     }else{
-        $binaryDirectory=Join-Path $PSScriptRoot 'src-tauri/target/debug'
+        $binaryDirectory=Join-Path $repositoryRoot 'src-tauri/target/debug'
     }
     $binaryTarget = if ($Development) { 'InstanceHarborDev' }
         elseif ($Acceptance) { 'instanceharbor-acceptance' }
@@ -59,7 +61,7 @@ try {
         $flags=@('-C','target-feature=+crt-static',
             "--remap-path-prefix=$([IO.Path]::GetFullPath($sysroot))=/rust",
             "--remap-path-prefix=$([IO.Path]::GetFullPath($cargoHome))=/cargo",
-            "--remap-path-prefix=$([IO.Path]::GetFullPath($PSScriptRoot))=/instanceharbor")
+            "--remap-path-prefix=$([IO.Path]::GetFullPath($repositoryRoot))=/instanceharbor")
         $env:CARGO_ENCODED_RUSTFLAGS=$flags -join [char]0x1f
     }
     & cargo @cargoArgs
@@ -85,11 +87,11 @@ try {
     $brandHashes=@(Get-ChildItem -LiteralPath (Join-Path $frontendDirectory 'assets') -Filter '*.png'|ForEach-Object{(Get-FileHash -LiteralPath $_.FullName).Hash})
     if($brandHashes -notcontains (Get-FileHash -LiteralPath $brandFiles[$channel]).Hash){throw "前端未包含 $($brandFiles[$channel]) 的側欄品牌圖。"}
     if($brandHashes -contains (Get-FileHash -LiteralPath $brandFiles[$otherChannel]).Hash){throw "前端誤含 $($brandFiles[$otherChannel]) 的側欄品牌圖。"}
-    $folder=Join-Path $PSScriptRoot $(if($Development){'.evidence/windows-x64-development'}elseif($Release){'.evidence/windows-x64-release'}else{'.evidence/vue-product-20261109'})
+    $folder=Join-Path $repositoryRoot $(if($Development){'.evidence/windows-x64-development'}elseif($Release){'.evidence/windows-x64-release'}else{'.evidence/vue-product-20261109'})
     $binary=$builtBinary
     $cli=$builtCli
     if($Acceptance){
-        $folder=Join-Path $PSScriptRoot 'artifacts/pin-drag-acceptance-20261110/native'
+        $folder=Join-Path $repositoryRoot 'artifacts/pin-drag-acceptance-20261110/native'
         if(Test-Path -LiteralPath $folder){throw "驗收交付目錄已存在，請先保存並指定新的候選路徑：$folder"}
         New-Item -ItemType Directory -Path $folder|Out-Null
         $folder=(Resolve-Path -LiteralPath $folder).Path

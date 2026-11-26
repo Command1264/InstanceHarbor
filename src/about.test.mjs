@@ -33,15 +33,15 @@ test('the About panel opens only the link names the backend accepts', () => {
   assert.deepEqual(accepted, opened)
 })
 
-test('build-product.ps1 passes the commit through the variable build.rs reads', () => {
+test('packaging/build-product.ps1 passes the commit through the variable build.rs reads', () => {
   const variable = read('../src-tauri/src/build_commit.rs').match(/pub const VARIABLE: &str = "([A-Z_]+)";/)[1]
-  const script = read('../build-product.ps1')
-  assert.ok(script.includes(`$env:${variable}=$commit`), 'build-product.ps1 sets the commit variable')
+  const script = read('../packaging/build-product.ps1')
+  assert.ok(script.includes(`$env:${variable}=$commit`), 'packaging/build-product.ps1 sets the commit variable')
   assert.match(script, /--version/, 'the build checks the commit ihctl reports')
 })
 
-test('ihctl --version keeps the prefix launch-development.ps1 matches', () => {
-  assert.match(read('../launch-development.ps1'), /-notlike 'InstanceHarbor Dev CLI \*'/)
+test('ihctl --version keeps the prefix scripts/launch-development.ps1 matches', () => {
+  assert.match(read('../scripts/launch-development.ps1'), /-notlike 'InstanceHarbor Dev CLI \*'/)
   assert.match(read('../src-tauri/src/about.rs'), /format!\("\{title\} CLI \{VERSION\} \(\{COMMIT\}\)"\)/)
 })
 

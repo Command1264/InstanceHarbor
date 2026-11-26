@@ -3,9 +3,9 @@
 Only the hue changes: every pixel keeps its saturation, value and alpha, and the
 ICO keeps every size of the original. Uses the Python standard library only.
 
-    python generate-development-icons.py            # rewrite the red files
-    python generate-development-icons.py --check    # verify the committed files
-    python generate-development-icons.py --comparison out.png [--product a.ico --development b.ico]
+    python packaging/generate-development-icons.py            # rewrite the red files
+    python packaging/generate-development-icons.py --check    # verify the committed files
+    python packaging/generate-development-icons.py --comparison out.png [--product a.ico --development b.ico]
 """
 import argparse
 import colorsys
@@ -15,7 +15,7 @@ import struct
 import sys
 import zlib
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 # (blue product source, red development output)
 PAIRS = (
     (ROOT / "src-tauri/icons/icon.ico", ROOT / "src-tauri/icons/icon-dev.ico"),

@@ -26,8 +26,8 @@ InstallDir "${ROOT}"
 RequestExecutionLevel user
 ShowInstDetails show
 ShowUninstDetails show
-!define MUI_ICON "src-tauri\icons\icon.ico"
-!define MUI_UNICON "src-tauri\icons\icon.ico"
+!define MUI_ICON "..\src-tauri\icons\icon.ico"
+!define MUI_UNICON "..\src-tauri\icons\icon.ico"
 VIProductVersion "${FILE_VERSION}"
 VIAddVersionKey "ProductName" "${APP}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
