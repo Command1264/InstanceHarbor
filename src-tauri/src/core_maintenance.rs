@@ -260,6 +260,10 @@ pub(super) fn move_durable_with_stage(source: &Path, destination: &Path, replace
     let mut attempts = 0;
     while unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
         let error = io::Error::last_os_error();
+        // A shared core is read-only for every one of its names (#62).
+        if replace && error.raw_os_error() == Some(5) && shared_core::read_only(destination) {
+            return shared_core::replace_read_only(source, destination);
+        }
         attempts += 1;
         // ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION.
         if !replace || !matches!(error.raw_os_error(), Some(5 | 32)) || attempts >= 50 {
@@ -928,7 +932,8 @@ fn run_action(
     write_durable(&store.join(PENDING), &intent, false)?;
     let prepare_and_replace = || -> Result<()> {
         let stage = folder.join("next.jar");
-        copy_verified(&source, &stage, &intent.after.sha256)?;
+        // The new core is another name of the shared file when it can be (#62).
+        shared_core::place(root, &source, &intent.after.sha256, &stage)?;
         progress(CoreUpdatePhase::BackingUp);
         copy_verified(
             &target.jar(),
@@ -1391,6 +1396,75 @@ mod tests {
         assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-43.jar")).unwrap(), b"first");
         assert!(!directory.join("velocity-4.3.1-SNAPSHOT-52.jar").exists());
         assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("velocity-4.2.1-SNAPSHOT-43.jar"));
+    }
+
+    // #62: A and B share one stored core and B runs. Updating stopped A only
+    // changes A's name; B keeps reading the old bytes, which nobody can write.
+    #[test]
+    fn a_stopped_instance_updates_while_a_peer_runs_on_the_same_shared_core() {
+        let fixture = Fixture::new();
+        let target = fixture.workspace();
+        let first = profile(b"first", "112");
+        let source = fixture.0.join("first.jar");
+        fs::write(&source, b"first").unwrap();
+        let a_jar = target.jar();
+        fs::remove_file(&a_jar).unwrap();
+        assert_eq!(shared_core::place(&fixture.0, &source, &first.sha256, &a_jar).unwrap(), shared_core::Placement::Linked);
+        let peer = fixture.0.join("instances").join("peer");
+        fs::create_dir(&peer).unwrap();
+        let b_jar = peer.join("server.jar");
+        shared_core::place(&fixture.0, &source, &first.sha256, &b_jar).unwrap();
+        let stored = fixture.0.join("shared-cores").join(format!("{}.jar", first.sha256));
+        assert_eq!(shared_core::names(&stored).unwrap(), 3, "stored once, named by A and B");
+        assert!(shared_core::read_only(&a_jar), "every name of a stored core is read-only");
+        assert_eq!(shared_core::users(&fixture.0, &a_jar, &first.sha256), Some(2));
+        // B runs: its Host holds the core open for reading and removing names only.
+        let running = shared_core::open_for_launch(&b_jar, Some(&first.sha256)).unwrap();
+        assert!(OpenOptions::new().write(true).open(&b_jar).is_err(), "no one writes a running core");
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let second = profile(b"second", "134");
+        install_verified(&fixture.0, "server", "update", &first.sha256, &candidate, &second).unwrap();
+        assert_eq!(fs::read(&a_jar).unwrap(), b"second");
+        assert_eq!(fs::read(&b_jar).unwrap(), b"first", "the running peer keeps its bytes");
+        assert_eq!(shared_core::users(&fixture.0, &a_jar, &second.sha256), Some(1));
+        assert_eq!(shared_core::users(&fixture.0, &b_jar, &first.sha256), Some(1));
+        let backup = target.store().join("update").join("before.jar");
+        assert_eq!(shared_core::names(&backup).unwrap(), 1, "a backup is a separate copy");
+        // A restore names the stored old core again.
+        let args = ["server".into(), "undo".into(), second.sha256.clone(), "update".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(shared_core::users(&fixture.0, &a_jar, &first.sha256), Some(2));
+        drop(running);
+        // A start refuses a shared core whose bytes differ from the registration.
+        assert_eq!(shared_core::open_for_launch(&b_jar, Some(&second.sha256)).unwrap_err(), "SharedCoreDigestMismatch");
+        assert!(shared_core::unused(&fixture.0).unwrap().iter().any(|core| core.path.ends_with(format!("{}.jar", second.sha256))),
+            "the core that no instance names any more can be cleared");
+        assert_eq!(shared_core::remove_unused(&fixture.0, &first.sha256).unwrap_err(), "SharedCoreInUse");
+        shared_core::remove_unused(&fixture.0, &second.sha256).unwrap();
+        assert!(shared_core::stored(&fixture.0, &second.sha256).unwrap().is_none());
+    }
+
+    // #62 with #112: an official name follows the update and stays a name of
+    // the stored core; the old name of the shared file is simply removed.
+    #[test]
+    fn a_renamed_update_names_the_new_shared_core() {
+        let fixture = Fixture::new();
+        let target = official_paper(&fixture, "paper-26.2-112.jar");
+        let first = profile(b"first", "112");
+        let source = fixture.0.join("first.jar");
+        fs::write(&source, b"first").unwrap();
+        let old = target.directory.join("paper-26.2-112.jar");
+        fs::remove_file(&old).unwrap();
+        shared_core::place(&fixture.0, &source, &first.sha256, &old).unwrap();
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let second = profile(b"second", "134");
+        install_verified(&fixture.0, "server", "update", &first.sha256, &candidate, &second).unwrap();
+        let new = target.directory.join("paper-26.2-134.jar");
+        assert!(!old.exists());
+        assert_eq!(shared_core::users(&fixture.0, &new, &second.sha256), Some(1));
+        assert_eq!(shared_core::names(&fixture.0.join("shared-cores").join(format!("{}.jar", first.sha256))).unwrap(), 1);
     }
 
     // #41: an unverified Purpur can be updated once its build is known by the

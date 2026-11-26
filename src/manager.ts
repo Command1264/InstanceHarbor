@@ -24,7 +24,7 @@ export interface Instance {
   stateIssue?: StateIssue
   run?: { id: string; java: { pid: number }; host: { pid: number } }
 }
-export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean; offline?: boolean }
+export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean; offline?: boolean; /** #62: instances naming the same shared core file. */ sharedUsers?: number }
 export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity; managementDiscovered?: boolean }
 export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }

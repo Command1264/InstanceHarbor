@@ -325,9 +325,13 @@ pub(super) fn console_appearance(root: &Path, name: &str, run: &str) -> Result<(
     Ok((title, preferences.language))
 }
 
-pub(super) fn instance_metadata(row: &Instance, path: &Path) -> Value {
+pub(super) fn instance_metadata(root: &Path, row: &Instance, path: &Path) -> Value {
     let jar = core_artifact::jar(path, row);
-    let core = core_metadata(row, &jar, |sha| core_maintenance::trusted_profile(row, sha));
+    let mut core = core_metadata(row, &jar, |sha| core_maintenance::trusted_profile(row, sha));
+    // How many instances use the same shared core file (#62), counted by its names.
+    if let Some(users) = row.core_profile.as_ref().and_then(|profile| shared_core::users(root, &jar, &profile.sha256)) {
+        core["sharedUsers"] = json!(users);
+    }
     json!({"name":row.name,"java":path_format::display(&row.java),"port":row.port,"path":path_format::display(&path),"core":core,
         "managementDiscovered":row.management_discovered})
 }

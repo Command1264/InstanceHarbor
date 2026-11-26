@@ -47,6 +47,8 @@ mod auto_restart;
 mod core_source;
 #[path = "core_prefetch.rs"]
 mod core_prefetch;
+#[path = "shared_core.rs"]
+mod shared_core;
 #[path = "agent_rebuild.rs"]
 mod agent_rebuild;
 #[path = "core_identity.rs"]
@@ -1327,10 +1329,10 @@ fn provision(root: &Path, arguments: &[String]) -> Result<Value> {
         let stage = root.join("staging").join(request);
         fs::create_dir(&stage).map_err(fail)?;
         let staged_core = stage.join("server.jar");
-        fs::copy(core, &staged_core).map_err(fail)?;
-        if content_revision::file_revision(&staged_core)? != profile.sha256 {
-            return Err("CoreArtifactChanged".into());
-        }
+        // A new instance names the shared core of its SHA-256 (#62).
+        shared_core::place(root, &core, &profile.sha256, &staged_core).map_err(|error| {
+            if error == "CoreArtifactHashMismatch" { "CoreArtifactChanged".to_owned() } else { error }
+        })?;
         if let Some(mojang) = mojang {
             fs::create_dir(stage.join("cache")).map_err(fail)?;
             let output = stage.join("cache").join(format!("mojang_{}.jar", profile.minecraft));
@@ -1856,63 +1858,6 @@ fn mark_host_phase(path: &Path) {
     }
 }
 
-fn verified_launch_jar(root: &Path, config: &Instance, local: &Path) -> Result<(PathBuf, Option<File>)> {
-    use std::os::windows::fs::OpenOptionsExt;
-    let local = core_artifact::jar(local, config);
-    let _requested = match fs::symlink_metadata(root.join("shared-core.enabled")) {
-        Ok(_) => { no_redirect(&root.join("shared-core.enabled"))?; true }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((local, None)),
-        Err(error) => return Err(fail(error)),
-    };
-    let profile = core_maintenance::trusted_profile(config, content_revision::file_revision(&local)?)
-        .ok_or("SharedCoreUnknown")?;
-    if !matches!(profile.family.as_str(), "PAPER" | "FOLIA") {
-        return Err("SharedCoreUnsupported".into());
-    }
-    let home = root.join("shared-core");
-    if !home.is_dir() {
-        match fs::create_dir(&home) {
-            Ok(()) => (),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
-            Err(error) => return Err(fail(error)),
-        }
-    }
-    let home = child_directory(root, "shared-core")?;
-    let jar = home.join(format!("{}.jar", profile.sha256));
-    if !jar.exists() {
-        let _publisher = command_lock(root, "shared-core.lock", false)?;
-        if !jar.exists() {
-            let stage = home.join(format!("stage-{}-{}.tmp", std::process::id(), clock()));
-            let copied = (|| {
-                let mut out = File::create_new(&stage).map_err(fail)?;
-                io::copy(&mut File::open(&local).map_err(fail)?, &mut out).map_err(fail)?;
-                out.sync_all().map_err(fail)?;
-                drop(out);
-                if content_revision::file_revision(&stage)? != profile.sha256 {
-                    return Err("CoreArtifactChanged".into());
-                }
-                fs::rename(&stage, &jar).map_err(fail)
-            })();
-            if copied.is_err() && stage.is_file() {
-                fs::remove_file(stage).map_err(fail)?;
-            }
-            copied?;
-        }
-    }
-    no_redirect(&jar)?;
-    // Deny writes and removal while Java is reading this published revision.
-    let guard = OpenOptions::new().read(true).share_mode(1).open(&jar).map_err(fail)?;
-    if content_revision::file_revision(&jar)? != profile.sha256 {
-        return Err("SharedCoreDigestMismatch".into());
-    }
-    if let Some(expected) = &config.core_profile {
-        if expected.sha256 != profile.sha256 {
-            return Err("CoreArtifactChanged".into());
-        }
-    }
-    Ok((jar, Some(guard)))
-}
-
 fn claim_runtime_directory(path: &Path) -> Result<std::os::windows::io::OwnedHandle> {
     let identity = path.to_string_lossy().to_lowercase();
     let digest = content_revision::revision(identity.as_bytes())?;
@@ -1943,11 +1888,10 @@ fn host(root: &Path, config: &Instance, run_id: &str) -> Result<Value> {
     if let Some(profile) = velocity {
         validate_velocity_launch(&path, profile, config)?;
     }
-    let (jar, _artifact_guard) = if velocity.is_some() {
-        (core_artifact::jar(&path, config), None)
-    } else {
-        verified_launch_jar(root, config, &path)?
-    };
+    // Java reads the core while names may still be removed, for example when
+    // a stopped instance that shares this core is updated (#62).
+    let jar = core_artifact::jar(&path, config);
+    let _artifact_guard = shared_core::open_for_launch(&jar, config.core_profile.as_ref().map(|profile| profile.sha256.as_str()))?;
     let stop_command = if velocity.is_some() { "shutdown" } else { "stop" };
     let mut first_plan = world_live::first_ready::pending(&path, config)?;
     let mut queued_world = match world_live::queued::has_queued(root, &config.name, run_id) {
