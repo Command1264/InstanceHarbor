@@ -224,18 +224,6 @@ pub(super) fn observing(root: &Path) -> bool {
         if process_image(peer.pid).and_then(|image| image.canonicalize().ok()).as_ref() == Some(&expected))
 }
 
-pub(super) fn initial_host_manager(root: &Path) -> Result<Identity> {
-    let expected = executable()?;
-    if published_manager(root)?.is_none() {
-        client(root, "manager-connect", &[])?;
-    }
-    let peer = published_manager(root)?.ok_or("ManagerUnavailable")?;
-    if process_image(peer.pid).and_then(|image| image.canonicalize().ok()) != Some(expected) {
-        return Err("PeerMismatch".into());
-    }
-    Ok(peer)
-}
-
 fn executable() -> Result<PathBuf> {
     let current = std::env::current_exe().map_err(fail)?;
     current
