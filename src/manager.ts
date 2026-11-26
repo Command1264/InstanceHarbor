@@ -147,6 +147,7 @@ const actionMessageIds: Record<string, MessageId> = {
   'remove-management': 'manager.action.removeManagement',
   'delete-server': 'manager.action.deleteServer',
   adopt: 'manager.action.adopt',
+  'settings-profile-apply': 'manager.action.settingsProfileApply',
 }
 export function actionName(action: string) { return Object.hasOwn(actionMessageIds, action) ? tr(actionMessageIds[action]) : action }
 export function canStop(row?: Instance) { return !!row?.run && ['Listening', 'Starting'].includes(row.state) }
@@ -266,6 +267,14 @@ export function errorText(error: unknown) {
   if (raw.includes('AutoJavaUnavailable')) return tr('manager.error.autoJavaUnavailable')
   if (raw.includes('GlobalJavaConflict')) return tr('manager.error.globalJavaConflict')
   if (raw.includes('CreationDefaultsConflict')) return tr('manager.error.creationDefaultsConflict')
+  if (raw.includes('SettingsProfileNameTaken')) return tr('manager.error.settingsProfileNameTaken')
+  if (raw.includes('InvalidSettingsProfileName')) return tr('manager.error.invalidSettingsProfileName')
+  if (raw.includes('InvalidSettingsProfileJava')) return tr('manager.error.invalidSettingsProfileJava')
+  if (raw.includes('InvalidSettingsProfileField')) return tr('manager.error.invalidSettingsProfileField', { field: raw.split('InvalidSettingsProfileField:')[1]?.trim().split(/\s/)[0] ?? '' })
+  if (raw.includes('SettingsProfileNotFound')) return tr('manager.error.settingsProfileNotFound')
+  if (raw.includes('TooManySettingsProfiles')) return tr('manager.error.tooManySettingsProfiles')
+  if (raw.includes('SettingsProfilePreviewChanged')) return tr('manager.error.settingsProfilePreviewChanged')
+  if (raw.includes('InvalidSettingsProfiles: settings-profiles.json')) return tr('manager.error.settingsProfilesInvalid')
   if (raw.includes('ServerGroupNameTaken')) return tr('manager.error.serverGroupNameTaken')
   if (raw.includes('InvalidServerGroupName')) return tr('manager.error.invalidServerGroupName')
   if (raw.includes('ServerGroupNotFound')) return tr('manager.error.serverGroupNotFound')
