@@ -1127,11 +1127,14 @@ mod tests {
     use super::*;
 
     struct Fixture(PathBuf);
+    /// Tests run in parallel and may read the same clock value.
+    static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     impl Fixture {
         fn new() -> Self {
             let temporary = std::env::temp_dir().canonicalize().unwrap();
-            let path = temporary.join(format!("ih-core-test-{}-{}", std::process::id(), clock()));
+            let next = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = temporary.join(format!("ih-core-test-{}-{}-{next}", std::process::id(), clock()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }
