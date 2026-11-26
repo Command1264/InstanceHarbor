@@ -68,7 +68,8 @@ function Get-PdbKey([string]$Path) {
 function Save-Slot([string]$Source, [string]$Slot) {
     $target = Join-Path $Slot (Split-Path -Leaf $Source)
     $hash = (Get-FileHash -LiteralPath $Source -Algorithm SHA256).Hash
-    if (Test-Path -LiteralPath $target) {
+    $added = !(Test-Path -LiteralPath $target)
+    if (!$added) {
         if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $hash) {
             throw "A different file already uses this symbol slot: $target"
         }
@@ -77,7 +78,7 @@ function Save-Slot([string]$Source, [string]$Slot) {
         Copy-Item -LiteralPath $Source -Destination $target
         if ((Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -ne $hash) { throw "Copy changed the file: $target" }
     }
-    [pscustomobject]@{ path = $target; sha256 = $hash }
+    [pscustomobject]@{ path = $target; sha256 = $hash; added = $added }
 }
 
 $repository = Get-FullPath (& git -C $PSScriptRoot rev-parse --show-toplevel | Out-String).Trim()
@@ -90,6 +91,8 @@ if (!$Destination) {
     $Destination = Join-Path (Split-Path -Parent $mainCheckout) 'artifacts/symbols'
 }
 $Destination = Get-FullPath $Destination
+# `-File` passes "a,b" as one string.
+$Names = @($Names | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 foreach ($folder in @($repository, $mainCheckout) + $worktrees) {
     if (Test-Inside $Destination $folder) {
         throw "PDBs must stay outside the repository and its worktrees: $Destination"
@@ -103,10 +106,12 @@ $saved = foreach ($name in $Names) {
     $pdb = Join-Path $BinaryDirectory $key.pdbName
     if (!(Test-Path -LiteralPath $pdb)) { throw "Missing PDB for ${name}: $pdb" }
     if ([IO.Path]::IsPathRooted($key.pdbPath)) {
-        throw "$name.exe records the absolute PDB path; build with /PDBALTPATH:%_PDB% (src-tauri/build.rs)."
+        throw "$name.exe records the absolute PDB path $($key.pdbPath); link with /PDBALTPATH:%_PDB%."
     }
     $image = Save-Slot $exe (Join-Path $Destination "$name.exe/$($key.image)")
     $symbols = Save-Slot $pdb (Join-Path $Destination "$($key.pdbName)/$($key.pdb)")
+    # A build saved before keeps its first index line.
+    if (!$image.added -and !$symbols.added) { continue }
     [pscustomobject]@{
         version = $version; commit = $Commit; binary = "$name.exe"
         imageSha256 = $image.sha256; pdbSha256 = $symbols.sha256; pdbKey = $key.pdb
