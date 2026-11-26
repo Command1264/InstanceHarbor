@@ -57,15 +57,24 @@ fn notepad() -> Result<PathBuf, String> {
     Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..length])).join("notepad.exe"))
 }
 
+fn browse(url: &str) -> Result<(), String> {
+    let (verb, target) = (wide("open"), wide(url));
+    let result = unsafe {
+        ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
+    };
+    // ShellExecuteW reports success with a value greater than 32.
+    if result > 32 { Ok(()) } else { Err(format!("AboutLinkOpenFailed:{result}")) }
+}
+
+/// Opens the GitHub page of the release `tag` (#65); the page sends the tag only.
+pub fn open_release(tag: &str) -> Result<(), String> {
+    browse(&instanceharbor::app_version::release_page(tag).ok_or("UpdateReleaseTagInvalid")?)
+}
+
 pub fn open(name: &str) -> Result<(), String> {
     let link = Link::parse(name).ok_or("AboutLinkUnknown")?;
     if let Some(url) = link.url() {
-        let (verb, target) = (wide("open"), wide(url));
-        let result = unsafe {
-            ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), target.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
-        };
-        // ShellExecuteW reports success with a value greater than 32.
-        return if result > 32 { Ok(()) } else { Err(format!("AboutLinkOpenFailed:{result}")) };
+        return browse(url);
     }
     let file = link.file().and_then(notice_file).ok_or("AboutNoticeMissing")?;
     Command::new(notepad()?).arg(file).spawn().map(drop).map_err(|error| format!("AboutNoticeOpenFailed:{error}"))

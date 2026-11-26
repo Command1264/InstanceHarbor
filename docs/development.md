@@ -886,6 +886,40 @@ GitHub 按鈕用預設瀏覽器開啟固定的 `https://github.com/Command1264/I
 授權按鈕用記事本開啟執行檔旁的 `LICENSE` 與 `THIRD-PARTY-NOTICES.txt`。開發版與本機建置沒有這兩個檔案，按鈕會停用。
 GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 
+### 應用程式更新（檢查與通知）
+
+「應用程式設定 → 應用程式更新」檢查 GitHub Releases 是否有比目前更新的 InstanceHarbor（#65）。這一版只檢查與通知，不下載也不安裝。
+
+- **更新通道**：「正式版」（預設）只看正式版；「預發行版（包含正式版）」也看預發行版。版號支援預發行字尾，
+  依 SemVer 排序，字尾中的數字以數值比較，所以 `1.0.0-rc2` < `1.0.0-rc10` < `1.0.0`、`1.1.0-rc.1` < `1.1.0`
+  （`src-tauri/src/app_version.rs`）。標為正式版但版號有預發行字尾的 Release 也不會出現在正式版通道。
+- **不建議降級**：只提示比目前版本新的版本。從預發行通道切回正式版、目前版本比最新正式版新時，不提示任何更新。
+- **查詢**：只送一個 `GET https://api.github.com/repos/Command1264/InstanceHarbor/releases?per_page=10`，
+  經 Windows 內建的 `curl.exe`（與核心查詢相同的 `core_source::fetch_status`：不讀使用者的 curl 設定、只允許 HTTPS、
+  連線 4 秒、總計 8 秒、回應最多 4 MiB、不重試）。User-Agent 為 `InstanceHarbor/<版本>`，不附帶使用者或工作區資料。
+  略過草稿與不是版號的 tag。
+- **自動檢查**：預設開啟，GUI 啟動時檢查，24 小時內最多一次（以上次開始檢查的時間計算；系統時間被調回時視為到期）。
+  可在設定頁關閉，關閉後「立即檢查」仍可用。Manager 與 Host 不檢查。自動檢查安靜執行，不顯示進度。
+- **失敗**：沒有網路、逾時、GitHub 限制次數（403／429）或回應無法讀取時不跳出視窗，也不阻擋其他操作；
+  只在「應用程式更新」與「關於」的「上次檢查」下顯示失敗原因。上次成功的結果保留；檢查失敗時不會顯示「已是最新版本」。
+- **通知**：「應用程式更新」與「關於」顯示「有新版本 X」（預發行版為「有新的預發行版 X」）和「開啟發行頁面」按鈕；
+  側欄的產品名稱下方顯示「新版本 X」，按下後開啟「應用程式更新」，不擋任何操作。
+  「開啟發行頁面」只把 tag 傳給 `open_update_release`，由後端核對版號格式後組成
+  `https://github.com/Command1264/InstanceHarbor/releases/tag/<tag>`，頁面不傳送網址。
+- **選擇檔案**：依「平台 × 架構 × 安裝方式」選 Release asset。平台與架構目前只有 `windows-x64`
+  （`app_update.rs` 的 `PLATFORMS` 對照表，#66 增加其他平台時只擴充這張表）。執行檔旁有安裝標記檔
+  `instanceharbor.install` 時是安裝版，選 `InstanceHarbor-<版本>-windows-x64-setup.exe`；沒有時是便攜版，選
+  `InstanceHarbor-<版本>-windows-x64.zip`。檔名必須完全相同，下載網址必須是
+  `https://github.com/Command1264/InstanceHarbor/releases/download/<tag>/<檔名>`，並且有 `sha256:` 開頭的 `digest`。
+  沒有這個檔案時顯示「此版本尚未提供適用於 windows-x64 的檔案」，不改用其他架構的檔案；檔案在但網址或 SHA-256 不符時顯示不提供。
+- **儲存**：設定與上次結果寫在工作區的 `app-update.json`（以 `app-update.lock` 序列化讀改寫），不放進 `preferences.json`，
+  所以回退到不認識這些欄位的舊版仍能讀取外觀設定。檔案讀不到或不是 JSON 時視為預設值。
+  上次讀到的 Release 清單也存在這裡，所以重開 GUI 或切換通道不必重新查詢。
+- **IPC**：`app-update-status`、`app-update-check auto|manual`（`auto` 只在到期時查詢）、`app-update-settings <stable|prerelease> <true|false>`。
+
+開發版可用 `IH_DEV_UPDATE_RELEASES=<JSON 檔>` 改從本機檔案讀取 Release 清單（格式同 GitHub API 回應），用來驗收而不連線 GitHub。
+這個環境變數只在 `development-channel` feature 編譯，正式版沒有這段程式。
+
 ### 儲存位置
 
 `%LOCALAPPDATA%` 下，正式版使用 `InstanceHarbor`，開發版使用 `InstanceHarbor Dev`（下表以 `<應用程式資料夾>` 表示）。

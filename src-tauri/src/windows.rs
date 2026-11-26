@@ -15,6 +15,8 @@ pub use core_maintenance::CoreUpdatePhase;
 mod compatibility_probe;
 #[path = "prepare.rs"]
 mod prepare;
+#[path = "app_update.rs"]
+mod app_update;
 #[path = "cache_cleanup.rs"]
 mod cache_cleanup;
 pub use cache_cleanup::clear_scheduled_webview;
@@ -2619,6 +2621,9 @@ fn dispatch_with_progress(
         return result;
     }
     if let Some(result) = creation_defaults::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = app_update::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = cache_cleanup::dispatch(&root, verb, args) {

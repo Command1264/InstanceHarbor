@@ -6,6 +6,7 @@ pub use windows::{
     gui_singleton, ConsoleRequest, ConsoleViewer, CoreUpdatePhase, CreationPhase,
 };
 pub mod about;
+pub mod app_version;
 pub mod app_icon;
 pub mod build_commit;
 pub mod diagnostics;
