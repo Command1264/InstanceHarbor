@@ -695,6 +695,24 @@ function confirmRoute(){
   if(pendingRoute.value)navigate(pendingRoute.value)
   pendingRoute.value=null
 }
+// The default parent folder from the app settings; the dialog starts with the last known value.
+const creationParent=ref('instances')
+let creationParentEpoch=0
+async function fillCreationParent(){
+  const epoch=++creationParentEpoch
+  const shown=JSON.stringify(draft)
+  try{
+    const saved=await manage<{parent:string|null}>(['creation-defaults'],'background')
+    creationParent.value=saved.parent?createPath(saved.parent):'instances'
+  }catch(failure){
+    console.warn('Could not read the default parent folder',errorText(failure))
+    return
+  }
+  // Keep anything the user already typed in this dialog.
+  if(epoch!==creationParentEpoch||modal.value!=='create'||JSON.stringify(draft)!==shown||shown!==provisionBaseline.value)return
+  draft.parent=creationParent.value
+  provisionBaseline.value=JSON.stringify(draft)
+}
 function open(next:Mode,item?:{name:string;run?:string}){
   logsEpoch++
   modal.value=next
@@ -705,8 +723,9 @@ function open(next:Mode,item?:{name:string;run?:string}){
   logs.value=undefined
   logsError.value=''
   logsMessage.value=''
-  if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:'instances',port:12010,core:'',source:'',version:'',testAdministrators:'default'})}
+  if(next==='create'){createNameChecked.value=false;cancelCreationPreview();Object.assign(draft,{name:'',parent:creationParent.value,port:12010,core:'',source:'',version:'',testAdministrators:'default'})}
   provisionBaseline.value=JSON.stringify(draft)
+  if(next==='create')void fillCreationParent()
   if(next==='remove'){removeChoice.value='retain';removeConfirmName.value=''}
   void nextTick(()=>{dialog.value?.showModal();cancelButton.value?.focus()})
   if(next==='logs'&&item){

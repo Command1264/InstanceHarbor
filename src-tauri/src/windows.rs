@@ -19,6 +19,8 @@ mod cache_cleanup;
 pub use cache_cleanup::clear_scheduled_webview;
 #[path = "creation.rs"]
 mod creation;
+#[path = "creation_defaults.rs"]
+mod creation_defaults;
 pub use creation::CreationPhase;
 #[path = "prepare_diagnostics.rs"]
 mod prepare_diagnostics;
@@ -1532,8 +1534,6 @@ struct StartPlan {
     config: Instance,
     executable: PathBuf,
     yaml_preflight: Option<Value>,
-    recovery_lock: File,
-    recovery_pin: Option<host_recovery::Pin>,
 }
 
 fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
@@ -1586,23 +1586,17 @@ fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
         None
     };
     drop(runtime_lease);
-    let recovery_lock = command_lock(root, "recovery-key.lock", true)?;
-    recovery_lock.try_lock_shared().map_err(|_| "ManagerBusy".to_owned())?;
-    let recovery_pin = if let Some(key) = recovery_keys::current(root, &recovery_workspace_id(root)?)? {
-        let manager = resident_manager::initial_host_manager(root)?;
-        Some(host_recovery::Pin { key, manager })
-    } else { None };
+    // New runs are never pinned to a recovery key (#96). A Host started by an
+    // earlier build still reads its recovery-pin.json in host().
     Ok(StartPlan {
         config: refreshed,
         executable,
         yaml_preflight,
-        recovery_lock,
-        recovery_pin,
     })
 }
 
 fn launch_start(root: &Path, plan: StartPlan, attempt: u8, console_window: bool) -> Result<Value> {
-    let StartPlan { config, executable, yaml_preflight, recovery_lock, recovery_pin } = plan;
+    let StartPlan { config, executable, yaml_preflight } = plan;
     let config = &config;
     let run = format!("{}-{}", std::process::id(), clock());
     let folder = root.join("runs").join(&config.name);
@@ -1617,10 +1611,6 @@ fn launch_start(root: &Path, plan: StartPlan, attempt: u8, console_window: bool)
     if config.java.as_os_str().is_empty() {
         save(&folder.join("launch-java.json"), &executable)?;
     }
-    if let Some(pin) = recovery_pin {
-        save(&folder.join(host_recovery::PIN_FILE), &pin)?;
-    }
-    drop(recovery_lock);
     if attempt > 0 {
         save(&folder.join("auto-restart-attempt.json"), &attempt)?;
     } else if console_window {
@@ -2666,6 +2656,9 @@ pub fn dispatch_with_creation_progress(
         return Err("UnsupportedWorkspace".into());
     }
     if let Some(result) = global_java::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = creation_defaults::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = cache_cleanup::dispatch(&root, verb, args) {

@@ -25,7 +25,7 @@ import { displayPath } from './path-display'
 import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm, type AutoRestart, type AutoRestartStatus, type LifecycleTiming, type InstanceSettings, type JavaCandidate, type Preferences, type PreferencesSnapshot } from './manager'
 const props=defineProps<{instance?:string;instanceState?:string;instanceRun?:string;worldCommandReady?:boolean;worldRuleWork?:string;restartStatus?:AutoRestartStatus|null;instanceMeta?:InstanceMeta;preferences:Preferences;preferencesRevision:string;preferencesLoaded:boolean;preferencesReady:boolean;connected:boolean;javaCandidates:JavaCandidate[];javaChecked:boolean;refreshJava:(origin:"manual"|"background",fresh?:boolean)=>Promise<void>;retryPreferences:()=>Promise<void>}>()
 const emit=defineEmits<{(e:"language-preview",v?:LanguagePreference):void;(e:'close'):void;(e:'preferences',snapshot:PreferencesSnapshot):void;(e:'dirty',dirty:boolean):void;(e:'saving',saving:boolean):void;(e:'mutating'):void;(e:'management-changed'):void;(e:'core',name:string):void}>()
-type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'cache'|'recovery'|'test-admins'|'about'
+type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'creation'|'cache'|'recovery'|'test-admins'|'about'
 type TestAdminSnapshot={administrators:TestAdministrator[];luckperms:boolean;op:boolean;permissions:string[]|null;keptPermissions?:string[];group:string;revision:string;artifacts:LuckPermsArtifact[]}
 type ScanPaths={allowPaths:string[];excludePaths:string[]}
 type ScanSnapshot={policy:ScanPaths & {allow:string[];exclude:string[];managedFolders?:boolean};revision:string;base?:string;path?:string;rows?:ScanRow[]}
@@ -41,7 +41,15 @@ type ScopePreview = {
 }
 type GlobalJavaMode = 'automatic' | 'manual'
 type GlobalJava = { java: string; revision: string; mode?: GlobalJavaMode; manualPath?: string }
+type CreationDefaults = { parent: string | null; revision: string }
 const tab=ref<Tab>(props.instance?'java':'appearance')
+// The recovery key is being retired (#96): only a workspace that already has a key shows its tab.
+const recoveryKeyPresent=ref(false)
+watch(()=>props.connected,async ready=>{
+  if(!ready)return
+  try{recoveryKeyPresent.value=!!(await manage<{key:unknown}>(['recovery-key-status'],'background')).key}
+  catch(e){console.warn('Recovery key status read failed',errorText(e))}
+},{immediate:true})
 const saving=ref(false), message=ref(''), error=ref('')
 // Remember which text was shown as saved or failed, so a language change cannot break the comparison.
 const savedText=ref(''), failureText=ref('')
@@ -101,6 +109,17 @@ function setJavaFromPicker(value: string) {
   error.value=''
   if (tab.value === 'global-java') globalJavaPath.value=pathLabel(value)
   else if (tab.value === 'java') settings.java=value
+}
+const savedCreation=ref<CreationDefaults>()
+const creationParent=ref('')
+const creationPickerBusy=ref(false)
+function showCreation(snapshot: CreationDefaults) {
+  savedCreation.value=snapshot
+  creationParent.value=snapshot.parent ? pathLabel(snapshot.parent) : ''
+}
+function setCreationParent(value: string) {
+  error.value=''
+  creationParent.value=pathLabel(value)
 }
 function pathPickerFailed() {
   error.value=t('management.pickFailed')
@@ -583,10 +602,10 @@ let loadEpoch=0
 let javaReadEpoch=0
 const settingsRetry=shallowRef<{ tab:Tab; instance?:string }>()
 const retryingRead=computed(()=>settingsRetry.value?.tab===tab.value && settingsRetry.value.instance===props.instance)
-const editableTab=computed(()=>['appearance','updates','test-admins','global-java','java','initialization','world','scan','restart','autorestart','terminal'].includes(tab.value))
+const editableTab=computed(()=>['appearance','updates','test-admins','global-java','java','initialization','world','scan','creation','restart','autorestart','terminal'].includes(tab.value))
 const preferencesTab=computed(()=>['appearance','terminal','updates'].includes(tab.value))
 const globalJavaDraft=computed(()=>({mode:globalJavaMode.value,manualPath:globalJavaPath.value.trim()}))
-const draftSignature=computed(()=>JSON.stringify(tab.value==='appearance'?{theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,invalidOpacity:selectionOpacityInvalid.value?selectionOpacityInput.value:null,language:language.value,pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value}:tab.value==='updates'?corePrefetch.value:tab.value==='test-admins'?testAdminDraft.value:tab.value==='terminal'?instanceConsoleTitle.value:tab.value==='global-java'?globalJavaDraft.value:tab.value==='java'?{java:settings.java,port:settings.port,jvm:{...jvm},advancedJvm:advancedJvm.value}:tab.value==='restart'?timing:tab.value==='autorestart'?autoRestart:tab.value==='initialization'?initValues.value:tab.value==='world'?{files:worldValues.value,rules:worldRuleDraft.value}:tab.value==='scan'?scanPaths():null))
+const draftSignature=computed(()=>JSON.stringify(tab.value==='appearance'?{theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,invalidOpacity:selectionOpacityInvalid.value?selectionOpacityInput.value:null,language:language.value,pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value}:tab.value==='updates'?corePrefetch.value:tab.value==='test-admins'?testAdminDraft.value:tab.value==='terminal'?instanceConsoleTitle.value:tab.value==='global-java'?globalJavaDraft.value:tab.value==='java'?{java:settings.java,port:settings.port,jvm:{...jvm},advancedJvm:advancedJvm.value}:tab.value==='restart'?timing:tab.value==='autorestart'?autoRestart:tab.value==='initialization'?initValues.value:tab.value==='world'?{files:worldValues.value,rules:worldRuleDraft.value}:tab.value==='scan'?scanPaths():tab.value==='creation'?creationParent.value.trim():null))
 const draftDirty=computed(()=>baseline.value!=='' && draftSignature.value!==baseline.value)
 const dirty=computed(()=>draftDirty.value || (tab.value==='global-java' && javaSearchDirty.value))
 const globalJavaCanSave=computed(()=>!!savedGlobalJava.value && dirty.value &&
@@ -700,6 +719,13 @@ async function readSettings(origin:'manual'|'background'='background', profileCh
       const result=await manage<TestAdminSnapshot>(['test-admin-settings'],origin)
       if(!current())return
       showTestAdmins(result)
+      markSaved()
+      return true
+    }
+    if(targetTab==='creation'){
+      const result=await manage<CreationDefaults>(['creation-defaults'],origin)
+      if(!current())return
+      showCreation(result)
       markSaved()
       return true
     }
@@ -834,6 +860,7 @@ function reset(){
   else if(tab.value==='autorestart' && baseline.value)Object.assign(autoRestart,JSON.parse(baseline.value))
   else if(tab.value==='scan' && scan.value){showScan(scan.value);scanIssues.value={}}
   else if(tab.value==='test-admins' && testAdmins.value)showTestAdmins(testAdmins.value)
+  else if(tab.value==='creation' && savedCreation.value)showCreation(savedCreation.value)
   else if(tab.value==='global-java'){
     if(savedGlobalJava.value)showGlobalJava(savedGlobalJava.value)
     javaSearchScope.value?.restore()
@@ -1068,6 +1095,11 @@ async function save(confirmWorld = false, confirmScope = false){
         })]))
       }
     }
+    else if(tab.value==='creation' && savedCreation.value){
+      showCreation(await manage<CreationDefaults>(['save-creation-defaults',JSON.stringify({
+        parent:creationParent.value.trim()||null,revision:savedCreation.value.revision,
+      })]))
+    }
     else if(tab.value==='test-admins' && testAdmins.value){
       showTestAdmins(await manage<TestAdminSnapshot>(['save-test-admin-settings',JSON.stringify({...testAdminDraft.value,revision:testAdmins.value.revision})]))
     }
@@ -1103,7 +1135,7 @@ void load()
   <OverlayScroll class="settings-scroll" :label="t('settings.content')"><header class="page-head"><div><h1>{{ instance ? t('settings.instanceTitle', { name: instance }) : t('nav.settings') }}</h1></div><button v-if="instance" @click="requestClose">{{ t('settings.back') }}</button></header>
     <div class="settings-layout"><nav class="settings-nav" :aria-label="t('settings.category')">
       <template v-if="instance"><button :aria-current="tab==='java'?'page':undefined" @click="switchTab('java')">{{ t('settings.java') }}</button><button :aria-current="tab==='restart'?'page':undefined" @click="switchTab('restart')">{{ t('settings.restart') }}</button><button :aria-current="tab==='autorestart'?'page':undefined" @click="switchTab('autorestart')">{{ t('settings.autoRestart') }}</button><button :aria-current="tab==='terminal'?'page':undefined" @click="switchTab('terminal')">{{ t('settings.terminal') }}</button><button :aria-current="tab==='world'?'page':undefined" @click="switchTab('world')">{{ t('settings.world') }}</button><button :aria-current="tab==='core'?'page':undefined" @click="switchTab('core')">{{ t('settings.core') }}</button></template>
-      <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='test-admins'?'page':undefined" @click="switchTab('test-admins')">{{ t('settingsPage.testAdmins') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='cache'?'page':undefined" @click="switchTab('cache')">{{ t('components.cache.heading') }}</button><button :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button><button :aria-current="tab==='about'?'page':undefined" @click="switchTab('about')">{{ t('components.about.heading') }}</button></template>
+      <template v-else><button :aria-current="tab==='appearance'?'page':undefined" @click="switchTab('appearance')">{{ t('appearance.title') }}</button><button :aria-current="tab==='global-java'?'page':undefined" @click="switchTab('global-java')">{{ t('management.globalJava') }}</button><button :aria-current="tab==='updates'?'page':undefined" @click="switchTab('updates')">{{ t('settings.coreUpdates') }}</button><button :aria-current="tab==='test-admins'?'page':undefined" @click="switchTab('test-admins')">{{ t('settingsPage.testAdmins') }}</button><button :aria-current="tab==='initialization'?'page':undefined" @click="switchTab('initialization')">{{ t('settings.initialization') }}</button><button :aria-current="tab==='scan'?'page':undefined" @click="switchTab('scan')">{{ t('settings.scan') }}</button><button :aria-current="tab==='creation'?'page':undefined" @click="switchTab('creation')">{{ t('settingsPage.creationTab') }}</button><button :aria-current="tab==='cache'?'page':undefined" @click="switchTab('cache')">{{ t('components.cache.heading') }}</button><button v-if="recoveryKeyPresent" :aria-current="tab==='recovery'?'page':undefined" @click="switchTab('recovery')">{{ t('recovery.heading') }}</button><button :aria-current="tab==='about'?'page':undefined" @click="switchTab('about')">{{ t('components.about.heading') }}</button></template>
       </nav><section class="sheet" :aria-busy="saving">
       <OperationButton v-if="preferencesTab && tab!=='terminal' && connected && (preferencesConflict || !preferencesReady || error)"
         :label="t('action.retryRead')" :busy-label="t('activity.loading')" :busy="retryingRead" @click="retrySettings()" />
@@ -1379,6 +1411,29 @@ void load()
         <OperationButton v-else-if="error" :label="t('action.retryRead')" :busy-label="t('activity.loading')"
           :busy="retryingRead" @click="retrySettings" />
       </template>
+      <template v-else-if="tab==='creation'">
+        <h2>{{ t('settingsPage.creationTab') }}</h2>
+        <template v-if="savedCreation">
+          <div class="field">
+            <label for="creation-parent">{{ t('settingsPage.creationParent') }}</label>
+            <div class="editor">
+              <div class="settings-path-editor">
+                <input id="creation-parent" v-model.trim="creationParent" name="creation-parent" autocomplete="off"
+                  spellcheck="false" :placeholder="t('settingsPage.creationParentDefault')" aria-describedby="creation-parent-help"
+                  :readonly="creationPickerBusy">
+                <PathPickerButton :current="creationParent || 'instances'" kind="folder" :disabled="creationPickerBusy"
+                  @picking="creationPickerBusy=$event" @failed="pathPickerFailed" @selected="setCreationParent" />
+              </div>
+              <button type="button" :disabled="creationPickerBusy || !creationParent" @click="creationParent=''">
+                {{ t('settingsPage.creationParentClear') }}
+              </button>
+            </div>
+          </div>
+          <p id="creation-parent-help" class="hint">{{ t('settingsPage.creationParentHelp') }}</p>
+        </template>
+        <OperationButton v-else-if="error" :label="t('action.retryRead')" :busy-label="t('activity.loading')"
+          :busy="retryingRead" @click="retrySettings" />
+      </template>
       <template v-else-if="tab==='global-java'">
         <h2>{{ t('management.globalJava') }}</h2>
         
@@ -1429,7 +1484,7 @@ void load()
       <template v-else><h2>{{ t('settings.core') }}</h2><button v-if="instance" type="button" :disabled="!connected" @click="emit('core',instance)">{{ t('settingsPage.openCoreMaintenance') }}</button></template>
       <p v-if="error && !pickerDialog?.open" role="alert" class="form-error">{{ error }}</p>
     </fieldset></section></div></OverlayScroll>
-  <div v-if="tab!=='about' && tab!=='cache'" class="settings-footer"><span role="status" :class="{'save-success':saveSucceeded,'save-warning':saveNeedsVerification,'save-failure':saveFailedMessage}">{{ message }}</span><div class="actions"><button :disabled="saving || !editableTab || (!baseline && !javaSearchDirty)" @click="reset" :title="instance?undefined:t('settings.restoreTitle')">{{ instance?t('action.cancelChanges'):t('action.restore') }}</button><button class="primary" :disabled="saving || !connected || !editableTab || (preferencesTab && (!preferencesReady || preferencesConflict)) || (tab==='appearance' && selectionOpacityInvalid) || (tab==='java' && !javaCanSave) || ((tab==='restart'||tab==='autorestart')&&(!settings.revision||!baseline)) || (tab==='autorestart' && !autoRestartPayload) || (tab==='world' && !worldCanSave) || (tab==='initialization'&&(!init || !dirty)) || (tab==='scan' && (!scan || scopeSavingStart || scanPickerBusy || !dirty)) || (tab==='global-java' && !globalJavaCanSave) || (tab==='test-admins' && (!testAdmins || !dirty || testAdminFetching))" @click="save()">{{ tab==='world' ? t('action.saveShort') : t('action.save') }}</button></div></div>
+  <div v-if="tab!=='about' && tab!=='cache'" class="settings-footer"><span role="status" :class="{'save-success':saveSucceeded,'save-warning':saveNeedsVerification,'save-failure':saveFailedMessage}">{{ message }}</span><div class="actions"><button :disabled="saving || !editableTab || (!baseline && !javaSearchDirty)" @click="reset" :title="instance?undefined:t('settings.restoreTitle')">{{ instance?t('action.cancelChanges'):t('action.restore') }}</button><button class="primary" :disabled="saving || !connected || !editableTab || (preferencesTab && (!preferencesReady || preferencesConflict)) || (tab==='appearance' && selectionOpacityInvalid) || (tab==='java' && !javaCanSave) || ((tab==='restart'||tab==='autorestart')&&(!settings.revision||!baseline)) || (tab==='autorestart' && !autoRestartPayload) || (tab==='world' && !worldCanSave) || (tab==='initialization'&&(!init || !dirty)) || (tab==='scan' && (!scan || scopeSavingStart || scanPickerBusy || !dirty)) || (tab==='global-java' && !globalJavaCanSave) || (tab==='creation' && (!savedCreation || !dirty || creationPickerBusy)) || (tab==='test-admins' && (!testAdmins || !dirty || testAdminFetching))" @click="save()">{{ tab==='world' ? t('action.saveShort') : t('action.save') }}</button></div></div>
   <dialog ref="scopeConfirmDialog" class="scope-confirm" aria-labelledby="scope-confirm-title"
     @cancel.prevent="!saving && scopeConfirmDialog?.close()" @close="scopePlan=undefined">
     <h2 id="scope-confirm-title">{{ t('management.scopeConfirm') }}</h2>

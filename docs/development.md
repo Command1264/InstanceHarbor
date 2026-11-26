@@ -120,6 +120,10 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 - 焦點框的寬度與外擴距離由 `src/app.css` 的 `--focus-ring-width`、`--focus-ring-offset` 定義，合計為 `--focus-ring-extent`。
 - 對話框裡的 `OverlayScroll` 捲動區在上緣與左緣保留 `--focus-ring-extent` 的內距，並以相同的負外距抵銷，內容位置與寬度不變；右緣與下緣原本的內距已大於焦點框外擴量。
 - 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。
+- 首次讀取的進度條 `InitialQueryProgress` 有兩種版面。實例清單與操作紀錄這類整頁清單加 `centered`：進度條以絕對定位
+  對齊最近的定位祖先，在它前一個元素（例如表格標題列）以下的區域水平與垂直置中。在 `OverlayScroll` 裡，這個祖先是不會捲動的
+  外框，所以表格比可見區域寬、出現橫向捲軸時，進度條仍停在可見區域中間。操作紀錄頁讀取時讓卡片填滿可見高度，進度條在卡片中間。
+  對話框內維持預設的靠左版面。`src/initial-query-progress.test.mjs` 會檢查這項規則。
 - `OverlayScroll` 的捲動區只在內容需要捲動時才能用 Tab 選到，讓鍵盤可以捲動；不需要捲動時，Tab 直接跳到裡面的控制項，不會停在整個容器上。
 
 ## 用 DevTools 檢查 GUI 畫面
@@ -392,7 +396,10 @@ V1 管理的伺服器可以原地交給 1.0 管理，世界、插件與插件資
 啟動前重新核對核心和 Java，每次成功派工會在工作階段記錄使用的執行檔。已儲存的實例手動路徑優先。
 Windows 預設 mise 搜尋使用帳戶本身的 Local AppData。隔離日誌的位置可獨立指定。明確設定的 `MISE_DATA_DIR` 仍優先。
 
-建立實例時指定名稱、Port、工作區 `instances/` 內的父資料夾及核心來源。
+建立實例時指定名稱、Port、上層資料夾及核心來源。上層資料夾預設帶入「應用程式設定 → 建立實例」的「新伺服器的預設位置」，未設定時是工作區的 `instances`，每次建立仍可修改。
+預設位置可選的資料夾與管理資料夾相同：工作區 `instances` 或其子目錄，或工作區以外的本機資料夾；工作區的其他資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑會被拒絕並保留原設定。按「使用預設位置」後儲存即清除設定。
+變更只影響之後的建立，已存在的伺服器不會搬動。設定存在工作區的 `creation-defaults.json`（例如 `{"parent": "D:\\Servers"}`，清除後為 `{}`）。
+舊版（1.1.0 以前）不讀這個檔案，回退後照舊使用 `instances`，重新使用新版時讀回原設定。
 名稱限 1 至 64 個小寫英文字母、數字、連字號或句點，開頭使用字母或數字，版本可直接寫入名稱，例如 `paper-1.14.4`。
 名稱不能以句點結尾（Windows 會自動去掉結尾的句點），句點前的部分也不能是 Windows 保留名稱（例如 `con.1`）。
 同一規則適用於匯入、管理資料夾自動登記與 V1 移交；request ID、run ID 與工作 ID 仍只使用小寫英數與連字號。
@@ -794,6 +801,23 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 備份只供同一個絕對工作區路徑復原，回復前須核對公開金鑰與世代。
 應用程式設定的「復原金鑰」可操作同一套保管功能。
 已釘住復原金鑰的工作階段可從原生介面或 PowerShell 接管。流程見可信 Host 接管。
+
+復原金鑰正分階段移除（Issue #96）。目前是第 1 階段：
+
+- 啟動伺服器時不再寫入 `runs/<實例>/recovery-pin.json`，工作區有沒有金鑰都一樣。新的 run 一律使用無金鑰的控制條件：
+  同一個 Windows 帳戶，且執行檔是安裝資料夾的 GUI 或 `ihctl.exe`。Manager 重啟或更新後都能直接接手。
+- 舊版啟動、已釘住金鑰而且仍在執行的 Host 照舊驗證：同一個安裝的新 Manager 用 `Rebind` 接手；安裝改變時，
+  用 `ihctl WORKSPACE host-recover NAME RUN`（或設定頁「執行中工作階段」）以金鑰簽名的 `RecoverChallenge`／`RecoverProof` 接手。
+  正常停止再啟動後，這台伺服器就不再依賴金鑰。
+- 設定頁的「復原金鑰」分頁只在工作區已有金鑰時顯示，並說明此功能即將移除。沒有金鑰的工作區看不到這個分頁，
+  `recovery-key-*` 指令與 `manage-recovery-backup.ps1` 仍可使用，第 2 階段才移除。
+- 金鑰檔（工作區根目錄的 `recovery-key.dpapi.json`）與匯出的 `.ihrecovery` 備份檔不會被自動刪除。
+  確認沒有仍在執行、已釘住的 run（`runs/<實例>/recovery-pin.json` 所在的實例仍在執行）後，可以手動刪除；
+  刪除金鑰檔後設定頁不再顯示「復原金鑰」分頁。
+
+`verify-recovery-pin.ps1` 用測試替身（`tests/controlled-server.rs`）驗證這些行為：無金鑰工作區、有金鑰時新啟動的 run 沒有 pin，
+以及搭配 `-LegacyBinaryDirectory`（指向 1.1.0 或更早的建置）時，舊版釘住的 run 仍能由重啟後的 Manager 接管與停止。
+`-Evidence` 必須是新的資料夾。開發版建置只開啟 `InstanceHarbor Dev\workspaces\<名稱>`，所以另以 `-Workspace` 指定新的隔離工作區。
 
 工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑。管理資料夾、匯入與新建可以使用工作區 instances 底下或工作區以外的任意本機資料夾；工作區的內部資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑一律拒絕，登記後仍依掃描白名單決定是否納管。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI；V1 伺服器改用「從 V1 移交伺服器」的 CLI 指令。
 
