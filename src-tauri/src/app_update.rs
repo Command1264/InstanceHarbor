@@ -5,6 +5,12 @@
 //! `curl.exe` (see `core_source::fetch_status`) and nothing about the user or the
 //! workspace. The settings and the last result live in the workspace's
 //! `app-update.json`, which older versions do not read, so a rollback keeps working.
+//!
+//! A download goes to `staging/updates/<version>/` (at most one version is kept) and
+//! must match the size and the SHA-256 `digest` GitHub publishes. The Setup build then
+//! starts that Setup, which closes InstanceHarbor and waits for servers (#61); the
+//! portable build only opens the folder. Versions not newer than the running one are
+//! deleted when the GUI starts.
 use super::*;
 use crate::app_version::Version;
 
@@ -21,6 +27,15 @@ const MAX_ASSET_BYTES: u64 = 512 * 1024 * 1024;
 /// Development builds only: read the release list from this JSON file instead of GitHub.
 #[cfg(feature = "development-channel")]
 const DEV_RELEASES_ENV: &str = "IH_DEV_UPDATE_RELEASES";
+/// Development builds only: copy release files from this folder instead of downloading.
+#[cfg(feature = "development-channel")]
+const DEV_ASSETS_ENV: &str = "IH_DEV_UPDATE_ASSETS";
+const UPDATES_FOLDER: &str = "updates";
+/// Held while a download runs; a second download is refused, not queued.
+const DOWNLOAD_LOCK_FILE: &str = "app-update-download.lock";
+const FILE_SHARE_READ: u32 = 1;
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+const REPARSE_POINT: u32 = 0x400;
 
 /// Release asset names carry `<platform>-<architecture>`. #66 adds rows here.
 const PLATFORMS: &[(&str, &str, &str)] = &[("windows", "x86_64", "windows-x64")];
@@ -283,7 +298,53 @@ fn due(state: &State, now: u64) -> bool {
         && state.last_attempt.is_none_or(|at| now < at || now - at >= AUTO_INTERVAL)
 }
 
-fn status(state: &State, context: &Context) -> Value {
+/// `staging/updates`, created when `create`; None when absent and not created.
+fn updates_folder(root: &Path, create: bool) -> Result<Option<PathBuf>> {
+    let staging = child_directory(root, "staging")?;
+    let path = staging.join(UPDATES_FOLDER);
+    if !path.exists() {
+        if !create {
+            return Ok(None);
+        }
+        fs::create_dir(&path).map_err(|error| file_error("create-update-folder", &path, error))?;
+    }
+    child_directory(&staging, UPDATES_FOLDER).map(Some)
+}
+
+fn plain(path: &Path, directory: bool) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    fs::symlink_metadata(path).is_ok_and(|meta| {
+        meta.file_attributes() & REPARSE_POINT == 0 && if directory { meta.is_dir() } else { meta.is_file() }
+    })
+}
+
+/// The downloaded file of `available`, when it is there.
+fn downloaded(root: &Path, available: &Available) -> Option<PathBuf> {
+    let asset = available.asset.as_ref()?;
+    let path = updates_folder(root, false).ok()??.join(&available.version).join(&asset.name);
+    plain(&path, false).then_some(path)
+}
+
+/// Deletes the version folders in `staging/updates` that `remove` selects. Other
+/// names, files and links are left alone.
+fn remove_versions(updates: &Path, remove: impl Fn(&Version) -> bool) -> Result<Vec<String>> {
+    let mut removed = vec![];
+    for entry in fs::read_dir(updates).map_err(|error| file_error("list-update-folder", updates, error))? {
+        let path = entry.map_err(fail)?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()).map(str::to_owned) else { continue };
+        let Some(version) = Version::parse(&name).filter(|version| version.to_string() == name) else { continue };
+        if remove(&version) && plain(&path, true) {
+            fs::remove_dir_all(&path).map_err(|error| file_error("remove-update", &path, error))?;
+            removed.push(name);
+        }
+    }
+    Ok(removed)
+}
+
+fn status(root: &Path, state: &State, context: &Context) -> Value {
+    let update = pick(&state.releases, state.channel, context);
+    let download = update.as_ref().filter(|available| downloaded(root, available).is_some())
+        .map(|available| json!({"version": available.version, "name": available.asset.as_ref().map(|asset| &asset.name)}));
     json!({
         "currentVersion": context.version.to_string(),
         "channel": state.channel,
@@ -294,7 +355,8 @@ fn status(state: &State, context: &Context) -> Value {
         "lastSuccess": state.last_success,
         "lastError": state.last_error,
         "due": due(state, context.now),
-        "update": pick(&state.releases, state.channel, context),
+        "update": update,
+        "download": download,
     })
 }
 
@@ -328,7 +390,7 @@ fn fetch() -> Result<(u16, Vec<u8>)> {
 fn check(root: &Path, automatic: bool, context: &Context, fetch: impl FnOnce() -> Result<(u16, Vec<u8>)>) -> Result<Value> {
     let state = load(root);
     if automatic && !due(&state, context.now) {
-        return Ok(status(&state, context));
+        return Ok(status(root, &state, context));
     }
     // Recorded first: a GUI that ends during the request does not retry at once.
     update(root, |state| state.last_attempt = Some(context.now))?;
@@ -342,7 +404,7 @@ fn check(root: &Path, automatic: bool, context: &Context, fetch: impl FnOnce() -
         // The last good result stays; only the reason is shown.
         Err(error) => state.last_error = Some(error),
     })?;
-    Ok(status(&state, context))
+    Ok(status(root, &state, context))
 }
 
 fn settings(root: &Path, channel: &str, auto_check: &str, context: &Context) -> Result<Value> {
@@ -360,7 +422,178 @@ fn settings(root: &Path, channel: &str, auto_check: &str, context: &Context) -> 
         state.channel = channel;
         state.auto_check = auto_check;
     })?;
-    Ok(status(&state, context))
+    Ok(status(root, &state, context))
+}
+
+/// The update `tag` from the last check, with a file this build can use.
+fn wanted(root: &Path, tag: &str, context: &Context) -> Result<(Available, Asset)> {
+    let state = load(root);
+    let available = pick(&state.releases, state.channel, context)
+        .filter(|available| available.tag == tag)
+        .ok_or("UpdateNotAvailable")?;
+    let asset = available.asset.clone().ok_or("UpdateAssetUnavailable")?;
+    Ok((available, asset))
+}
+
+/// Opens `path` so nobody can change it while it is held, and checks its size and
+/// SHA-256 against what GitHub published. The caller keeps the handle while it
+/// uses the file, so the bytes checked are the bytes used.
+fn verified(path: &Path, asset: &Asset) -> Result<File> {
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    let mut file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(|error| file_error("open-update", path, error))?;
+    let meta = file.metadata().map_err(fail)?;
+    if !meta.is_file() || meta.file_attributes() & REPARSE_POINT != 0 {
+        return Err("UpdateDownloadInvalid".into());
+    }
+    if meta.len() != asset.size {
+        return Err("UpdateDownloadSizeMismatch".into());
+    }
+    let expected = asset.digest.as_deref().and_then(|digest| digest.strip_prefix("sha256:")).ok_or("UpdateAssetUnavailable")?;
+    if content_revision::open_file_revision(&mut file, path)? != expected {
+        return Err("UpdateDownloadDigestMismatch".into());
+    }
+    Ok(file)
+}
+
+/// Downloads with the system curl. The address is the GitHub download URL that
+/// `pick` accepted; GitHub redirects it to its file host, over HTTPS only.
+fn transfer(asset: &Asset, output: &Path) -> Result<()> {
+    #[cfg(feature = "development-channel")]
+    if let Some(folder) = std::env::var_os(DEV_ASSETS_ENV) {
+        return fs::copy(Path::new(&folder).join(&asset.name), output).map(drop).map_err(|_| "UpdateDownloadFailed".into());
+    }
+    let reply = Command::new(core_source::system_curl().map_err(|_| "UpdateCheckUnavailable")?)
+        .args(["--disable", "--silent", "--fail", "--globoff", "--location", "--max-redirs", "5",
+            "--proto", "=https", "--proto-redir", "=https", "--tlsv1.2",
+            "--connect-timeout", "10", "--max-time", "900"])
+        .arg("--max-filesize").arg(asset.size.to_string())
+        .arg("--user-agent").arg(format!("InstanceHarbor/{}", crate::about::VERSION))
+        .args(["--write-out", "%{http_code}", "--output"]).arg(output)
+        .arg("--url").arg(&asset.url)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .env_remove("SSLKEYLOGFILE")
+        .env_remove("CURL_CA_BUNDLE")
+        .env_remove("SSL_CERT_FILE")
+        .env_remove("SSL_CERT_DIR")
+        .creation_flags(HIDDEN)
+        .output()
+        .map_err(|_| "UpdateCheckUnavailable")?;
+    match reply.status.code() {
+        Some(0) if reply.stdout == b"200" => Ok(()),
+        Some(28) => Err("UpdateDownloadTimeout".into()),
+        Some(63) => Err("UpdateDownloadSizeMismatch".into()),
+        Some(6 | 7) => Err("UpdateCheckOffline".into()),
+        _ => Err("UpdateDownloadFailed".into()),
+    }
+}
+
+fn download(root: &Path, tag: &str, context: &Context, transfer: impl FnOnce(&Asset, &Path) -> Result<()>) -> Result<Value> {
+    let lock_path = root.join(DOWNLOAD_LOCK_FILE);
+    if lock_path.exists() {
+        no_redirect(&lock_path)?;
+    }
+    let busy = OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path)
+        .map_err(|error| file_error("open-update-lock", &lock_path, error))?;
+    busy.try_lock().map_err(|_| "UpdateDownloadBusy")?;
+    let (available, asset) = wanted(root, tag, context)?;
+    let updates = updates_folder(root, true)?.ok_or("UpdateFolderUnavailable")?;
+    // At most one version is kept.
+    remove_versions(&updates, |version| version.to_string() != available.version)?;
+    let folder = updates.join(&available.version);
+    if !folder.exists() {
+        fs::create_dir(&folder).map_err(|error| file_error("create-update-folder", &folder, error))?;
+    }
+    let folder = child_directory(&updates, &available.version)?;
+    let target = folder.join(&asset.name);
+    if plain(&target, false) && verified(&target, &asset).is_ok() {
+        return Ok(status(root, &load(root), context));
+    }
+    let part = folder.join(format!("{}.part", asset.name));
+    for stale in [&target, &part] {
+        if stale.exists() {
+            no_redirect(stale)?;
+            fs::remove_file(stale).map_err(|error| file_error("remove-update", stale, error))?;
+        }
+    }
+    let checked = transfer(&asset, &part).and_then(|()| verified(&part, &asset).map(drop));
+    if let Err(error) = checked {
+        // A file that does not match is never kept.
+        let _ = fs::remove_file(&part);
+        return Err(error);
+    }
+    fs::rename(&part, &target).map_err(|error| file_error("publish-update", &target, error))?;
+    Ok(status(root, &load(root), context))
+}
+
+/// The verified download of `tag`, held open. A file that no longer matches is deleted.
+fn verified_download(root: &Path, tag: &str, context: &Context) -> Result<(PathBuf, File)> {
+    let (available, asset) = wanted(root, tag, context)?;
+    let path = downloaded(root, &available).ok_or("UpdateDownloadMissing")?;
+    match verified(&path, &asset) {
+        Ok(file) => Ok((path, file)),
+        Err(error) => {
+            if matches!(error.as_str(), "UpdateDownloadDigestMismatch" | "UpdateDownloadSizeMismatch") {
+                fs::remove_file(&path).map_err(|cleanup| format!("{error}; {}", file_error("remove-update", &path, cleanup)))?;
+            }
+            Err(error)
+        }
+    }
+}
+
+/// Starts the downloaded Setup after the user confirmed. Setup closes the GUI and the
+/// Manager and waits while servers run (#61); this build only starts it.
+fn install(root: &Path, tag: &str, context: &Context, launch: impl FnOnce(&Path) -> Result<u32>) -> Result<Value> {
+    if context.kind != InstallKind::Setup {
+        return Err("UpdateInstallNeedsSetup".into());
+    }
+    let (path, held) = verified_download(root, tag, context)?;
+    let pid = launch(&path)?;
+    drop(held);
+    Ok(json!({"started": true, "pid": pid}))
+}
+
+fn launch_setup(path: &Path) -> Result<u32> {
+    Command::new(path)
+        .current_dir(path.parent().ok_or("UpdateFolderUnavailable")?)
+        .stdin(Stdio::null())
+        .spawn()
+        .map(|child| child.id())
+        .map_err(|error| format!("UpdateInstallFailed: {error}"))
+}
+
+/// The portable build never replaces running files: it shows the verified ZIP.
+fn reveal(root: &Path, tag: &str, context: &Context, open: impl FnOnce(&Path) -> Result<()>) -> Result<Value> {
+    if context.kind != InstallKind::Portable {
+        return Err("UpdateRevealNeedsPortable".into());
+    }
+    let (path, held) = verified_download(root, tag, context)?;
+    drop(held);
+    open(&path)?;
+    Ok(json!({"opened": true, "path": path_format::display(&path)}))
+}
+
+fn open_folder(path: &Path) -> Result<()> {
+    Command::new("explorer.exe")
+        .raw_arg(format!("/select,\"{}\"", path.display()))
+        .spawn()
+        .map(drop)
+        .map_err(|error| format!("UpdateRevealFailed: {error}"))
+}
+
+/// At GUI start: deletes downloads of versions not newer than this build.
+fn cleanup(root: &Path, context: &Context) -> Result<Value> {
+    let removed = match updates_folder(root, false)? {
+        Some(updates) => remove_versions(&updates, |version| *version <= context.version)?,
+        None => vec![],
+    };
+    Ok(json!({"removed": removed}))
 }
 
 pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Result<Value>> {
@@ -372,11 +605,15 @@ pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Resul
         Err(error) => return Some(Err(error)),
     };
     Some(match (verb, args) {
-        ("app-update-status", []) => Ok(status(&load(root), &context)),
+        ("app-update-status", []) => Ok(status(root, &load(root), &context)),
         ("app-update-check", [origin]) if matches!(origin.as_str(), "auto" | "manual") => {
             check(root, origin == "auto", &context, fetch)
         }
         ("app-update-settings", [channel, auto_check]) => settings(root, channel, auto_check, &context),
+        ("app-update-download", [tag]) => download(root, tag, &context, transfer),
+        ("app-update-install", [tag]) => install(root, tag, &context, launch_setup),
+        ("app-update-reveal", [tag]) => reveal(root, tag, &context, open_folder),
+        ("app-update-cleanup", []) => cleanup(root, &context),
         _ => Err("InvalidUpdateArguments".into()),
     })
 }
@@ -554,7 +791,7 @@ mod tests {
     fn settings_default_to_stable_with_automatic_checks_and_reject_other_values() {
         let root = temp_root("settings");
         let current = context("1.1.0", InstallKind::Portable);
-        let initial = status(&load(&root), &current);
+        let initial = status(&root, &load(&root), &current);
         assert_eq!((initial["channel"].as_str(), initial["autoCheck"].as_bool(), initial["due"].as_bool()), (Some("stable"), Some(true), Some(true)));
         assert_eq!((initial["install"].as_str(), initial["platform"].as_str()), (Some("portable"), Some("windows-x64")));
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0, "reading writes nothing");
@@ -589,6 +826,125 @@ mod tests {
         assert_eq!(call("app-update-status", &["x"]).unwrap(), Err("InvalidUpdateArguments".into()));
         assert!(call("app-update-status", &[]).unwrap().is_ok());
         assert!(call("list", &[]).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    const PAYLOAD: &[u8] = b"pretend setup bytes";
+
+    /// A workspace whose last check found 1.2.0 with files whose SHA-256 matches `PAYLOAD`.
+    fn ready(name: &str, kind: InstallKind) -> (PathBuf, Context) {
+        let root = temp_root(name);
+        fs::create_dir(root.join("staging")).unwrap();
+        let digest = format!("sha256:{}", content_revision::revision(PAYLOAD).unwrap());
+        let mut item = release("v1.2.0", false);
+        for asset in item["assets"].as_array_mut().unwrap() {
+            asset["digest"] = json!(digest);
+            asset["size"] = json!(PAYLOAD.len());
+        }
+        let current = context("1.1.0", kind);
+        check(&root, false, &current, || Ok((200, serde_json::to_vec(&json!([item])).unwrap()))).unwrap();
+        (root, current)
+    }
+
+    fn write(bytes: &'static [u8]) -> impl FnOnce(&Asset, &Path) -> Result<()> {
+        move |_, path| fs::write(path, bytes).map_err(fail)
+    }
+
+    fn update_file(root: &Path, name: &str) -> PathBuf {
+        root.join("staging").join("updates").join("1.2.0").join(name)
+    }
+
+    #[test]
+    fn a_download_is_kept_only_when_its_sha256_matches() {
+        let (root, current) = ready("download", InstallKind::Setup);
+        let name = "InstanceHarbor-1.2.0-windows-x64-setup.exe";
+        let wrong = download(&root, "v1.2.0", &current, write(b"pretend setup bytez"));
+        assert_eq!(wrong, Err("UpdateDownloadDigestMismatch".into()));
+        assert_eq!(fs::read_dir(update_file(&root, name).parent().unwrap()).unwrap().count(), 0, "nothing kept");
+        let short = download(&root, "v1.2.0", &current, write(b"short"));
+        assert_eq!(short, Err("UpdateDownloadSizeMismatch".into()));
+        let done = download(&root, "v1.2.0", &current, write(PAYLOAD)).unwrap();
+        assert_eq!(done["download"], json!({"version": "1.2.0", "name": name}));
+        assert_eq!(fs::read(update_file(&root, name)).unwrap(), PAYLOAD);
+        // A verified file is not downloaded again.
+        download(&root, "v1.2.0", &current, |_, _| panic!("already downloaded")).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_the_offered_update_with_a_trusted_file_is_downloaded() {
+        let (root, current) = ready("offered", InstallKind::Portable);
+        assert_eq!(download(&root, "v1.1.9", &current, |_, _| panic!()), Err("UpdateNotAvailable".into()));
+        assert_eq!(download(&root, "https://example.com/x", &current, |_, _| panic!()), Err("UpdateNotAvailable".into()));
+        let mut state = load(&root);
+        state.releases[0].assets[1].url = "https://example.com/InstanceHarbor-1.2.0-windows-x64.zip".into();
+        store(&root, &state).unwrap();
+        assert_eq!(download(&root, "v1.2.0", &current, |_, _| panic!()), Err("UpdateAssetUnavailable".into()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn at_most_one_version_is_kept_and_older_ones_go_at_start() {
+        let (root, current) = ready("keep-one", InstallKind::Portable);
+        let updates = root.join("staging").join("updates");
+        for name in ["1.1.5", "1.0.0", "notes"] {
+            fs::create_dir_all(updates.join(name)).unwrap();
+            fs::write(updates.join(name).join("file"), b"x").unwrap();
+        }
+        download(&root, "v1.2.0", &current, write(PAYLOAD)).unwrap();
+        let mut left: Vec<_> = fs::read_dir(&updates).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect();
+        left.sort();
+        assert_eq!(left, ["1.2.0", "notes"], "other versions removed, other names untouched");
+        // Still older than the update: kept at start.
+        assert_eq!(cleanup(&root, &current).unwrap()["removed"], json!([]));
+        // After the update is installed, the next start removes it.
+        let installed = context("1.2.0", InstallKind::Portable);
+        assert_eq!(cleanup(&root, &installed).unwrap()["removed"], json!(["1.2.0"]));
+        assert!(updates.join("notes").exists());
+        let empty = temp_root("cleanup-empty");
+        fs::create_dir(empty.join("staging")).unwrap();
+        assert_eq!(cleanup(&empty, &installed).unwrap()["removed"], json!([]));
+        assert!(!empty.join("staging").join("updates").exists(), "cleanup creates nothing");
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(empty).unwrap();
+    }
+
+    #[test]
+    fn setup_starts_only_a_verified_download_after_confirmation() {
+        let (root, current) = ready("install", InstallKind::Setup);
+        assert_eq!(install(&root, "v1.2.0", &current, |_| panic!("not downloaded")), Err("UpdateDownloadMissing".into()));
+        download(&root, "v1.2.0", &current, write(PAYLOAD)).unwrap();
+        let path = update_file(&root, "InstanceHarbor-1.2.0-windows-x64-setup.exe");
+        // Changed after the download: never started.
+        fs::write(&path, b"pretend setup bytez").unwrap();
+        assert_eq!(install(&root, "v1.2.0", &current, |_| panic!("tampered")), Err("UpdateDownloadDigestMismatch".into()));
+        assert!(!path.exists(), "a file that no longer matches is deleted");
+        assert_eq!(status(&root, &load(&root), &current)["download"], Value::Null);
+        fs::write(&path, PAYLOAD).unwrap();
+        let mut started = None;
+        let result = install(&root, "v1.2.0", &current, |launched| {
+            // The file cannot be replaced while Setup starts.
+            assert!(OpenOptions::new().write(true).open(launched).is_err());
+            started = Some(launched.to_owned());
+            Ok(42)
+        })
+        .unwrap();
+        assert_eq!((result["started"].as_bool(), result["pid"].as_u64()), (Some(true), Some(42)));
+        assert_eq!(started.as_deref(), Some(path.as_path()));
+        let portable = context("1.1.0", InstallKind::Portable);
+        assert_eq!(install(&root, "v1.2.0", &portable, |_| panic!()), Err("UpdateInstallNeedsSetup".into()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_portable_build_only_shows_the_verified_zip() {
+        let (root, current) = ready("reveal", InstallKind::Portable);
+        download(&root, "v1.2.0", &current, write(PAYLOAD)).unwrap();
+        let mut shown = None;
+        reveal(&root, "v1.2.0", &current, |path| { shown = Some(path.to_owned()); Ok(()) }).unwrap();
+        assert_eq!(shown, Some(update_file(&root, "InstanceHarbor-1.2.0-windows-x64.zip")));
+        let setup = context("1.1.0", InstallKind::Setup);
+        assert_eq!(reveal(&root, "v1.2.0", &setup, |_| panic!()), Err("UpdateRevealNeedsPortable".into()));
         fs::remove_dir_all(root).unwrap();
     }
 }

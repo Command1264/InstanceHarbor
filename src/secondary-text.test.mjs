@@ -25,6 +25,8 @@ const ALLOWED_ALWAYS_VISIBLE = [
   "App.vue: {{ t('app.remove.nukeWarning') }}",
   // The exact folder that deleting server data moves to the Recycle Bin.
   "App.vue: {{ t('app.remove.folder',{path:removeMeta?.path?displayPath(removeMeta.path,visiblePreferences.pathSeparator):'--'}) }}",
+  // Installing waits for running servers (#61, #65); the user needs that before confirming.
+  "components/AppUpdatePanel.vue: {{ t('components.update.installServers') }}",
   "components/DisplayPreferencesFields.vue: {{ t('appearance.preview') }} · {{ formatDisplayTime(sampleTime, locale, timeFormat) }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.jarHelp') }}",
   "components/InstanceDiagnosticsPanel.vue: {{ t('diagnostics.source', { source: sourceText(signal.source) }) }}",
