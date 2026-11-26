@@ -479,6 +479,8 @@ pub fn safe_action(action: &str) -> &str {
         | "save-global-java-settings"
         | "creation-defaults"
         | "save-creation-defaults"
+        | "server-groups"
+        | "edit-server-groups"
         | "cache-preview"
         | "cache-clear"
         | "app-update-status"
