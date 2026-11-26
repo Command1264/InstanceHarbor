@@ -83,6 +83,8 @@ export const managerMessages = {
   'manager.error.invalidJavaScanDirectory': ['請核對 Java 搜尋範圍的資料夾路徑。', 'Check the folder paths in the Java search scope.'],
   'manager.error.javaScanDirectoryConflict': ['Java 搜尋範圍已被其他程序修改，請重新讀取後再儲存。', 'The Java search scope was changed by another process. Reload, then save.'],
   'manager.error.autoJavaUnavailable': ['找不到與這個核心相容的 Java。請在實例設定指定已安裝的 Java。', 'No Java compatible with this core was found. Choose an installed Java in the instance settings.'],
+  'manager.error.creationDefaultsConflict': ['新伺服器的預設位置已在別處變更。請重新讀取設定後再儲存。', 'The default location for new servers was changed elsewhere. Reload the settings, then save.'],
+  'manager.error.invalidCreationDefaults': ['新伺服器的預設位置設定無法讀取。請重新選擇位置後儲存。', 'The default location for new servers could not be read. Choose the location again, then save.'],
   'manager.error.globalJavaConflict': ['全域 Java 設定已在別處變更。請重新讀取設定後再儲存。', 'The global Java settings were changed elsewhere. Reload the settings, then save.'],
   'manager.error.globalJavaIncompatible': ['全域 Java 版本與伺服器核心不相容。請調整全域 Java 或為此實例指定相容版本。', 'The global Java version is not compatible with the server core. Adjust the global Java or choose a compatible version for this instance.'],
   'manager.error.globalJavaUnavailable': ['無法使用指定的 Java。請在全域 Java 設定選擇有效的 java.exe。', 'The selected Java cannot be used. Choose a valid java.exe in the global Java settings.'],
