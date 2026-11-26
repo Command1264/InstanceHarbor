@@ -249,7 +249,7 @@ async fn core_maintenance_with_progress(
     arguments: Vec<String>,
     progress: tauri::ipc::Channel<instanceharbor::CoreUpdatePhase>,
 ) -> Result<serde_json::Value, String> {
-    if !arguments.first().is_some_and(|verb| matches!(verb.as_str(), "core-install-latest" | "core-install" | "core-restore")) {
+    if !arguments.first().is_some_and(|verb| matches!(verb.as_str(), "core-install-latest" | "core-install" | "core-restore" | "core-install-version")) {
         return Err("InvalidCoreArguments".into());
     }
     manage_recorded(arguments, Some("manual".into()), Some(Progress::Core(progress))).await

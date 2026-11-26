@@ -1038,6 +1038,185 @@ fn install_purpur(
     outcome
 }
 
+/// Velocity versions in the order the fill API lists them: version groups and
+/// the versions in each group from newest to oldest (#41). `serde_json::Value`
+/// would sort the group keys, so the reply is read in document order.
+struct OrderedVersions(Vec<String>);
+
+impl<'de> Deserialize<'de> for OrderedVersions {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct Groups;
+        impl<'de> serde::de::Visitor<'de> for Groups {
+            type Value = OrderedVersions;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("version groups")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> std::result::Result<Self::Value, A::Error> {
+                let mut versions = Vec::new();
+                while let Some((_, group)) = map.next_entry::<String, Vec<String>>()? {
+                    versions.extend(group);
+                }
+                Ok(OrderedVersions(versions))
+            }
+        }
+        deserializer.deserialize_map(Groups)
+    }
+}
+
+#[derive(Deserialize)]
+struct ProjectVersions {
+    project: ProjectId,
+    versions: OrderedVersions,
+}
+
+#[derive(Deserialize)]
+struct ProjectId {
+    id: String,
+}
+
+fn velocity_version_token(version: &str) -> bool {
+    !version.is_empty() && version.len() <= 32
+        && version.as_bytes()[0].is_ascii_digit()
+        && version.bytes().all(|byte| byte.is_ascii_alphanumeric() || b".-".contains(&byte))
+}
+
+/// The Velocity versions newer than `current`, newest first. "Newer" follows
+/// the order of the official list, which includes `-SNAPSHOT` versions.
+fn newer_velocity_versions(body: &[u8], current: &str) -> Result<Vec<String>> {
+    let reply: ProjectVersions = serde_json::from_slice(body).map_err(|_| "CoreCatalogInvalid")?;
+    if reply.project.id != "velocity" || reply.versions.0.iter().any(|version| !velocity_version_token(version)) {
+        return Err("CoreCatalogInvalid".into());
+    }
+    let position = reply.versions.0.iter().position(|version| version == current)
+        .ok_or("CoreSourceVersionUnlisted")?;
+    let mut seen = BTreeSet::new();
+    Ok(reply.versions.0[..position].iter().filter(|version| seen.insert(version.as_str())).cloned().collect())
+}
+
+/// The verified Velocity profile of an instance's current core.
+fn velocity_current(root: &Path, name: &str) -> Result<CoreProfile> {
+    let config = instance(root, name)?;
+    if !admitted(root, name)? || config.removed {
+        return Err("CoreTargetUnavailable".into());
+    }
+    let jar = core_artifact::jar(&instance_path(root, name)?, &config);
+    no_redirect(&jar)?;
+    let profile = core_maintenance::trusted_profile(&config, content_revision::file_revision(&jar)?)
+        .ok_or("CoreProfileUnverified")?;
+    if profile.family != "VELOCITY" {
+        return Err("CoreSourceUnsupported".into());
+    }
+    Ok(profile)
+}
+
+fn velocity_versions_with(current: &str, fetch: &impl Fn(&str, &str) -> Result<Vec<u8>>, agent: &str) -> Result<Vec<String>> {
+    newer_velocity_versions(&fetch(&format!("{FILL_PROJECTS}/velocity"), agent)?, current)
+}
+
+fn fetch_bytes(url: &str, agent: &str) -> Result<Vec<u8>> {
+    let _slot = SourceSlot::acquire()?;
+    let (code, body) = fetch_status(url, agent, true)?;
+    if code != 200 {
+        return Err("CoreSourceHttpError".into());
+    }
+    Ok(body)
+}
+
+/// `core-velocity-versions NAME`: the Velocity versions newer than the current
+/// one, for the first step of a cross-version change (#41).
+pub(super) fn velocity_versions(root: &Path, name: &str) -> Result<Value> {
+    let current = velocity_current(root, name)?;
+    let versions = velocity_versions_with(&current.minecraft, &fetch_bytes, &configured_paper_user_agent()?)?;
+    let rows: Vec<_> = versions.iter()
+        .map(|version| json!({"version":version,"snapshot":version.ends_with("-SNAPSHOT")}))
+        .collect();
+    Ok(json!({"current":current,"versions":rows}))
+}
+
+/// The newest offered build of `version`, with its official SHA-256.
+fn velocity_target_with(
+    current: &CoreProfile,
+    version: &str,
+    agent: &str,
+    fetch_body: &impl Fn(&str, &str) -> Result<Vec<u8>>,
+    fetch: &impl Fn(&str, &str) -> Result<Value>,
+) -> Result<(CoreProfile, String, Option<u64>, bool)> {
+    if !velocity_versions_with(&current.minecraft, fetch_body, agent)?.iter().any(|newer| newer == version) {
+        return Err("CoreTargetVersionNotNewer".into());
+    }
+    let key = SourceKey { family: "VELOCITY".into(), version: version.to_owned() };
+    let Release::Paper(builds) = fetch_group(&key, Ok(agent), fetch).release? else {
+        return Err("CoreSourceUnsupported".into());
+    };
+    let newest = builds.iter().filter(|build| update_eligible("VELOCITY", build)).max_by_key(|build| build.id)
+        .ok_or("NoStableBuild")?;
+    let (Some(hash), Some(url)) = (&newest.sha256, &newest.url) else {
+        return Err("CoreSourceUnverifiedCandidate".into());
+    };
+    if builds.iter().filter(|build| build.sha256.as_ref() == Some(hash)).count() != 1 || hash == &current.sha256 {
+        return Err("CoreSourceUnverifiedCandidate".into());
+    }
+    let profile = CoreProfile { unverified: false, java: None, family: "VELOCITY".into(),
+        minecraft: version.to_owned(), build: newest.id.to_string(), sha256: hash.clone() };
+    Ok((profile, url.clone(), newest.size, newest.stable))
+}
+
+/// `core-velocity-target NAME VERSION`: what a change to `VERSION` installs,
+/// for the summary step of a cross-version change (#41).
+pub(super) fn velocity_target(root: &Path, name: &str, version: &str) -> Result<Value> {
+    let current = velocity_current(root, name)?;
+    let (target, _, size, stable) = velocity_target_with(&current, version, &configured_paper_user_agent()?, &fetch_bytes, &fetch_json)?;
+    Ok(json!({"current":current,"target":target,"size":size,"channel":if stable {"STABLE"} else {"BETA"}}))
+}
+
+/// `core-install-version NAME REQUEST CURRENT VERSION CANDIDATE`: moves a stopped
+/// Velocity proxy to the newest build of another, newer Velocity version (#41).
+pub(super) fn install_version(
+    root: &Path,
+    args: &[String],
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Result<Value> {
+    let [name, request, expected_current, version, expected_candidate] = args else {
+        return Err("InvalidCoreArguments".into());
+    };
+    if !instance_name(name) || !token(request) || !sha256(expected_current) || !sha256(expected_candidate) {
+        return Err("InvalidCoreMaintenanceRequest".into());
+    }
+    let registration = registration_revision(root, name)?;
+    progress(CoreUpdatePhase::Checking);
+    let current = velocity_current(root, name)?;
+    if &current.sha256 != expected_current {
+        return Err("CoreArtifactChanged".into());
+    }
+    let agent = configured_paper_user_agent()?;
+    let (target, url, size, _) = velocity_target_with(&current, version, &agent, &fetch_bytes, &fetch_json)?;
+    if &target.sha256 != expected_candidate {
+        return Err("CoreCandidateChanged".into());
+    }
+    let staging = child_directory(root, "staging")?;
+    let stage = staging.join(format!("core-download-{}-{}", std::process::id(), clock()));
+    fs::create_dir(&stage).map_err(fail)?;
+    let output = stage.join("candidate.jar");
+    let outcome = (|| {
+        let report = report_download(progress);
+        download_verified_with(&url, &agent, &output, &target.sha256, size, Some(&report))?;
+        let _writer = instance_writer_lock(root, name)?;
+        if registration_revision(root, name)? != registration {
+            return Err("RegistrationChanged".into());
+        }
+        core_maintenance::install_cross_version(root, name, request, expected_current, &output, &target, progress)
+    })();
+    if let Err(error) = fs::remove_file(&output) {
+        if error.kind() != io::ErrorKind::NotFound {
+            eprintln!("Core download cleanup failed: {error}");
+        }
+    }
+    if let Err(error) = fs::remove_dir(stage) {
+        eprintln!("Core download staging cleanup failed: {error}");
+    }
+    outcome
+}
+
 pub(super) fn download_prefetch(url: &str, path: &Path, expected: &str) -> Result<()> {
     if !sha256(expected) || !candidate_url(url, expected) {
         return Err("CoreCandidateUnverified".into());
@@ -1703,6 +1882,37 @@ mod tests {
         // A reply for another version or project is refused.
         assert!(purpur_builds(json!({"project":"purpur","version":"26.2","builds":{"all":[]}}), "26.3").is_err());
         assert!(purpur_builds(json!({"project":"purpur","version":"26.3","builds":{"all":[{"build":"1","result":"SUCCESS","md5":"x"}]}}), "26.3").is_err());
+    }
+
+    // #41: newer Velocity versions follow the order of the official list, with
+    // groups newest first, and include -SNAPSHOT versions.
+    #[test]
+    fn velocity_versions_keep_the_official_order_and_offer_only_newer_ones() {
+        let body = br#"{"project":{"id":"velocity","name":"Velocity"},"versions":{
+            "4.0.0":["4.3.2-SNAPSHOT","4.3.1","4.3.0","4.2.1-SNAPSHOT","4.2.0"],
+            "3.0.0":["3.5.1","3.4.0"]}}"#;
+        assert_eq!(newer_velocity_versions(body, "4.2.1-SNAPSHOT").unwrap(), ["4.3.2-SNAPSHOT", "4.3.1", "4.3.0"]);
+        assert_eq!(newer_velocity_versions(body, "3.5.1").unwrap().len(), 5, "groups are read in document order");
+        assert!(newer_velocity_versions(body, "4.3.2-SNAPSHOT").unwrap().is_empty());
+        assert_eq!(newer_velocity_versions(body, "9.9.9").unwrap_err(), "CoreSourceVersionUnlisted");
+        let other = String::from_utf8_lossy(body).replace("\"id\":\"velocity\"", "\"id\":\"paper\"");
+        assert_eq!(newer_velocity_versions(other.as_bytes(), "4.2.0").unwrap_err(), "CoreCatalogInvalid");
+
+        let current = profile("VELOCITY", "4.2.1-SNAPSHOT", "43", LOCAL);
+        let fetch_body = |_: &str, _: &str| Ok(body.to_vec());
+        let builds = |url: &str, _: &str| {
+            assert_eq!(url, "https://fill.papermc.io/v3/projects/velocity/versions/4.3.1/builds");
+            Ok(json!([
+                build(46, "ALPHA", &"f".repeat(64), Some(&format!("https://fill-data.papermc.io/v1/objects/{}/velocity-4.3.1-46.jar", "f".repeat(64)))),
+                build(45, "STABLE", CANDIDATE, Some(&format!("https://fill-data.papermc.io/v1/objects/{CANDIDATE}/velocity-4.3.1-45.jar"))),
+            ]))
+        };
+        let (target, url, _, stable) = velocity_target_with(&current, "4.3.1", TEST_AGENT, &fetch_body, &builds).unwrap();
+        assert_eq!((target.minecraft.as_str(), target.build.as_str(), target.sha256.as_str(), stable), ("4.3.1", "45", CANDIDATE, true));
+        assert!(url.ends_with("/velocity-4.3.1-45.jar"));
+        for older in ["4.2.0", "4.2.1-SNAPSHOT", "3.5.1"] {
+            assert_eq!(velocity_target_with(&current, older, TEST_AGENT, &fetch_body, &builds).err().as_deref(), Some("CoreTargetVersionNotNewer"));
+        }
     }
 
     #[test]

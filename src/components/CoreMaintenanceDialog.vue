@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { errorText, manage, manageCoreWithProgress, type CoreSource } from '../manager'
 import type { CoreUpdateProgress } from '../core-progress'
 import CoreUpdateProgressBar from './CoreUpdateProgressBar.vue'
+import VelocityVersionDialog from './VelocityVersionDialog.vue'
 import { formatDisplayTime, useAppLanguage, type TimeFormat } from '../i18n'
 import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
 import { coreBuildText, coreVersionText } from '../core-display'
@@ -16,7 +17,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 type Profile = { family: string; minecraft: string; build: string }
-type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile }[]; canWrite: boolean; reason?: string | null }
+type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile; crossVersion?: boolean }[]; canWrite: boolean; reason?: string | null }
 type Action = 'core-install-latest' | 'core-install' | 'core-restore' | 'core-reconcile'
 const dialog = ref<HTMLDialogElement>()
 const confirm = ref<HTMLDialogElement>()
@@ -35,6 +36,14 @@ const candidateMd5 = computed(() => {
   const value = candidate.value
   return value && 'md5' in value ? value.md5 : undefined
 })
+// A verified Velocity proxy can also move to another Velocity version (#41).
+const velocityVersion = ref<InstanceType<typeof VelocityVersionDialog>>()
+const velocity = computed(() => state.value?.installed?.family?.toUpperCase() === 'VELOCITY')
+async function versionChanged() {
+  manualSource.value = undefined
+  await read()
+  emit('changed')
+}
 const purpurCheck = computed(() => source.value?.verification === 'purpurMd5'
   || [state.value?.installed?.family, state.value?.identified?.family].some(family => family?.toUpperCase() === 'PURPUR'))
 const path = ref('')
@@ -102,7 +111,7 @@ const reasonText = computed(() => {
 })
 const blockedText = computed(() => primaryEnabled.value || !reasonText.value ? ''
   : t('components.coreMaintenance.blockedReason', { reason: reasonText.value }))
-const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean }>()
+const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean; crossVersion?: boolean }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
   catch (failure) { if (!quiet && !error.value) error.value = errorText(failure) }
@@ -145,6 +154,7 @@ async function check() {
 function ask(action: Action, backup?: string) {
   if (busy.value) return
   choice.value = {action,backup,current:state.value?.currentSha256,
+    crossVersion:state.value?.backups.find(item=>item.id===backup)?.crossVersion===true,
     candidateHash:candidate.value?.sha256 ?? candidateMd5.value,candidateBuild:candidate.value?.build,
     md5:!candidate.value?.sha256 && !!candidateMd5.value}
   confirm.value?.showModal()
@@ -223,8 +233,10 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       <OperationButton :label="t('components.coreMaintenance.check')" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
       <button @click="diagnostics?.showModal()">{{ t('components.coreMaintenance.diagnostics') }}</button>
       <button autofocus @click="close">{{ t('action.close') }}</button>
+      <button v-if="velocity" class="core-dialog-wide" :disabled="!state?.canWrite || busy" @click="velocityVersion?.open()">{{ t('components.velocityVersion.open') }}</button>
     </div>
   </dialog>
+  <VelocityVersionDialog ref="velocityVersion" :name="name" @changed="versionChanged" />
   <dialog ref="diagnostics" aria-labelledby="core-diagnostics-title">
       <h2 id="core-diagnostics-title">{{ t('components.coreMaintenance.diagnostics') }}</h2>
       <p v-if="reasonText" class="hint">{{ reasonText }}</p>
@@ -240,7 +252,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       </div>
       <div class="field"><label for="local-core-sha256">SHA-256</label><input id="local-core-sha256" v-model.trim="sha" name="local-core-sha256" autocomplete="off" spellcheck="false"></div>
       <button :disabled="!state?.canWrite || !path || !/^[0-9a-f]{64}$/i.test(sha)" @click="ask('core-install')">{{ t('components.coreMaintenance.update') }}</button>
-      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">{{ coreBuildText(backup.profile.build) }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
+      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">{{ backup.crossVersion ? coreVersionText(backup.profile) : coreBuildText(backup.profile.build) }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
       <details v-if="state" class="detail-section">
         <summary>{{ t('core.diagnostics.show') }}</summary>
         <pre class="selectable" tabindex="0" :aria-label="t('core.diagnostics.show')" translate="no">{{ diagnosticText }}</pre>
@@ -257,6 +269,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
     <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?t('components.coreMaintenance.restoreTitle'):choice?.action==='core-reconcile'?t('components.coreMaintenance.reconcileTitle'):t('components.coreMaintenance.update') }}</h2>
     <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">{{ t('components.coreMaintenance.targetBuild', { build: choice.candidateBuild }) }}</p>
     <p v-if="choice?.action==='core-install-latest' && choice.md5">{{ t('components.coreMaintenance.purpurMd5Note') }}</p>
+    <p v-if="choice?.action==='core-restore' && choice.crossVersion">{{ t('components.velocityVersion.restoreNote') }}</p>
     <p>{{ t('components.coreMaintenance.backupNote') }}</p>
     <div class="dialog-actions">
       <button autofocus :disabled="busy" @click="confirm?.close()">{{ t('action.cancel') }}</button>
@@ -271,4 +284,5 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
 <style scoped>
 .core-path-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
 .core-dialog-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .5rem; }
+.core-dialog-wide { grid-column: 1 / -1; }
 </style>
