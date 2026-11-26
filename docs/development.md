@@ -51,9 +51,19 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
 - 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
 - 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。
+- 「結束」與 `app-exit` 只對 GUI 的應用程式視窗送 `WM_CLOSE`，略過工具視窗（`WS_EX_TOOLWINDOW`）。
+  GUI 事件迴圈有一個可見的工具視窗（Tao 的「Thread Event Target」）負責接收結束請求；1.1.0 及更早的版本中它也會收到 `WM_CLOSE` 而被銷毀，
+  GUI 收不到結束請求，每次都要等下面的看門狗 10 秒後才結束（#92）。
+- 伺服器後台視窗是另一個 GUI 程序（`native-console`），不向 Manager 登記，「結束」與 `app-exit` 不會關閉它；伺服器繼續執行，後台也留著。
 - 結束看門狗：主視窗關閉後，GUI 暫停向 Manager 登記，避免重新啟動使用者剛結束的 Manager。
   10 秒後程序仍在、且已沒有任何可見視窗時，記錄 `gui-exit-watchdog` 並直接結束程序；仍有可見視窗代表關閉被取消，看門狗解除。
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
+- 結束計時：`tests/measure-gui-exit.ps1` 以 `app-exit`、系統匣「結束」、視窗關閉鈕三種方式反覆開關 GUI，記錄每次從送出到程序結束的時間，
+  並檢查期間的 GUI 診斷紀錄沒有 `gui-exit-watchdog`。系統匣「結束」是對該工作區 Manager 的系統匣視窗送出選單命令（muda 依建立順序編號，「結束」為 1002）。
+
+  ```powershell
+  ./tests/measure-gui-exit.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-exit') -Runs 20
+  ```
 - 回退相容：`preferences.json` 仍保留舊的 `closeToTray` 值但不再使用。值為預設時不寫入檔案；若曾在 1.0.0 關閉此設定，
   回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
 - 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512；正式版藍色、開發版紅色，見「開發版紅色圖示」）。`muda` 需要 comctl32 第 6 版，

@@ -2,9 +2,14 @@
 //!
 //! Once seen in acceptance: the window was destroyed, no exit was logged, and the
 //! process kept running. Its Manager attach loop then restarted the Manager the user
-//! had just quit, so the tray icon came back. The cause was not reproduced, so this
-//! guards the outcome: after a close, a process whose main window is gone is ended,
-//! and it stops attaching to the Manager while it closes.
+//! had just quit, so the tray icon came back. This guards the outcome: after a close,
+//! a process whose main window is gone is ended, and it stops attaching to the Manager
+//! while it closes.
+//!
+//! The cause found later (#92): tray Quit and `app-exit` also sent WM_CLOSE to Tao's
+//! visible tool window that carries the event loop's messages, so the loop never saw
+//! the exit request. `manager_tray::close_gui_windows` now skips tool windows. The
+//! watchdog stays for a close that still gets stuck.
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::mpsc;
