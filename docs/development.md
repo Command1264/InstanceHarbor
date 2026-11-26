@@ -603,14 +603,18 @@ Purpur 以官方 API（`api.purpurmc.org/v2/purpur/<版本>?detailed=true`）檢
 API 只提供 MD5，所以目前 JAR 的 build 以 MD5 比對官方清單找出；找不到相符的 build 時不提供更新（`CoreSourceUnverifiedLocalHash`）。
 候選以官方 MD5 指定，下載走 HTTPS，內容須與該 MD5 相符；之後計算 SHA-256 登記為已核對，往後的核對都用 SHA-256。
 畫面以「核對方式：以 Purpur 官方 MD5 核對」和 SHA-256 核對區分。未核對、只由 JAR 自述為 Purpur 的實例也能更新，更新後改為已核對。
-Purpur 的候選在下載前沒有 SHA-256，所以不支援預先下載與批次更新，批次預覽會提示改用單台核心維護。API 不提供檔案大小，下載時只顯示已下載的大小。
+Purpur 的候選在下載前沒有 SHA-256，所以預先下載與批次更新以官方 MD5 指定候選（#113）：
+第一次從官方 HTTPS 下載後比對 MD5，相符才計算 SHA-256，並記錄在候選旁的 `<MD5>.sha256`；同一份候選（同批次的其他實例、預先下載後的更新）
+一律以這個 SHA-256 核對已存的檔案，不再重新下載。MD5 不符的下載不保留，該台不更新，其他台照常完成（原因 `CoreArtifactDigestMismatch`）。
+批次清單的 Purpur 項目標示「以官方 MD5 核對」；批次目標以 `candidateMd5` 取代 `candidateSha256`，其他核心的目標格式與請求 ID 不變。
+API 不提供檔案大小，下載時只顯示已下載的大小。
 
 替換核心時，目的地 JAR 只要有任何開啟的檔案代碼（例如清單正在計算無法離線辨識的核心雜湊，或防毒軟體掃描）就會失敗。替換最多等待 5 秒讓這類讀取結束，仍失敗才回報錯誤。
 來源檢查依核心及版本分組。開發或部署時可用程序環境
 `INSTANCEHARBOR_PAPERMC_CONTACT_URL` 指定另一個有效的 HTTPS 聯絡網址。
 Spigot 1.8.8 的原生提交距離和同版本發布資訊各自核對。原生版本顯示落後只提供診斷資訊，Spigot 更新仍需使用已核對的本機 JAR。
 在「應用程式設定 → 核心更新」可開啟「預先下載核心更新」，預設關閉。開啟後，常駐 Manager
-會核對同版本線的 Paper 與 Velocity 更新，並在工作區依 SHA-256 共用候選。準備期間各實例可繼續運行。
+會核對同版本線的 Paper、Velocity 與 Purpur 更新，並在工作區依 SHA-256（Purpur 下載前依官方 MD5）共用候選。準備期間各實例可繼續運行。
 確認更新且符合原有的停止條件後，管理端核對本機候選，再為各台分別備份及替換。
 最後一台已更新或移除管理，且目前無安裝使用該檔案時，Manager 會回收候選。關閉設定會停止背景下載，
 並回收已無安裝使用的預先下載副本。已準備的候選及待更新實例可在 Manager 重開後重新核對。
@@ -627,8 +631,8 @@ Manager 重開時先核對已進入替換交易的原請求，已取消的項目
 - **單台**：GUI 以 `core_maintenance_with_progress` 指令執行 `core-install-latest`、`core-install` 與 `core-restore`，階段經 Tauri Channel 即時回報。
 - **批次**：由常駐 Manager 執行。目前項目的階段寫入 `core-batches/<批次 ID>.progress`，`core-batch-list` 讀出後附在執行中項目的 `progress` 欄位。
   這個檔案只供顯示，遺失或過期都不影響批次結果；同一階段的位元組最多每 0.4 秒寫一次。
-- **同一核心只下載一次**：批次中相同 SHA-256 的候選共用一份。開啟預先下載時，Paper 使用 `staging/core-prefetch`；其他情況放在
-  `staging/core-batch-candidates`。第二台起顯示「使用已下載的核心」，不顯示下載進度。沒有任何進行中的批次項目需要時，Manager 回收該候選。
+- **同一核心只下載一次**：批次中相同 SHA-256（Purpur 為相同官方 MD5）的候選共用一份。開啟預先下載時，Paper、Velocity 與 Purpur 使用 `staging/core-prefetch`；其他情況放在
+  `staging/core-batch-candidates`。第二台起顯示「使用已下載的核心」，不顯示下載進度。沒有任何進行中的批次項目需要時，Manager 回收該候選；Purpur 的 `<MD5>.sha256` 紀錄與它指向的檔案一起回收。
 操作紀錄預設隱藏 90 天前已結案資料，
 保留原始紀錄及結果未確認的工作。
 
