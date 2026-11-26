@@ -2,8 +2,8 @@
 mod windows;
 #[cfg(windows)]
 pub use windows::{
-    clear_scheduled_webview, dispatch, dispatch_recovery_backup, dispatch_with_creation_progress, gui_singleton,
-    ConsoleRequest, ConsoleViewer, CreationPhase,
+    clear_scheduled_webview, dispatch, dispatch_recovery_backup, dispatch_with_core_progress, dispatch_with_creation_progress,
+    gui_singleton, ConsoleRequest, ConsoleViewer, CoreUpdatePhase, CreationPhase,
 };
 pub mod about;
 pub mod app_icon;

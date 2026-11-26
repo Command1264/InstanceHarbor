@@ -164,22 +164,26 @@ pub(super) fn prepare(
     let outcome = (|| {
         let scratch_directory = batch_import::hold_directories(root, &scratch)?;
         progress(CreationPhase::DownloadingCore);
-        let report_core = |received, total| progress(CreationPhase::CoreBytes { received, total });
+        let report_core = |received, total: Option<u64>| if let Some(total) = total {
+            progress(CreationPhase::CoreBytes { received, total })
+        };
         complete_download(
             download_command(url, &agent, &scratch_server)?,
             &scratch_server,
             &profile.sha256,
-            size.map(|total| (total, &report_core as &dyn Fn(u64, u64))),
+            size.map(|total| (Some(total), &report_core as &dyn Fn(u64, Option<u64>))),
         )?;
         let context = launcher_context(&scratch_server, profile)?;
         progress(CreationPhase::DownloadingMojang);
         let (mojang_url, size) = verify_mojang_source(profile, &context, &agent)?;
-        let report_mojang = |received, total| progress(CreationPhase::MojangBytes { received, total });
+        let report_mojang = |received, total: Option<u64>| if let Some(total) = total {
+            progress(CreationPhase::MojangBytes { received, total })
+        };
         complete_download(
             download_command(&mojang_url, &agent, &scratch_mojang)?,
             &scratch_mojang,
             &context.sha256,
-            size.map(|total| (total, &report_mojang as &dyn Fn(u64, u64))),
+            size.map(|total| (Some(total), &report_mojang as &dyn Fn(u64, Option<u64>))),
         )?;
         // Windows cannot rename a directory while its no-delete guard is live.
         drop(scratch_directory);

@@ -1336,11 +1336,18 @@ fn advance_core_batches(root: &Path, state: &Mutex<State>) -> Result<()> {
         }
         let Ok(journal) = &mut state.core_batches else { return Ok(()) };
         let work = journal.next(root)?;
+        if work.is_none() {
+            // Candidates of finished, cancelled or interrupted batches (#60).
+            if let Err(error) = journal.collect_candidates(root) {
+                eprintln!("Core batch candidate cleanup failed: {error}");
+            }
+        }
         state.core_in_flight = work.is_some();
         work
     };
     if let Some(work) = work {
-        let outcome = core_batch::perform(root, &work, || {
+        let progress = core_batch::progress_reporter(root, &work);
+        let outcome = core_batch::perform(root, &work, &progress, || {
             // A durable cancel and entry into core maintenance must share one order.
             let mut state = state.lock().map_err(fail)?;
             let journal = state.core_batches.as_mut().map_err(|_| "CoreBatchJournalUnavailable")?;

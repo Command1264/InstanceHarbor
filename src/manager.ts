@@ -3,6 +3,7 @@ import { tr, type LanguagePreference, type MessageId, type TimeFormat } from './
 import type { SelectionColorPreference } from './theme'
 import type { ConsoleChoice } from './console-tier.ts'
 import { javaStartErrorId } from './java-start-error.ts'
+import type { CoreUpdateProgress } from './core-progress.ts'
 import type { RegistryIssue, StateIssue } from './registry-issues.ts'
 export { consoleFallbackReason, consoleSummary, type ConsoleChoice, type ConsolePlan } from './console-tier.ts'
 
@@ -53,7 +54,7 @@ export interface CoreBatch {
   action: 'core-batch-install'
   createdAt: number
   state: 'Running' | 'Completed' | 'CompletedWithIssues'
-  items: { name: string; phase: CoreBatchPhase; reason: string | null }[]
+  items: { name: string; phase: CoreBatchPhase; reason: string | null; progress?: CoreUpdateProgress; reused?: boolean }[]
 }
 export function canCancelCoreBatchItem(item: CoreBatch['items'][number]): boolean {
   return item.phase === 'Queued' || item.phase === 'Preparing'
@@ -102,6 +103,17 @@ export async function confirmCreation(work: string, draft: string, onProgress: (
   const progress = new Channel<CreationProgress>(onProgress)
   try {
     await invoke('create_with_progress', { work, draft, progress })
+  } finally {
+    progress.onmessage = () => {}
+  }
+}
+
+/** A core install or restore that reports each step to `onProgress` (#60). */
+export async function manageCoreWithProgress<T>(arguments_: string[], onProgress: (update: CoreUpdateProgress) => void): Promise<T> {
+  if (!nativeBridge) throw new Error(tr('manager.error.noNativeBridge'))
+  const progress = new Channel<CoreUpdateProgress>(onProgress)
+  try {
+    return await invoke<T>('core_maintenance_with_progress', { arguments: arguments_, progress })
   } finally {
     progress.onmessage = () => {}
   }

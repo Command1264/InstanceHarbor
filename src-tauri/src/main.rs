@@ -240,13 +240,31 @@ async fn create_with_progress(
     draft: String,
     progress: tauri::ipc::Channel<instanceharbor::CreationPhase>,
 ) -> Result<serde_json::Value, String> {
-    manage_recorded(vec!["gui-create-confirm".into(), work, draft], Some("manual".into()), Some(progress)).await
+    manage_recorded(vec!["gui-create-confirm".into(), work, draft], Some("manual".into()), Some(Progress::Creation(progress))).await
+}
+
+/// A core install or restore whose steps reach the GUI as they happen (#60).
+#[tauri::command]
+async fn core_maintenance_with_progress(
+    arguments: Vec<String>,
+    progress: tauri::ipc::Channel<instanceharbor::CoreUpdatePhase>,
+) -> Result<serde_json::Value, String> {
+    if !arguments.first().is_some_and(|verb| matches!(verb.as_str(), "core-install-latest" | "core-install" | "core-restore")) {
+        return Err("InvalidCoreArguments".into());
+    }
+    manage_recorded(arguments, Some("manual".into()), Some(Progress::Core(progress))).await
+}
+
+/// Where a long operation reports its steps.
+enum Progress {
+    Creation(tauri::ipc::Channel<instanceharbor::CreationPhase>),
+    Core(tauri::ipc::Channel<instanceharbor::CoreUpdatePhase>),
 }
 
 async fn manage_recorded(
     arguments: Vec<String>,
     origin: Option<String>,
-    progress: Option<tauri::ipc::Channel<instanceharbor::CreationPhase>>,
+    progress: Option<Progress>,
 ) -> Result<serde_json::Value, String> {
     if arguments.first().is_some_and(|verb| matches!(
         verb.as_str(), "instance-diagnostics" | "import-batch-preview" | "import-batch-status"
@@ -280,7 +298,7 @@ async fn manage_recorded(
 }
 async fn manage_inner(
     arguments: Vec<String>,
-    progress: Option<tauri::ipc::Channel<instanceharbor::CreationPhase>>,
+    progress: Option<Progress>,
 ) -> Result<serde_json::Value, String> {
     let root = std::env::var("IH_WORKSPACE")
         .map_err(|_| "MissingWorkspaceBinding: 未指定管理工作區。")?;
@@ -298,9 +316,14 @@ async fn manage_inner(
     }
     command.extend(arguments);
     tauri::async_runtime::spawn_blocking(move || match progress {
-        Some(channel) => instanceharbor::dispatch_with_creation_progress(&command, &|phase| {
+        Some(Progress::Creation(channel)) => instanceharbor::dispatch_with_creation_progress(&command, &|phase| {
             if let Err(error) = channel.send(phase) {
                 eprintln!("GUI creation progress delivery failed: {error}");
+            }
+        }),
+        Some(Progress::Core(channel)) => instanceharbor::dispatch_with_core_progress(&command, &|phase| {
+            if let Err(error) = channel.send(phase) {
+                eprintln!("GUI core progress delivery failed: {error}");
             }
         }),
         None => instanceharbor::dispatch(&command),
@@ -670,6 +693,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             manage,
             create_with_progress,
+            core_maintenance_with_progress,
             recovery_backup,
             present_window,
             system_accent_color,
