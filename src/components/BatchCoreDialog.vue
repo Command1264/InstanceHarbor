@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { isMessageId, useAppLanguage, type MessageId } from '../i18n'
 import { canCancelCoreBatchItem, manage, rawError, type CoreBatch, type CoreSource, type Instance, type InstanceMeta } from '../manager'
+import { batchTarget, batchUpdateMessage, hasBatchCandidate } from '../core-batch'
 import CoreUpdateProgressBar from './CoreUpdateProgressBar.vue'
 import OperationButton from './OperationButton.vue'
 import OverlayScroll from './OverlayScroll.vue'
@@ -64,7 +65,7 @@ function identityOf(name: string) {
   return JSON.stringify([instance?.state, instance?.run?.id, instance?.port, meta?.path, meta?.java, meta?.core, props.blockedNames.has(name)])
 }
 function sourceIdentity(source?: CoreSource) {
-  return JSON.stringify([source?.sha256, source?.candidate?.sha256, source?.registrationRevision])
+  return JSON.stringify([source?.sha256, source?.candidate?.sha256, source?.candidate?.md5, source?.registrationRevision])
 }
 function sourceMessage(source?: CoreSource, fallback: MessageId = 'core.batch.checkFailed'): MessageId {
   if (source?.status === 'NoStableBuild') return 'core.source.noStableBuild'
@@ -123,11 +124,11 @@ async function check() {
       if (!source) return { name, result: 'core.batch.checkFailed' }
       if (source.status === 'Current') return { name, result: 'core.source.current' }
       if (!source.candidate || !source.sha256) return { name, result: sourceMessage(source) }
-      // A Purpur candidate has no SHA-256 before download, so it is updated one at a time (#41).
-      if (!source.candidate.sha256) return { name, result: 'core.batch.singleOnly' }
+      // A Purpur candidate is named by its official MD5 until it is downloaded (#113).
+      if (!hasBatchCandidate(source)) return { name, result: sourceMessage(source) }
       if (instanceByName.value.get(name)?.state !== 'Stopped') return { name, result: 'core.batch.notStopped' }
       if (props.blockedNames.has(name)) return { name, result: 'core.batch.operationPending' }
-      return { name, source, result: 'core.batch.updateTo' }
+      return { name, source, result: batchUpdateMessage(source) }
     })
     phase.value = 'ready'
   } catch {
@@ -144,10 +145,7 @@ async function apply() {
   phase.value = 'submitting'
   error.value = undefined
   requestId.value ||= crypto.randomUUID()
-  const targets = ready.value.map(({name,source}) => ({
-    name, currentSha256: source.sha256, candidateSha256: source.candidate?.sha256,
-    registrationRevision: source.registrationRevision,
-  }))
+  const targets = ready.value.map(({name,source}) => batchTarget(name, source))
   try {
     const batch = await manage<CoreBatch>(['core-batch-submit', requestId.value, JSON.stringify(targets)])
     const observed = resultBatch.value?.id === batch.id ? resultBatch.value : undefined

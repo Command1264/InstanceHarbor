@@ -15,18 +15,32 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(400);
 struct Target {
     name: String,
     current_sha256: String,
-    candidate_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    candidate_sha256: Option<String>,
+    /// Purpur (#113): the official MD5 of the candidate, in place of a SHA-256
+    /// that is known only after download.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    candidate_md5: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     registration_revision: Option<String>,
 }
 
 impl Target {
     fn valid(&self) -> bool {
+        let candidate = match (&self.candidate_sha256, &self.candidate_md5) {
+            (Some(hash), None) => digest(hash) && &self.current_sha256 != hash,
+            (None, Some(md5)) => core_prefetch::md5_key(md5),
+            _ => false,
+        };
         instance_name(&self.name)
             && digest(&self.current_sha256)
-            && digest(&self.candidate_sha256)
-            && self.current_sha256 != self.candidate_sha256
+            && candidate
             && self.registration_revision.as_deref().is_none_or(digest)
+    }
+
+    /// The candidate as the source names it: its SHA-256, or its MD5.
+    fn candidate(&self) -> &str {
+        self.candidate_sha256.as_deref().or(self.candidate_md5.as_deref()).unwrap_or_default()
     }
 }
 
@@ -455,7 +469,7 @@ impl Journal {
     pub(super) fn collect_candidates(&self, root: &Path) -> Result<()> {
         let needed: BTreeSet<&str> = self.0.iter().flat_map(|batch| &batch.items)
             .filter(|item| item.phase.active())
-            .map(|item| item.target.candidate_sha256.as_str())
+            .map(|item| item.target.candidate())
             .collect();
         core_prefetch::collect_batch(root, &needed)
     }
@@ -490,8 +504,15 @@ fn classify_receipt(item: &Item, receipt: Result<Value>) -> Outcome {
     match receipt {
         Ok(receipt) if receipt["workId"] == item.request => {
             let installed = &receipt["installed"]["sha256"];
+            // A Purpur candidate has no SHA-256 before download (#113). This
+            // request installs only bytes that matched its official MD5, so a
+            // Purpur receipt of this request that changed the core completed it.
+            let candidate = match &item.target.candidate_sha256 {
+                Some(hash) => installed == hash,
+                None => receipt["installed"]["family"] == "PURPUR" && installed != &item.target.current_sha256,
+            };
             match receipt["outcome"].as_str() {
-                Some("applied") if installed == &item.target.candidate_sha256 => Outcome::Completed,
+                Some("applied") if candidate => Outcome::Completed,
                 Some("notApplied") if installed == &item.target.current_sha256 => {
                     Outcome::Failed("CoreBatchNotApplied".into())
                 }
@@ -530,7 +551,7 @@ pub(super) fn perform(
         &item.target.name,
         &item.request,
         &item.target.current_sha256,
-        &item.target.candidate_sha256,
+        item.target.candidate(),
         &item.registration,
         core_source::CandidateCache::Batch,
         progress,
@@ -599,6 +620,10 @@ mod tests {
         }
 
         fn add(&self, name: &str) {
+            self.add_with(name, profile(b"current artifact", "100"));
+        }
+
+        fn add_with(&self, name: &str, core: CoreProfile) {
             let directory = child_directory(&self.0, "instances").unwrap().join(name);
             fs::create_dir(&directory).unwrap();
             fs::write(directory.join("server.jar"), b"current artifact").unwrap();
@@ -622,7 +647,7 @@ mod tests {
                     jvm: None,
                     timing: None,
                     auto_restart: None,
-                    core_profile: Some(profile(b"current artifact", "100")),
+                    core_profile: Some(core),
                     core_local_create: true,
                     management_discovered: false,
                 },
@@ -650,7 +675,8 @@ mod tests {
         Target {
             name: name.into(),
             current_sha256: profile(b"current artifact", "100").sha256,
-            candidate_sha256: profile(b"candidate artifact", "101").sha256,
+            candidate_sha256: Some(profile(b"candidate artifact", "101").sha256),
+            candidate_md5: None,
             registration_revision: None,
         }
     }
@@ -917,7 +943,7 @@ mod tests {
         fixture.add("second");
         let mut journal = Journal::open(&fixture.0).unwrap();
         journal.submit(&fixture.0, "batch-shared", &arguments(&[target("first"), target("second")])).unwrap();
-        let candidate = target("first").candidate_sha256;
+        let candidate = target("first").candidate_sha256.unwrap();
         let store = core_prefetch::Store::batch(&fixture.0).unwrap();
         let downloads = std::cell::Cell::new(0);
         for _ in 0..2 {
@@ -937,5 +963,108 @@ mod tests {
         journal.cancel(&fixture.0, "batch-shared").unwrap();
         journal.collect_candidates(&fixture.0).unwrap();
         assert!(!directory.join(format!("{candidate}.jar")).exists());
+    }
+
+    fn purpur(bytes: &[u8], build: &str) -> CoreProfile {
+        CoreProfile { family: "PURPUR".into(), ..profile(bytes, build) }
+    }
+
+    fn md5_of(fixture: &Fixture, bytes: &[u8]) -> String {
+        let probe = fixture.0.join("md5-probe.jar");
+        fs::write(&probe, bytes).unwrap();
+        let md5 = content_revision::file_md5(&probe).unwrap();
+        fs::remove_file(&probe).unwrap();
+        md5
+    }
+
+    // #113: a Purpur item enters a batch by the official MD5 of its candidate.
+    // Only the first download is compared with the MD5; its SHA-256 is recorded
+    // and later items use the stored bytes. A download that does not match the
+    // MD5 leaves that instance unchanged, and the other items still complete.
+    #[test]
+    fn purpur_batch_checks_the_md5_once_and_a_mismatch_fails_only_its_item() {
+        let fixture = Fixture::new();
+        for name in ["tampered", "first", "second"] {
+            fixture.add_with(name, purpur(b"current artifact", "100"));
+        }
+        let md5 = md5_of(&fixture, b"candidate artifact");
+        let purpur_target = |name: &str| Target {
+            name: name.into(),
+            current_sha256: purpur(b"current artifact", "100").sha256,
+            candidate_sha256: None,
+            candidate_md5: Some(md5.clone()),
+            registration_revision: None,
+        };
+        // A target names its candidate by exactly one lowercase digest.
+        assert!(purpur_target("a").valid());
+        assert!(!Target { candidate_md5: Some(md5.to_uppercase()), ..purpur_target("a") }.valid());
+        assert!(!Target { candidate_md5: None, ..purpur_target("a") }.valid());
+        assert!(!Target { candidate_sha256: target("a").candidate_sha256, ..purpur_target("a") }.valid());
+        // A SHA-256 target is written as before, so its request ID is unchanged.
+        assert_eq!(serde_json::to_value(target("a")).unwrap().as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["candidateSha256", "currentSha256", "name"]);
+
+        let mut journal = Journal::open(&fixture.0).unwrap();
+        let targets = arguments(&[purpur_target("tampered"), purpur_target("first"), purpur_target("second")]);
+        journal.submit(&fixture.0, "batch-purpur", &targets).unwrap();
+        let store = core_prefetch::Store::batch(&fixture.0).unwrap();
+        let downloads = std::cell::Cell::new(0);
+        let reused = std::cell::Cell::new(0);
+        for (name, served) in [("tampered", &b"tampered artifact"[..]), ("first", b"candidate artifact"), ("second", b"never served")] {
+            let work = journal.next(&fixture.0).unwrap().unwrap();
+            assert_eq!(work.item.target.name, name);
+            let after = CoreProfile { sha256: String::new(), ..purpur(b"", "101") };
+            let result = core_source::install_purpur_stored(
+                &fixture.0, name, &work.item.request, &work.item.target.current_sha256, &work.item.registration,
+                &store, &md5, &purpur(b"current artifact", "100"), &after,
+                |path| {
+                    downloads.set(downloads.get() + 1);
+                    fs::write(path, served).map_err(fail)
+                },
+                &|phase| if phase == core_maintenance::CoreUpdatePhase::Reusing { reused.set(reused.get() + 1) },
+                || journal.begin_commit(&fixture.0, &work),
+            );
+            let outcome = match result {
+                Err(error) => after_install_error(&fixture.0, &work.item, &error),
+                receipt => classify_receipt(&work.item, receipt),
+            };
+            journal.finish(&fixture.0, &work, outcome).unwrap();
+        }
+        assert_eq!((downloads.get(), reused.get()), (2, 1), "the second matching item reuses the stored bytes");
+        let status = client(&fixture.0, "core-batch-status", &["batch-purpur".into()]).unwrap();
+        let phases: Vec<_> = status["items"].as_array().unwrap().iter()
+            .map(|item| (item["phase"].as_str().unwrap(), item["reason"].as_str())).collect();
+        assert_eq!(phases, [("Failed", Some("CoreArtifactDigestMismatch")), ("Completed", None), ("Completed", None)]);
+        let candidate = content_revision::revision(b"candidate artifact").unwrap();
+        assert_eq!(fs::read(fixture.0.join("instances/tampered/server.jar")).unwrap(), b"current artifact");
+        assert!(!fixture.0.join("instances/tampered/.instanceharbor-core-maintenance").exists());
+        for name in ["first", "second"] {
+            assert_eq!(fs::read(fixture.0.join("instances").join(name).join("server.jar")).unwrap(), b"candidate artifact");
+            let registered = instance(&fixture.0, name).unwrap().core_profile.unwrap();
+            assert_eq!((registered.family.as_str(), registered.build.as_str(), registered.sha256.as_str(), registered.unverified),
+                ("PURPUR", "101", candidate.as_str(), false));
+        }
+        // The batch is done, so its stored bytes and their record are collected.
+        let directory = fixture.0.join("staging/core-batch-candidates");
+        assert!(directory.join(format!("{candidate}.jar")).exists());
+        journal.collect_candidates(&fixture.0).unwrap();
+        assert!(!directory.join(format!("{candidate}.jar")).exists());
+        assert!(!directory.join(format!("{md5}.sha256")).exists());
+    }
+
+    // #113: a recovered Purpur item is judged by its own receipt.
+    #[test]
+    fn purpur_receipt_completes_only_a_changed_purpur_core() {
+        let item = Item {
+            target: Target { name: "a".into(), current_sha256: "1".repeat(64), candidate_sha256: None,
+                candidate_md5: Some("e".repeat(32)), registration_revision: None },
+            registration: "2".repeat(64), request: "req".into(), phase: Phase::Sending, reason: None,
+        };
+        let receipt = |outcome: &str, family: &str, sha: String| Ok(json!({"workId":"req","outcome":outcome,
+            "installed":{"family":family,"sha256":sha}}));
+        assert!(matches!(classify_receipt(&item, receipt("applied", "PURPUR", "3".repeat(64))), Outcome::Completed));
+        assert!(matches!(classify_receipt(&item, receipt("applied", "PAPER", "3".repeat(64))), Outcome::Unconfirmed(_)));
+        assert!(matches!(classify_receipt(&item, receipt("applied", "PURPUR", "1".repeat(64))), Outcome::Unconfirmed(_)));
+        assert!(matches!(classify_receipt(&item, receipt("notApplied", "PURPUR", "1".repeat(64))), Outcome::Failed(_)));
     }
 }
