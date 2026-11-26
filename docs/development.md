@@ -39,14 +39,14 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 滑鼠停在圖示上會顯示執行中的伺服器台數，右鍵選單第一行也會顯示（每 5 秒更新，算法與清單的「可停止」相同）。
   選單文字依「語言與外觀」的語言設定。
 - 左鍵點圖示，或右鍵選「開啟 InstanceHarbor」，會以這個工作區開啟 GUI；GUI 已在執行時則叫回它的視窗。
-- 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗。伺服器與 Host 是獨立程序，會繼續執行。
+- 右鍵選「結束」會結束 Manager，並關閉已登記的 GUI 視窗與伺服器後台視窗。伺服器與 Host 是獨立程序，會繼續執行。
   還有批次工作或核心更新在進行時，Manager 不結束，改為跳出說明，請等工作完成後再結束；這與 `manager-exit` 回報
   `ManagerHasActiveWork` 的條件相同。
   只要有伺服器不是「已停止」（包含啟動中、工作階段未定，或狀態讀不到），會先跳出確認（預設為「否」）。
   其中開啟自動重啟的伺服器會另外說明：自動重啟由 Manager 執行，
   結束後這些伺服器當機或意外結束不會自動重啟，要等 Manager 下次啟動才恢復。按「是」後會再核對一次批次工作。
   CLI 的 `manager-exit` 不詢問，只套用批次工作的條件。
-  CLI 的 `app-exit` 與「結束」同一套流程（結束 Manager 並關閉已登記的 GUI 視窗），同樣不詢問、只套用批次工作的條件；Setup 更新時使用它。
+  CLI 的 `app-exit` 與「結束」同一套流程（結束 Manager，關閉已登記的 GUI 視窗與伺服器後台視窗），同樣不詢問、只套用批次工作的條件；Setup 更新時使用它。
 - 「結束」只關閉仍是原登記程序的 GUI：`gui-attach` 記下 PID、Windows 程序建立時間與 GUI 執行檔路徑，
   送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
 - 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
@@ -54,7 +54,14 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 - 「結束」與 `app-exit` 只對 GUI 的應用程式視窗送 `WM_CLOSE`，略過工具視窗（`WS_EX_TOOLWINDOW`）。
   GUI 事件迴圈有一個可見的工具視窗（Tao 的「Thread Event Target」）負責接收結束請求；1.1.0 及更早的版本中它也會收到 `WM_CLOSE` 而被銷毀，
   GUI 收不到結束請求，每次都要等下面的看門狗 10 秒後才結束（#92）。
-- 伺服器後台視窗是另一個 GUI 程序（`native-console`），不向 Manager 登記，「結束」與 `app-exit` 不會關閉它；伺服器繼續執行，後台也留著。
+- 伺服器後台視窗是另一個 GUI 程序（`native-console`），不向 Manager 登記：按它的 X 只隱藏視窗，隱藏的視窗也收不到 `WM_CLOSE`。
+  所以「結束」與 `app-exit` 改經後台自己的 Named Pipe（只接受同一安裝的 `ihctl.exe`）送出結束要求，後台程序隨即結束（#114）。
+  Manager 先拒絕新的請求（`ManagerExiting`，包含會重新開啟後台的 `console-open`），再通知 GUI 與後台，通知完成後才結束。
+  後台不在時直接略過；後台沒有確認時只寫入診斷紀錄（`console-viewer-quit`），Manager 照常結束。
+  每台伺服器的後台由它的 Host 持有，後台程序結束不影響伺服器；之後開啟 GUI 再按「後台」會重新開啟分頁。
+  獨立主控台視窗（後台元件無法使用時的備用方式，見「伺服器後台」）屬於 Host，「結束」不會關閉它：關閉它會立即停止伺服器。
+- 伺服器停止（或被新的 run 取代）時，後台的分頁自動關閉；最後一個分頁關閉時後台程序結束。前端判斷在 `src/console-session.js`，
+  分頁與結束條件在 `console_viewer.rs` 的 `Tabs::close`，兩者都有回歸測試。
 - 結束看門狗：主視窗關閉後，GUI 暫停向 Manager 登記，避免重新啟動使用者剛結束的 Manager。
   10 秒後程序仍在、且已沒有任何可見視窗時，記錄 `gui-exit-watchdog` 並直接結束程序；仍有可見視窗代表關閉被取消，看門狗解除。
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
@@ -323,6 +330,24 @@ ZIP 目錄記錄每個項目的 CRC，任一項目內容改變都會使目錄改
 離線辨識與網路無關：清單刷新時不連線核對，所以網路正常時也可能出現。
 「核心維護」在核心未核對時以 `identified` 回傳離線辨識的版本，「目前版本」只加註「（離線辨識）」；核心更新是否可用仍依 `trusted_profile`，不因離線辨識而改變。
 
+#### 共用核心
+
+相同 SHA-256 的核心只存一份（#62）。新建立的實例與做過核心更新（含還原）的實例使用共用核心；既有實例不主動轉換。
+
+- **共用區**：工作區的 `shared-cores/<SHA-256>.jar`，設為唯讀。不跨工作區共用。
+- **實例資料夾**：核心 JAR 是共用區檔案的另一個檔名（NTFS hardlink），所以資料夾仍可單獨啟動，V1 回退、移交、移除管理與匯出不受影響。
+  hardlink 共用唯讀屬性，所以實例資料夾裡的核心也是唯讀；要手動換核心時，請用核心維護。
+- **不同磁碟或連結失敗**：實例不在工作區所在的磁碟時直接複製，不放進共用區；建立連結失敗時，也改為一般（可寫入）複製。
+- **所有核心種類**都適用。共用依據是內容的 SHA-256 完全相同，不要求已向官方來源核對。
+- **更新**：新核心先放進共用區，再以連結替換實例的核心檔名。舊檔名是唯讀的，替換使用 `FileRenameInfoEx` 加上忽略唯讀，其他實例的檔名不受影響。
+  與 #112 一起運作：官方檔名改名時，新名稱同樣是共用檔的連結，舊名稱只是被刪除。備份 `before.jar` 仍是獨立的複本。
+- **啟動**：Host 以「允許讀取與刪除檔名、不允許寫入」開啟核心，直到 Java 結束。所以 A、B 共用同一份、B 執行中時，已停止的 A 仍可更新（只改 A 的檔名），而執行中的核心任何人都無法改寫。
+  核心是共用檔（檔名超過一個）時，啟動前核對 SHA-256 與登記相同，不符就拒絕啟動（`SharedCoreDigestMismatch`）。
+- **使用中的判斷**：Windows Restart Manager 會把「透過另一個檔名開著同一份檔案」的程序也算進去。刪除伺服器資料、匯入與 V1 移交檢查核心是否使用中時，共用檔（檔名超過一個）不計入其他已登記實例目前仍存活的 Host 與 Java；這個資料夾自己的執行與其他程序仍會擋下（`CoreInUse`）。
+- **畫面**：詳細面板顯示「共用核心：N 台使用同一份」，N 是共用檔的檔名數量減去共用區自己那一個。
+- **清理**：檔名只剩共用區自己那一個、而且沒有程序開啟的檔案視為未使用，可在「清除快取」刪除。
+- 舊的隱藏實驗 `shared-core.enabled`（啟動時另外複製到 `shared-core/`）已移除；既有工作區留下的 `shared-core` 資料夾不再使用，可以手動刪除。
+
 #### Spigot 更新檢查（只檢查）
 
 Spigot 沒有官方下載，要用 BuildTools 在本機建置，所以 InstanceHarbor 只檢查是否有新建置，不下載也不更新。
@@ -589,7 +614,13 @@ Velocity 沒有這行輸出：在後台做過 Host 無法讀回的編輯後按 E
 
 核心維護支援同核心與同版本線的單台替換、備份還原及中斷核對。
 Velocity 可在同一個 Velocity 版本內換 build（例如 4.2.1-SNAPSHOT build 38 → 43），Port 以 `velocity.toml` 的 `bind` 核對。
-`-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。核心檔名沿用登記的名稱，不改寫。
+`-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。
+
+核心檔名（#112）：InstanceHarbor 建立的實例一律是 `server.jar`，不改名。原檔名**完全符合**官方下載檔名（`paper-<版本>-<build>.jar`、`folia-…`、`velocity-…`、`purpur-…`；家族小寫、版本以數字開頭、build 為數字）時，同版本換 build 與跨版本更新都改為新版的官方檔名，例如 `velocity-4.2.1-SNAPSHOT-38.jar` → `velocity-4.3.1-SNAPSHOT-52.jar`；`server.jar` 與其他自訂名稱不改。
+- 確認畫面（單台更新、跨版本摘要、批次預覽）寫出「檔名會改為 …」，資料來自 `core-check` 與 `core-velocity-target` 的 `renameTo`。
+- 新名稱已被其他檔案占用時，更新在任何變更前停止（`CoreFileNameTaken`）。
+- 替換時先以新檔名發布新核心，再刪除仍是更新前內容的舊檔；登記的 `core_file` 與核心身分在同一次寫入更新。中途失敗時兩個檔案都在、更新維持待核對；核對（`core-reconcile`）以新檔名判定已套用，再刪除舊檔。
+- 每個請求在 `pending.json` 與結果記錄更新前後的檔名（`beforeFile`、`afterFile`）。還原時檔名回到備份當時的名稱，`core-state` 的備份以 `renameTo` 標示；#112 之前的備份沒有記錄檔名，還原時沿用目前的檔名。
 已核對的 Velocity 也可以換到較新的 Velocity 版本（例如 4.2.1-SNAPSHOT → 4.3.1），入口是核心維護的「更換 Velocity 版本」，分兩步確認：
 
 1. 選擇目標版本（`core-velocity-versions`）。版本清單取自 fill API 的 `projects/velocity`，依 API 回傳順序判斷新舊，只列出比目前新的版本；SNAPSHOT 照常列出並標示。
@@ -603,14 +634,18 @@ Purpur 以官方 API（`api.purpurmc.org/v2/purpur/<版本>?detailed=true`）檢
 API 只提供 MD5，所以目前 JAR 的 build 以 MD5 比對官方清單找出；找不到相符的 build 時不提供更新（`CoreSourceUnverifiedLocalHash`）。
 候選以官方 MD5 指定，下載走 HTTPS，內容須與該 MD5 相符；之後計算 SHA-256 登記為已核對，往後的核對都用 SHA-256。
 畫面以「核對方式：以 Purpur 官方 MD5 核對」和 SHA-256 核對區分。未核對、只由 JAR 自述為 Purpur 的實例也能更新，更新後改為已核對。
-Purpur 的候選在下載前沒有 SHA-256，所以不支援預先下載與批次更新，批次預覽會提示改用單台核心維護。API 不提供檔案大小，下載時只顯示已下載的大小。
+Purpur 的候選在下載前沒有 SHA-256，所以預先下載與批次更新以官方 MD5 指定候選（#113）：
+第一次從官方 HTTPS 下載後比對 MD5，相符才計算 SHA-256，並記錄在候選旁的 `<MD5>.sha256`；同一份候選（同批次的其他實例、預先下載後的更新）
+一律以這個 SHA-256 核對已存的檔案，不再重新下載。MD5 不符的下載不保留，該台不更新，其他台照常完成（原因 `CoreArtifactDigestMismatch`）。
+批次清單的 Purpur 項目標示「以官方 MD5 核對」；批次目標以 `candidateMd5` 取代 `candidateSha256`，其他核心的目標格式與請求 ID 不變。
+API 不提供檔案大小，下載時只顯示已下載的大小。
 
 替換核心時，目的地 JAR 只要有任何開啟的檔案代碼（例如清單正在計算無法離線辨識的核心雜湊，或防毒軟體掃描）就會失敗。替換最多等待 5 秒讓這類讀取結束，仍失敗才回報錯誤。
 來源檢查依核心及版本分組。開發或部署時可用程序環境
 `INSTANCEHARBOR_PAPERMC_CONTACT_URL` 指定另一個有效的 HTTPS 聯絡網址。
 Spigot 1.8.8 的原生提交距離和同版本發布資訊各自核對。原生版本顯示落後只提供診斷資訊，Spigot 更新仍需使用已核對的本機 JAR。
 在「應用程式設定 → 核心更新」可開啟「預先下載核心更新」，預設關閉。開啟後，常駐 Manager
-會核對同版本線的 Paper 與 Velocity 更新，並在工作區依 SHA-256 共用候選。準備期間各實例可繼續運行。
+會核對同版本線的 Paper、Velocity 與 Purpur 更新，並在工作區依 SHA-256（Purpur 下載前依官方 MD5）共用候選。準備期間各實例可繼續運行。
 確認更新且符合原有的停止條件後，管理端核對本機候選，再為各台分別備份及替換。
 最後一台已更新或移除管理，且目前無安裝使用該檔案時，Manager 會回收候選。關閉設定會停止背景下載，
 並回收已無安裝使用的預先下載副本。已準備的候選及待更新實例可在 Manager 重開後重新核對。
@@ -627,8 +662,8 @@ Manager 重開時先核對已進入替換交易的原請求，已取消的項目
 - **單台**：GUI 以 `core_maintenance_with_progress` 指令執行 `core-install-latest`、`core-install` 與 `core-restore`，階段經 Tauri Channel 即時回報。
 - **批次**：由常駐 Manager 執行。目前項目的階段寫入 `core-batches/<批次 ID>.progress`，`core-batch-list` 讀出後附在執行中項目的 `progress` 欄位。
   這個檔案只供顯示，遺失或過期都不影響批次結果；同一階段的位元組最多每 0.4 秒寫一次。
-- **同一核心只下載一次**：批次中相同 SHA-256 的候選共用一份。開啟預先下載時，Paper 使用 `staging/core-prefetch`；其他情況放在
-  `staging/core-batch-candidates`。第二台起顯示「使用已下載的核心」，不顯示下載進度。沒有任何進行中的批次項目需要時，Manager 回收該候選。
+- **同一核心只下載一次**：批次中相同 SHA-256（Purpur 為相同官方 MD5）的候選共用一份。開啟預先下載時，Paper、Velocity 與 Purpur 使用 `staging/core-prefetch`；其他情況放在
+  `staging/core-batch-candidates`。第二台起顯示「使用已下載的核心」，不顯示下載進度。沒有任何進行中的批次項目需要時，Manager 回收該候選；Purpur 的 `<MD5>.sha256` 紀錄與它指向的檔案一起回收。
 操作紀錄預設隱藏 90 天前已結案資料，
 保留原始紀錄及結果未確認的工作。
 
@@ -938,12 +973,13 @@ GUI 診斷紀錄每次啟動寫一組檔案，檔名為 `gui-<GUI 啟動的本�
 |---|---|---|
 | 核心下載暫存 | 工作區 `staging` 內名稱完全符合 `download-<SHA-256>`、`pending-download-<PID>-<時間>`、`core-download-<PID>-<時間>` 的資料夾 | 建立中的工作持有 `download-<SHA-256>.lock`，或寫入暫存的程序仍在執行時，標示為使用中並略過 |
 | 舊版介面快取 | `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`） | 1.0 以前的 WebView2 資料 |
+| 沒有實例使用的共用核心 | 工作區 `shared-cores` 內名稱完全符合 `<SHA-256>.jar` 的檔案 | 只列出 NTFS 檔名只剩共用區自己那一個、也沒有程序開啟的檔案（見「共用核心」）。刪除前在該檔案的鎖下重新核對檔名數量 |
 | 介面快取（WebView2） | 上表「WebView2 資料」的位置 | GUI 執行中無法刪除。清除時在工作區寫入 `webview-cache-clear.json`，下次啟動 GUI、WebView2 開啟前刪除；開發版只影響該工作區自己的資料夾。啟動腳本以 `WEBVIEW2_USER_DATA_FOLDER` 指定其他資料夾時不提供清除 |
 
 清單與刪除時都略過連結與 junction，不刪除其他檔名，也不以萬用字元決定目標；`staging` 內的建立暫存（`gui-create-*`）、續做紀錄、`core-prefetch` 與工作區其他資料都不在範圍內。
 確認後若清單已變更（例如有新的下載），會要求重新核對。刪除失敗的項目逐項列出原因（檔案使用中、沒有存取權限等），不影響其他項目。
 排定的 WebView2 刪除失敗時保留排定與原因，設定頁顯示原因，下次啟動再試一次；結果也寫入 GUI 診斷紀錄（`webview-cache-cleared`／`webview-cache-clear-failed`）。
-不再使用的共用核心待共用核心（#62）完成後再加入。
+
 
 工作區的 `workspace.json` 記錄格式值。1.0 新建的工作區寫入 `instanceharbor-workspace-1`。
 rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`；1.0 照常開啟且不改寫，所以舊版仍能開啟它們。

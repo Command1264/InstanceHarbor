@@ -497,6 +497,15 @@ fn run_console(workspace: &str) -> Result<(), String> {
             terminal_close
         ])
         .setup(move |app| {
+            use tauri::Manager;
+            // Tray Quit and `app-exit` end the viewer with the GUI and the Manager (#114).
+            let quit = app.state::<instanceharbor::ConsoleViewer>().quit_requests()?;
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if quit.recv().is_ok() {
+                    handle.exit(0);
+                }
+            });
             let window = tauri::WebviewWindowBuilder::new(
                 app,
                 "console",
@@ -813,5 +822,37 @@ fn main() {
             eprintln!("InstanceHarbor 啟動失敗：{error}");
             std::process::exit(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod console_viewer_exit_tests {
+    fn body(source: &str, start: &str) -> String {
+        let rest = source.split(start).nth(1).unwrap_or_else(|| panic!("{start} exists"));
+        rest.split("\n}\n").next().unwrap().to_owned()
+    }
+
+    // Production code only, with Windows line endings removed: these tests name the same calls.
+    fn source() -> String {
+        let source = include_str!("main.rs").replace("\r\n", "\n");
+        let production = source.split("#[cfg(test)]\nmod console_viewer_exit_tests").next().unwrap();
+        assert!(production.len() < source.len(), "the test module is split off");
+        production.to_owned()
+    }
+
+    #[test]
+    fn closing_the_last_tab_ends_the_viewer_process() {
+        // ConsoleViewer::close decides whether this was the last tab (console_viewer tests).
+        let close = body(&source(), "fn terminal_close(");
+        assert!(close.contains("let (removed, exit) = viewer.close(&run, version)?;"));
+        assert!(close.contains("if exit {\n        app.exit(0);\n    }"));
+    }
+
+    #[test]
+    fn the_x_button_hides_the_viewer_and_a_manager_quit_ends_it() {
+        let console = body(&source(), "fn run_console(");
+        assert!(console.contains("api.prevent_close();") && console.contains("window_handle.hide()"));
+        assert!(console.contains("let quit = app.state::<instanceharbor::ConsoleViewer>().quit_requests()?;"));
+        assert!(console.contains("if quit.recv().is_ok() {\n                    handle.exit(0);"));
     }
 }

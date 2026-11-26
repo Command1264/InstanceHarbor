@@ -21,7 +21,7 @@ const error = ref('')
 const current = ref<Profile>()
 const versions = ref<{ version: string; snapshot: boolean }[]>([])
 const chosen = ref('')
-const target = ref<{ target: Profile; channel: string }>()
+const target = ref<{ target: Profile; channel: string; renameTo?: string | null }>()
 const acknowledged = ref(false)
 const progress = ref<CoreUpdateProgress>()
 const result = ref('')
@@ -49,9 +49,9 @@ async function next() {
   loading.value = true
   error.value = ''
   try {
-    const reply = await manage<{ current: Profile; target: Profile; channel: string }>(['core-velocity-target', props.name, chosen.value])
+    const reply = await manage<{ current: Profile; target: Profile; channel: string; renameTo?: string | null }>(['core-velocity-target', props.name, chosen.value])
     current.value = reply.current
-    target.value = { target: reply.target, channel: reply.channel }
+    target.value = { target: reply.target, channel: reply.channel, renameTo: reply.renameTo }
     acknowledged.value = false
     step.value = 'summary'
   } catch (failure) { error.value = errorText(failure) }
@@ -105,6 +105,7 @@ defineExpose({ open })
         <li>{{ t('components.velocityVersion.riskPlugins') }}</li>
         <li>{{ t('components.velocityVersion.riskPluginData') }}</li>
         <li>{{ t('components.velocityVersion.backupFiles') }}</li>
+        <li v-if="target.renameTo">{{ t('components.coreMaintenance.renameTo', { name: target.renameTo }) }}</li>
         <li>{{ t('components.velocityVersion.stopped') }}</li>
       </ul>
       <label v-if="step === 'summary'" class="velocity-acknowledge">

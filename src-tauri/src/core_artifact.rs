@@ -399,10 +399,37 @@ pub(super) fn holders(file: &Path) -> Result<Vec<(u32, String)>> {
 
 /// Refuse a core that another process is using, such as a server that is
 /// still running from this folder. This process's own evidence handles on the
-/// file do not count.
-pub(super) fn assert_unused(file: &Path) -> Result<()> {
+/// file do not count. A shared core (#62) is also open through the names in
+/// other instance folders: the live Host and Java of those runs do not count.
+pub(super) fn assert_unused(root: &Path, file: &Path) -> Result<()> {
     let own = std::process::id();
-    if holders(file)?.iter().all(|(pid, _)| *pid == own) { Ok(()) } else { Err("CoreInUse".into()) }
+    let holders = holders(file)?;
+    if holders.iter().all(|(pid, _)| *pid == own) {
+        return Ok(());
+    }
+    let others = if shared_core::names(file).unwrap_or(1) > 1 { sharing_runs(root, file) } else { Vec::new() };
+    if holders.iter().all(|(pid, _)| *pid == own || others.contains(pid)) { Ok(()) } else { Err("CoreInUse".into()) }
+}
+
+/// The live Host and Java processes of the other registered instances whose
+/// core is another name of `file`.
+fn sharing_runs(root: &Path, file: &Path) -> Vec<u32> {
+    let mut processes = Vec::new();
+    let Ok(records) = presentation::registry_records(root) else { return processes };
+    for config in records {
+        let Ok(directory) = instance_path(root, &config.name) else { continue };
+        let core = jar(&directory, &config);
+        if Some(directory.as_path()) == file.parent() || !shared_core::same_file(&core, file) {
+            continue;
+        }
+        let Ok(run) = read::<Run>(&root.join("runs").join(&config.name).join("identity.json")) else { continue };
+        for process in [&run.host, &run.java] {
+            if alive(process).unwrap_or(false) {
+                processes.push(process.pid);
+            }
+        }
+    }
+    processes
 }
 
 #[cfg(test)]
@@ -603,7 +630,7 @@ Implementation-Version: 4.2.1-SNAPSHOT (git-0-b38)
         let dir = folder();
         let file = dir.join("server.jar");
         fs::write(&file, b"core").unwrap();
-        assert_unused(&file).unwrap();
+        assert_unused(&dir, &file).unwrap();
         let script = format!(
             "$f=[IO.File]::Open('{}','Open','Read','ReadWrite'); Start-Sleep 20",
             file.display()
@@ -620,7 +647,7 @@ Implementation-Version: 4.2.1-SNAPSHOT (git-0-b38)
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        let refused = assert_unused(&file);
+        let refused = assert_unused(&dir, &file);
         child.kill().unwrap();
         child.wait().unwrap();
         assert!(seen);

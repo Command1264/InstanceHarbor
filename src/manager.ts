@@ -24,7 +24,7 @@ export interface Instance {
   stateIssue?: StateIssue
   run?: { id: string; java: { pid: number }; host: { pid: number } }
 }
-export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean; offline?: boolean }
+export interface CoreIdentity { state: 'known' | 'unknown'; family?: string; minecraft?: string; build?: string; label?: string; reason?: string; unverified?: boolean; offline?: boolean; /** #62: instances naming the same shared core file. */ sharedUsers?: number }
 export interface InstanceMeta { name: string; java: string; port: number; path: string; core?: CoreIdentity; managementDiscovered?: boolean }
 export interface Preferences { theme: 'system' | 'light' | 'dark'; pins: string[]; selectionColor?: SelectionColorPreference; selectionOpacity?: number; language?: LanguagePreference; pathSeparator?: 'forward' | 'native'; timeFormat?: TimeFormat; consoleTitleTemplate?: string; consoleTitleOverrides?: Record<string,string>; corePrefetch?: boolean }
 export interface PreferencesSnapshot { preferences: Preferences; revision: string }
@@ -294,6 +294,8 @@ export type CoreSource = {
   remoteBuild?: string
   /** A Purpur candidate has only the official MD5 until it is downloaded (#41). */
   candidate?: { build: string; sha256?: string; md5?: string }
+  /** The core file name after this update, when it follows the build (#112). */
+  renameTo?: string | null
   /** `purpurMd5` when the source publishes MD5 only. */
   verification?: string
   reason?: string

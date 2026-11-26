@@ -23,6 +23,7 @@ const categories: { id: CacheCategory; label: MessageId }[] = [
   { id: 'download', label: 'components.cache.download' },
   { id: 'legacyWebView', label: 'components.cache.legacyWebView' },
   { id: 'webView', label: 'components.cache.webView' },
+  { id: 'sharedCore', label: 'components.cache.sharedCore' },
 ]
 const groups = computed(() => categories.map(category => ({
   ...category,

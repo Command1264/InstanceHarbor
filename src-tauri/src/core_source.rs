@@ -604,9 +604,10 @@ fn update_eligible(family: &str, build: &PaperBuild) -> bool {
     build.stable || (family == "VELOCITY" && build.beta)
 }
 
-/// Families whose candidates the prefetch store prepares and shares.
+/// Families whose candidates the prefetch store prepares and shares. A Purpur
+/// candidate is named by its official MD5 until its first download (#113).
 pub(super) fn prefetch_family(family: &str) -> bool {
-    matches!(family, "PAPER" | "VELOCITY")
+    matches!(family, "PAPER" | "VELOCITY" | "PURPUR")
 }
 
 fn unknown(name: &str, reason: &str) -> Value {
@@ -848,6 +849,12 @@ fn check_with_agent(
             };
             let mut row = result(name, &profile, &metadata[&key], local.as_ref());
             row["registrationRevision"] = json!(registration);
+            // The file name after this update, when it follows the build (#112).
+            if let Some(build) = row["candidate"]["build"].as_str() {
+                let after = CoreProfile { build: build.to_owned(), ..profile.clone() };
+                let file = jar.file_name().and_then(|file| file.to_str()).unwrap_or_default();
+                row["renameTo"] = json!(core_maintenance::renamed_file(file, &profile, &after));
+            }
             row
         })
         .collect();
@@ -931,7 +938,7 @@ pub(super) fn install_latest_guarded(
         return Err("CoreArtifactChanged".into());
     }
     if row["family"] == "PURPUR" {
-        return install_purpur(root, name, request, expected_current, expected_candidate, registration, row, &agent, progress, begin_commit);
+        return install_purpur(root, name, request, expected_current, expected_candidate, registration, row, &agent, cache, progress, begin_commit);
     }
     let candidate = &row["candidate"];
     let hash = candidate["sha256"]
@@ -1026,9 +1033,41 @@ fn install_purpur(
     registration: &str,
     row: &Value,
     agent: &str,
+    cache: CandidateCache,
     progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
+    let (before, after, md5, url) = purpur_plan(root, name, expected_current, expected_md5, row)?;
+    // Like Paper, a prepared or batch candidate is downloaded once and kept by
+    // its MD5; the stored bytes are then checked by their recorded SHA-256 (#113).
+    let store = match core_prefetch::Store::enabled(root)? {
+        Some(store) => Some(store),
+        None if cache == CandidateCache::Batch => Some(core_prefetch::Store::batch(root)?),
+        None => None,
+    };
+    let report = report_download(progress);
+    // The API states no size, so the bar shows the downloaded amount only.
+    let fetch = |path: &Path| download_verified_with(&url, agent, path, &md5, None, Some(&report));
+    match store {
+        Some(store) => install_purpur_stored(
+            root, name, request, expected_current, registration, &store, &md5, &before, &after,
+            fetch, progress, begin_commit,
+        ),
+        None => install_purpur_private(
+            root, name, request, expected_current, registration, &before, &after, fetch, progress, begin_commit,
+        ),
+    }
+}
+
+/// The current and the candidate Purpur profile of a checked source row. The
+/// candidate's SHA-256 is left empty until its bytes are verified.
+fn purpur_plan(
+    root: &Path,
+    name: &str,
+    expected_current: &str,
+    expected_md5: &str,
+    row: &Value,
+) -> Result<(CoreProfile, CoreProfile, String, String)> {
     let candidate = &row["candidate"];
     let md5 = candidate["md5"].as_str().filter(|md5| md5_text(md5)).ok_or("CoreCandidateUnverified")?;
     if !md5.eq_ignore_ascii_case(expected_md5) {
@@ -1047,22 +1086,70 @@ fn install_purpur(
     let profile = |build: String, sha256: String| CoreProfile {
         family: "PURPUR".into(), minecraft: minecraft.clone(), build, sha256, unverified: false, java,
     };
-    let before = profile(local_build, expected_current.to_owned());
+    Ok((profile(local_build, expected_current.to_owned()), profile(build, String::new()), md5.to_ascii_lowercase(), url))
+}
+
+/// Installs a Purpur candidate kept in `store` under its MD5 (#113). A candidate
+/// stored by an earlier item is used again only if its bytes still have the
+/// SHA-256 recorded when they matched the MD5; a failed MD5 leaves this
+/// instance unchanged and stores nothing.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_purpur_stored(
+    root: &Path,
+    name: &str,
+    request: &str,
+    expected_current: &str,
+    registration: &str,
+    store: &core_prefetch::Store,
+    md5: &str,
+    before: &CoreProfile,
+    after: &CoreProfile,
+    fetch: impl FnOnce(&Path) -> Result<()>,
+    progress: &dyn Fn(CoreUpdatePhase),
+    begin_commit: impl FnOnce() -> Result<()>,
+) -> Result<Value> {
+    let (lease, hash, reused) = store.ensure_md5(md5, fetch)?;
+    if reused {
+        progress(CoreUpdatePhase::Reusing);
+    }
+    let candidate = lease.ready(&hash)?.ok_or("CoreDownloadCacheInvalid")?;
+    let after = CoreProfile { sha256: hash.clone(), ..after.clone() };
+    let _writer = instance_writer_lock(root, name)?;
+    if registration_revision(root, name)? != registration {
+        return Err("RegistrationChanged".into());
+    }
+    core_maintenance::install_identified(
+        root, name, request, expected_current, candidate, before, &after, progress, begin_commit,
+    )
+}
+
+/// Installs a Purpur candidate downloaded for this one update only.
+#[allow(clippy::too_many_arguments)]
+fn install_purpur_private(
+    root: &Path,
+    name: &str,
+    request: &str,
+    expected_current: &str,
+    registration: &str,
+    before: &CoreProfile,
+    after: &CoreProfile,
+    fetch: impl FnOnce(&Path) -> Result<()>,
+    progress: &dyn Fn(CoreUpdatePhase),
+    begin_commit: impl FnOnce() -> Result<()>,
+) -> Result<Value> {
     let staging = child_directory(root, "staging")?;
     let stage = staging.join(format!("core-download-{}-{}", std::process::id(), clock()));
     fs::create_dir(&stage).map_err(fail)?;
     let output = stage.join("candidate.jar");
     let outcome = (|| {
-        let report = report_download(progress);
-        // The API states no size, so the bar shows the downloaded amount only.
-        download_verified_with(&url, agent, &output, &md5.to_ascii_lowercase(), None, Some(&report))?;
-        let after = profile(build.clone(), content_revision::file_revision(&output)?);
+        fetch(&output)?;
+        let after = CoreProfile { sha256: content_revision::file_revision(&output)?, ..after.clone() };
         let _writer = instance_writer_lock(root, name)?;
         if registration_revision(root, name)? != registration {
             return Err("RegistrationChanged".into());
         }
         core_maintenance::install_identified(
-            root, name, request, expected_current, &output, &before, &after, progress, begin_commit,
+            root, name, request, expected_current, &output, before, &after, progress, begin_commit,
         )
     })();
     if let Err(error) = fs::remove_file(&output) {
@@ -1204,7 +1291,9 @@ fn velocity_target_with(
 pub(super) fn velocity_target(root: &Path, name: &str, version: &str) -> Result<Value> {
     let current = velocity_current(root, name)?;
     let (target, _, size, stable) = velocity_target_with(&current, version, &configured_paper_user_agent()?, &fetch_bytes, &fetch_json)?;
-    Ok(json!({"current":current,"target":target,"size":size,"channel":if stable {"STABLE"} else {"BETA"}}))
+    let file = core_artifact::recorded(&instance(root, name)?).to_owned();
+    let rename = core_maintenance::renamed_file(&file, &current, &target);
+    Ok(json!({"current":current,"target":target,"size":size,"channel":if stable {"STABLE"} else {"BETA"},"renameTo":rename}))
 }
 
 /// `core-install-version NAME REQUEST CURRENT VERSION CANDIDATE`: moves a stopped
@@ -1253,6 +1342,16 @@ pub(super) fn install_version(
         eprintln!("Core download staging cleanup failed: {error}");
     }
     outcome
+}
+
+/// Downloads a Purpur candidate for the prefetch store (#113). Only the official
+/// download URL of that build is accepted, and the bytes must match its MD5.
+pub(super) fn download_purpur_prefetch(url: &str, path: &Path, md5: &str, profile: &CoreProfile) -> Result<()> {
+    let official = profile.build.parse::<u64>().ok().map(|build| purpur_url(&profile.minecraft, build));
+    if profile.family != "PURPUR" || !md5_text(md5) || official.as_deref() != Some(url) {
+        return Err("CoreCandidateUnverified".into());
+    }
+    download_verified(url, &configured_paper_user_agent()?, path, &md5.to_ascii_lowercase())
 }
 
 pub(super) fn download_prefetch(url: &str, path: &Path, expected: &str) -> Result<()> {
@@ -1923,6 +2022,7 @@ mod tests {
         ])));
         assert_eq!(result("server", &paper, &paper_source, None)["status"], "Current");
         assert!(prefetch_family("VELOCITY") && prefetch_family("PAPER") && !prefetch_family("FOLIA"));
+        assert!(prefetch_family("PURPUR"), "#113: Purpur is prepared by its official MD5");
     }
 
     // #41: Purpur builds come from the official v2 API. Only SUCCESS builds

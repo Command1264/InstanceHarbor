@@ -108,6 +108,63 @@ struct Intent {
     before: CoreProfile,
     after: CoreProfile,
     created_at: u64,
+    /// The core file name before and after this request (#112). Requests
+    /// recorded before #112 have neither: their file name did not change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    before_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    after_file: Option<String>,
+}
+
+impl Intent {
+    /// The core file names of this request; a request without them kept the
+    /// name that `target` records.
+    fn files<'a>(&'a self, target: &'a Target) -> (&'a str, &'a str) {
+        let recorded = core_artifact::recorded(&target.config);
+        let before = self.before_file.as_deref().unwrap_or(recorded);
+        (before, self.after_file.as_deref().unwrap_or(before))
+    }
+}
+
+/// Families whose official downloads are named `<family>-<version>-<build>.jar` (#112).
+const OFFICIAL_NAMES: [&str; 4] = ["paper", "folia", "velocity", "purpur"];
+
+/// The official download name of a core, for example `velocity-4.3.1-SNAPSHOT-52.jar`.
+fn official_name(profile: &CoreProfile) -> Option<String> {
+    let family = profile.family.to_ascii_lowercase();
+    (OFFICIAL_NAMES.contains(&family.as_str()) && profile.build.parse::<u64>().is_ok())
+        .then(|| format!("{family}-{}-{}.jar", profile.minecraft, profile.build))
+        .filter(|name| official_form(name, &profile.family) && core_artifact::valid_name(name))
+}
+
+/// Whether `name` has exactly the official form `<family>-<version>-<build>.jar`
+/// of `family`: the lowercase family, a version that starts with a digit, and
+/// a numeric build.
+fn official_form(name: &str, family: &str) -> bool {
+    let family = family.to_ascii_lowercase();
+    if !OFFICIAL_NAMES.contains(&family.as_str()) {
+        return false;
+    }
+    let Some(rest) = name.strip_prefix(&format!("{family}-")).and_then(|rest| rest.strip_suffix(".jar")) else {
+        return false;
+    };
+    let Some((version, build)) = rest.rsplit_once('-') else {
+        return false;
+    };
+    version.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        && version.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+'))
+        && !build.is_empty()
+        && build.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// The new core file name of an update from `before` to `after` (#112). Only a
+/// name of the official form follows the update; `server.jar` and any other
+/// name stay as they are.
+pub(super) fn renamed_file(current: &str, before: &CoreProfile, after: &CoreProfile) -> Option<String> {
+    if before.family != after.family || !official_form(current, &before.family) {
+        return None;
+    }
+    official_name(after).filter(|name| name != current)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +260,10 @@ pub(super) fn move_durable_with_stage(source: &Path, destination: &Path, replace
     let mut attempts = 0;
     while unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
         let error = io::Error::last_os_error();
+        // A shared core is read-only for every one of its names (#62).
+        if replace && error.raw_os_error() == Some(5) && shared_core::read_only(destination) {
+            return shared_core::replace_read_only(source, destination);
+        }
         attempts += 1;
         // ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION.
         if !replace || !matches!(error.raw_os_error(), Some(5 | 32)) || attempts >= 50 {
@@ -445,6 +506,9 @@ impl Target {
             || !valid_hash(&intent.registration_revision)
             || !valid_hash(&intent.intended_record_revision)
             || matches!(&intent.action, Action::Restore { backup_id } if !token(backup_id))
+            || [&intent.before_file, &intent.after_file]
+                .iter()
+                .any(|file| file.as_deref().is_some_and(|file| !core_artifact::valid_name(file)))
         {
             return Err("CoreMaintenanceIdentityChanged".into());
         }
@@ -589,16 +653,20 @@ fn state(root: &Path, name: &str) -> Result<Value> {
                         result.intent.created_at,
                         id.to_owned(),
                         result.intent.before,
+                        result.intent.before_file,
                     ));
                 }
             }
         }
     }
     backups.sort_by(|left, right| (right.0, &right.1).cmp(&(left.0, &left.1)));
-    let backups: Vec<Value> = backups.into_iter().map(|(created_at, id, profile)| {
+    let core_file = core_artifact::recorded(&target.config);
+    let backups: Vec<Value> = backups.into_iter().map(|(created_at, id, profile, file)| {
         // A restore to another Velocity version also restores its proxy files.
         let cross = installed.as_ref().is_some_and(|current| crosses_versions(current, &profile));
-        json!({"createdAt": created_at, "id": id, "profile": profile, "crossVersion": cross})
+        // A restore puts back the file name of the backup (#112).
+        let file = file.filter(|file| file != core_file);
+        json!({"createdAt": created_at, "id": id, "profile": profile, "crossVersion": cross, "renameTo": file})
     }).collect();
     let pending = pending.map(|intent| {
         json!({"request":intent.request, "kind":kind(&intent.action), "action":intent.action,
@@ -619,7 +687,7 @@ fn state(root: &Path, name: &str) -> Result<Value> {
         .or_else(|| purpur.as_ref().map(|profile| json!({"family":profile.family,"minecraft":profile.minecraft,"build":null})));
     Ok(
         json!({"name":name,"installed":installed,"identified":identified,"currentSha256":current.ok(),"pending":pending,
-        "backups":backups,"canWrite":reason.is_none(),"reason":reason,"prepared":prepared}),
+        "backups":backups,"canWrite":reason.is_none(),"reason":reason,"prepared":prepared,"coreFile":core_file}),
     )
 }
 
@@ -665,6 +733,9 @@ fn update_config(root: &Path, target: &Target, intent: &Intent, outcome: Outcome
     if outcome == Outcome::Applied {
         let mut next = config;
         next.core_profile = Some(intent.after.clone());
+        if let Some(file) = &intent.after_file {
+            next.core_file = core_artifact::stored(file);
+        }
         if config_revision(&next)? != intent.intended_record_revision {
             return Err("CoreMaintenanceRegistrationChanged".into());
         }
@@ -673,15 +744,40 @@ fn update_config(root: &Path, target: &Target, intent: &Intent, outcome: Outcome
     Ok(())
 }
 
+/// Removes the core file that a renamed update replaced, while it still holds
+/// the backed-up bytes (#112). Another file under that name is left alone.
+fn remove_replaced(path: &Path, sha256: &str) -> Result<()> {
+    if checked_entry(path, false)? && hash(path)? == sha256 {
+        fs::remove_file(path).map_err(|error| file_error("remove-replaced-core", path, error))?;
+    }
+    Ok(())
+}
+
+/// The core file that a request installed or left: the new name once it
+/// exists, otherwise the old one (#112).
+fn installed_core(target: &Target, intent: &Intent) -> PathBuf {
+    let (old, new) = intent.files(target);
+    let renamed = target.directory.join(new);
+    if old != new && checked_entry(&renamed, false).unwrap_or(false) {
+        renamed
+    } else {
+        target.directory.join(old)
+    }
+}
+
 fn finish(root: &Path, target: &Target, intent: Intent, replayed: bool) -> Result<Value> {
     target.bind(&intent, &intent.request)?;
     let store = target.store();
     let folder = store.join(&intent.request);
     let _folder = hold_directory(&folder)?;
-    let installed = hash(&target.jar())?;
+    let installed = hash(&installed_core(target, &intent))?;
     let outcome = compute_outcome(&installed, &intent)?;
     if outcome == Outcome::Applied {
         require_hash(&folder.join("before.jar"), &intent.before.sha256)?;
+        let (old, new) = intent.files(target);
+        if old != new {
+            remove_replaced(&target.directory.join(old), &intent.before.sha256)?;
+        }
     }
     update_config(root, target, &intent, outcome)?;
     let result_path = folder.join("result.json");
@@ -769,9 +865,12 @@ fn run_action(
         })
         .ok_or("CoreProfileUnverified")?;
     let store = target.store();
-    let (source, after) = match (&action, candidate) {
+    let before_file = core_artifact::recorded(&target.config).to_owned();
+    let (source, after, after_file) = match (&action, candidate) {
         (Action::Install { .. }, Some((source, profile))) => {
-            (candidate_path(source)?, profile.clone())
+            // An official download name follows the update; any other stays (#112).
+            let renamed = renamed_file(&before_file, &before, profile);
+            (candidate_path(source)?, profile.clone(), renamed.unwrap_or_else(|| before_file.clone()))
         }
         (Action::Restore { backup_id }, None) => {
             if !token(backup_id) || request == backup_id {
@@ -780,14 +879,19 @@ fn run_action(
             let backup = completed(&target, backup_id)?
                 .filter(|saved| saved.outcome == Outcome::Applied)
                 .ok_or("CoreBackupUnavailable")?;
-            (
-                store.join(backup_id).join("before.jar"),
-                backup.intent.before,
-            )
+            // A restore puts back the file name of the backup, when it recorded one.
+            let file = backup.intent.before_file.clone().unwrap_or_else(|| before_file.clone());
+            (store.join(backup_id).join("before.jar"), backup.intent.before, file)
         }
         _ => return Err("InvalidCoreMaintenanceRequest".into()),
     };
     verify_pair(&before, &after, &action)?;
+    if !core_artifact::valid_name(&after_file) {
+        return Err("CoreMaintenanceUnsafePath".into());
+    }
+    if after_file != before_file && checked_entry(&target.directory.join(&after_file), false)? {
+        return Err("CoreFileNameTaken".into());
+    }
     progress(CoreUpdatePhase::Verifying);
     require_hash(&source, &after.sha256)?;
     begin_commit()?;
@@ -810,6 +914,7 @@ fn run_action(
     let original_registration_revision = registration_revision(root, &target.config.name)?;
     let mut next = target.config.clone();
     next.core_profile = Some(after.clone());
+    next.core_file = core_artifact::stored(&after_file);
     let intent = Intent {
         request: request.to_owned(),
         action,
@@ -821,11 +926,14 @@ fn run_action(
         before,
         after,
         created_at: epoch_ms(),
+        before_file: Some(before_file),
+        after_file: Some(after_file),
     };
     write_durable(&store.join(PENDING), &intent, false)?;
     let prepare_and_replace = || -> Result<()> {
         let stage = folder.join("next.jar");
-        copy_verified(&source, &stage, &intent.after.sha256)?;
+        // The new core is another name of the shared file when it can be (#62).
+        shared_core::place(root, &source, &intent.after.sha256, &stage)?;
         progress(CoreUpdatePhase::BackingUp);
         copy_verified(
             &target.jar(),
@@ -851,7 +959,14 @@ fn run_action(
         require_hash(&stage, &intent.after.sha256)?;
         require_hash(&target.jar(), &intent.before.sha256)?;
         progress(CoreUpdatePhase::Replacing);
-        move_durable(&stage, &target.jar(), true)
+        let (old, new) = intent.files(&target);
+        if old == new {
+            return move_durable(&stage, &target.jar(), true);
+        }
+        // Renamed (#112): publish the new name first, then remove the old one.
+        // A crash in between leaves both; `finish` removes the old file.
+        move_durable(&stage, &target.directory.join(new), false)?;
+        remove_replaced(&target.directory.join(old), &intent.before.sha256)
     };
     prepare_and_replace()
         .map_err(|cause| format!("CoreMaintenancePending: reconcile request {request}: {cause}"))?;
@@ -1012,11 +1127,14 @@ mod tests {
     use super::*;
 
     struct Fixture(PathBuf);
+    /// Tests run in parallel and may read the same clock value.
+    static NEXT_FIXTURE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     impl Fixture {
         fn new() -> Self {
             let temporary = std::env::temp_dir().canonicalize().unwrap();
-            let path = temporary.join(format!("ih-core-test-{}-{}", std::process::id(), clock()));
+            let next = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let path = temporary.join(format!("ih-core-test-{}-{}-{next}", std::process::id(), clock()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }
@@ -1127,10 +1245,10 @@ mod tests {
         assert!(assert_start_allowed(&target.directory).is_ok());
     }
 
-    // #41: a Velocity proxy is checked against velocity.toml and keeps the
-    // registered core file name after a build update and its restore.
+    // #41: a Velocity proxy is checked against velocity.toml. #112: an official
+    // file name follows a build update, and its restore puts the old name back.
     #[test]
-    fn velocity_build_update_keeps_the_registered_name_and_restores() {
+    fn velocity_build_update_renames_an_official_name_and_restores_it() {
         let fixture = Fixture::new();
         let mut target = fixture.workspace();
         let directory = target.directory.clone();
@@ -1148,14 +1266,252 @@ mod tests {
         let (before, after) = (velocity(b"first", "38"), velocity(b"second", "43"));
         assert_eq!(state(&fixture.0, "server").unwrap()["canWrite"], true);
         install_verified(&fixture.0, "server", "proxy-update", &before.sha256, &candidate, &after).unwrap();
-        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"second");
-        assert!(!directory.join("velocity-4.2.1-SNAPSHOT-43.jar").exists());
-        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["build"], "43");
+        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-43.jar")).unwrap(), b"second");
+        assert!(!directory.join("velocity-4.2.1-SNAPSHOT-38.jar").exists(), "no old core file is left");
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("velocity-4.2.1-SNAPSHOT-43.jar"));
+        let current = state(&fixture.0, "server").unwrap();
+        assert_eq!((&current["installed"]["build"], &current["coreFile"]), (&json!("43"), &json!("velocity-4.2.1-SNAPSHOT-43.jar")));
+        assert_eq!(current["backups"][0]["renameTo"], "velocity-4.2.1-SNAPSHOT-38.jar");
         let args = ["server".into(), "proxy-restore".into(), after.sha256.clone(), "proxy-update".into()];
         dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
         assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"first");
+        assert!(!directory.join("velocity-4.2.1-SNAPSHOT-43.jar").exists());
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("velocity-4.2.1-SNAPSHOT-38.jar"));
         fs::write(directory.join("velocity.toml"), "bind = \"127.0.0.1:1\"\n").unwrap();
         assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "PortChanged");
+    }
+
+    // #112: only a name of the exact official form follows an update.
+    #[test]
+    fn only_an_official_file_name_follows_the_update() {
+        let core = |family: &str, version: &str, build: &str| CoreProfile { family: family.into(), minecraft: version.into(), ..profile(b"x", build) };
+        let velocity = (core("VELOCITY", "4.2.1-SNAPSHOT", "38"), core("VELOCITY", "4.3.1-SNAPSHOT", "52"));
+        assert_eq!(renamed_file("velocity-4.2.1-SNAPSHOT-38.jar", &velocity.0, &velocity.1).as_deref(), Some("velocity-4.3.1-SNAPSHOT-52.jar"));
+        let paper = (core("PAPER", "26.2", "112"), core("PAPER", "26.2", "134"));
+        assert_eq!(renamed_file("paper-26.2-112.jar", &paper.0, &paper.1).as_deref(), Some("paper-26.2-134.jar"));
+        // A name that already states another build is still the official form.
+        assert_eq!(renamed_file("paper-26.2-100.jar", &paper.0, &paper.1).as_deref(), Some("paper-26.2-134.jar"));
+        let purpur = (core("PURPUR", "26.3", "2659"), core("PURPUR", "26.3", "2660"));
+        assert_eq!(renamed_file("purpur-26.3-2659.jar", &purpur.0, &purpur.1).as_deref(), Some("purpur-26.3-2660.jar"));
+        let folia = (core("FOLIA", "26.3", "1"), core("FOLIA", "26.3", "2"));
+        assert_eq!(renamed_file("folia-26.3-1.jar", &folia.0, &folia.1).as_deref(), Some("folia-26.3-2.jar"));
+        for kept in ["server.jar", "my-proxy.jar", "Paper-26.2-112.jar", "paper-26.2-112.JAR", "paper-26.2.jar",
+            "paper-26.2-b112.jar", "paper--112.jar", "folia-26.2-112.jar", "paper-latest-112.jar"] {
+            assert_eq!(renamed_file(kept, &paper.0, &paper.1), None, "{kept}");
+        }
+        let spigot = (core("SPIGOT", "1.8.8", "1"), core("SPIGOT", "1.8.8", "2"));
+        assert_eq!(renamed_file("spigot-1.8.8-1.jar", &spigot.0, &spigot.1), None);
+        assert_eq!(renamed_file("paper-26.2-112.jar", &paper.0, &paper.0), None, "the same build keeps its name");
+    }
+
+    // #112: server.jar is never renamed.
+    #[test]
+    fn server_jar_keeps_its_name_after_an_update() {
+        let fixture = Fixture::new();
+        let target = fixture.workspace();
+        let candidate = fixture.0.join("paper-26.2-134.jar");
+        fs::write(&candidate, b"second").unwrap();
+        install_verified(&fixture.0, "server", "update", &profile(b"first", "112").sha256, &candidate, &profile(b"second", "134")).unwrap();
+        assert_eq!(fs::read(target.directory.join("server.jar")).unwrap(), b"second");
+        assert!(!target.directory.join("paper-26.2-134.jar").exists());
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file, None);
+        assert_eq!(state(&fixture.0, "server").unwrap()["backups"][0]["renameTo"], Value::Null);
+    }
+
+    fn official_paper(fixture: &Fixture, name: &str) -> Target {
+        let mut target = fixture.workspace();
+        fs::rename(target.directory.join("server.jar"), target.directory.join(name)).unwrap();
+        target.config.core_file = Some(name.into());
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        target
+    }
+
+    // #112: a name taken by another file stops the update before anything changes.
+    #[test]
+    fn a_taken_new_name_leaves_the_core_unchanged() {
+        let fixture = Fixture::new();
+        let target = official_paper(&fixture, "paper-26.2-112.jar");
+        fs::write(target.directory.join("paper-26.2-134.jar"), b"someone else's file").unwrap();
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        assert_eq!(install_verified(&fixture.0, "server", "update", &profile(b"first", "112").sha256, &candidate, &profile(b"second", "134"))
+            .unwrap_err(), "CoreFileNameTaken");
+        assert_eq!(fs::read(target.directory.join("paper-26.2-112.jar")).unwrap(), b"first");
+        assert_eq!(fs::read(target.directory.join("paper-26.2-134.jar")).unwrap(), b"someone else's file");
+        assert!(!target.store().exists());
+    }
+
+    // #112: when the old name cannot be removed, the update stays pending with
+    // both files; reconciling removes the old file and keeps the new name.
+    #[test]
+    fn an_interrupted_rename_is_completed_by_reconcile() {
+        let fixture = Fixture::new();
+        let target = official_paper(&fixture, "paper-26.2-112.jar");
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let old = target.directory.join("paper-26.2-112.jar");
+        // A reader that does not share deletion keeps the old name in place.
+        let reader = OpenOptions::new().read(true).share_mode(1).open(&old).unwrap();
+        let error = install_verified(&fixture.0, "server", "update", &profile(b"first", "112").sha256, &candidate, &profile(b"second", "134"))
+            .unwrap_err();
+        assert!(error.starts_with("CoreMaintenancePending"), "{error}");
+        drop(reader);
+        assert!(old.exists() && target.directory.join("paper-26.2-134.jar").exists());
+        assert!(assert_start_allowed(&target.directory).is_err());
+        let result = dispatch(&fixture.0, "core-reconcile", &["server".into(), "update".into()]).unwrap().unwrap();
+        assert_eq!(result["outcome"], "applied");
+        assert!(!old.exists(), "the old core file is removed");
+        assert_eq!(fs::read(target.directory.join("paper-26.2-134.jar")).unwrap(), b"second");
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("paper-26.2-134.jar"));
+        assert!(assert_start_allowed(&target.directory).is_ok());
+        // The restore brings the old name back, with no extra core file.
+        let args = ["server".into(), "undo".into(), profile(b"second", "134").sha256, "update".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        let jars: Vec<_> = fs::read_dir(&target.directory).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|name| name.ends_with(".jar")).collect();
+        assert_eq!(jars, ["paper-26.2-112.jar"]);
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("paper-26.2-112.jar"));
+    }
+
+    // #112: a cross-version Velocity change renames an official name too.
+    #[test]
+    fn velocity_cross_version_change_renames_an_official_name() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let directory = target.directory.clone();
+        fs::remove_file(directory.join("server.properties")).unwrap();
+        fs::rename(directory.join("server.jar"), directory.join("velocity-4.2.1-SNAPSHOT-43.jar")).unwrap();
+        let velocity = |bytes: &[u8], version: &str, build: &str| CoreProfile {
+            family: "VELOCITY".into(), minecraft: version.into(), ..profile(bytes, build) };
+        target.config.core_file = Some("velocity-4.2.1-SNAPSHOT-43.jar".into());
+        target.config.core_profile = Some(velocity(b"first", "4.2.1-SNAPSHOT", "43"));
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        fs::write(directory.join("velocity.toml"), format!("bind = \"127.0.0.1:{}\"\n", target.config.port)).unwrap();
+        let (before, after) = (velocity(b"first", "4.2.1-SNAPSHOT", "43"), velocity(b"second", "4.3.1-SNAPSHOT", "52"));
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        install_cross_version(&fixture.0, "server", "cross", &before.sha256, &candidate, &after, &no_progress).unwrap();
+        assert_eq!(fs::read(directory.join("velocity-4.3.1-SNAPSHOT-52.jar")).unwrap(), b"second");
+        assert!(!directory.join("velocity-4.2.1-SNAPSHOT-43.jar").exists());
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("velocity-4.3.1-SNAPSHOT-52.jar"));
+        let args = ["server".into(), "undo".into(), after.sha256.clone(), "cross".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-43.jar")).unwrap(), b"first");
+        assert!(!directory.join("velocity-4.3.1-SNAPSHOT-52.jar").exists());
+        assert_eq!(instance(&fixture.0, "server").unwrap().core_file.as_deref(), Some("velocity-4.2.1-SNAPSHOT-43.jar"));
+    }
+
+    // #62: A and B share one stored core and B runs. Updating stopped A only
+    // changes A's name; B keeps reading the old bytes, which nobody can write.
+    #[test]
+    fn a_stopped_instance_updates_while_a_peer_runs_on_the_same_shared_core() {
+        let fixture = Fixture::new();
+        let target = fixture.workspace();
+        let first = profile(b"first", "112");
+        let source = fixture.0.join("first.jar");
+        fs::write(&source, b"first").unwrap();
+        let a_jar = target.jar();
+        fs::remove_file(&a_jar).unwrap();
+        assert_eq!(shared_core::place(&fixture.0, &source, &first.sha256, &a_jar).unwrap(), shared_core::Placement::Linked);
+        let peer = fixture.0.join("instances").join("peer");
+        fs::create_dir(&peer).unwrap();
+        let b_jar = peer.join("server.jar");
+        shared_core::place(&fixture.0, &source, &first.sha256, &b_jar).unwrap();
+        let stored = fixture.0.join("shared-cores").join(format!("{}.jar", first.sha256));
+        assert_eq!(shared_core::names(&stored).unwrap(), 3, "stored once, named by A and B");
+        assert!(shared_core::read_only(&a_jar), "every name of a stored core is read-only");
+        assert_eq!(shared_core::users(&fixture.0, &a_jar, &first.sha256), Some(2));
+        // B runs: its Host holds the core open for reading and removing names only.
+        let running = shared_core::open_for_launch(&b_jar, Some(&first.sha256)).unwrap();
+        assert!(OpenOptions::new().write(true).open(&b_jar).is_err(), "no one writes a running core");
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let second = profile(b"second", "134");
+        install_verified(&fixture.0, "server", "update", &first.sha256, &candidate, &second).unwrap();
+        assert_eq!(fs::read(&a_jar).unwrap(), b"second");
+        assert_eq!(fs::read(&b_jar).unwrap(), b"first", "the running peer keeps its bytes");
+        assert_eq!(shared_core::users(&fixture.0, &a_jar, &second.sha256), Some(1));
+        assert_eq!(shared_core::users(&fixture.0, &b_jar, &first.sha256), Some(1));
+        let backup = target.store().join("update").join("before.jar");
+        assert_eq!(shared_core::names(&backup).unwrap(), 1, "a backup is a separate copy");
+        // A restore names the stored old core again.
+        let args = ["server".into(), "undo".into(), second.sha256.clone(), "update".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(shared_core::users(&fixture.0, &a_jar, &first.sha256), Some(2));
+        drop(running);
+        // A start refuses a shared core whose bytes differ from the registration.
+        assert_eq!(shared_core::open_for_launch(&b_jar, Some(&second.sha256)).unwrap_err(), "SharedCoreDigestMismatch");
+        assert!(shared_core::unused(&fixture.0).unwrap().iter().any(|core| core.path.ends_with(format!("{}.jar", second.sha256))),
+            "the core that no instance names any more can be cleared");
+        assert_eq!(shared_core::remove_unused(&fixture.0, &first.sha256).unwrap_err(), "SharedCoreInUse");
+        shared_core::remove_unused(&fixture.0, &second.sha256).unwrap();
+        assert!(shared_core::stored(&fixture.0, &second.sha256).unwrap().is_none());
+    }
+
+    // #62: the Restart Manager reports a process that opened another name of
+    // the same file. A peer's live run on the shared core does not make this
+    // folder's core "in use"; for the peer's own folder it still does.
+    #[test]
+    fn a_peer_running_on_the_shared_core_does_not_block_this_folder() {
+        let fixture = Fixture::new();
+        let target = fixture.workspace();
+        let source = fixture.0.join("first.jar");
+        fs::write(&source, b"first").unwrap();
+        let sha = profile(b"first", "112").sha256;
+        fs::remove_file(target.jar()).unwrap();
+        shared_core::place(&fixture.0, &source, &sha, &target.jar()).unwrap();
+        let peer_directory = fixture.0.join("instances").join("peer");
+        fs::create_dir(&peer_directory).unwrap();
+        let peer_jar = peer_directory.join("server.jar");
+        shared_core::place(&fixture.0, &source, &sha, &peer_jar).unwrap();
+        let mut peer = target.config.clone();
+        peer.name = "peer".into();
+        save(&record_path(&fixture.0, "peer"), &peer).unwrap();
+        let script = format!("$f=[IO.File]::Open('{}','Open','Read','ReadWrite'); Start-Sleep 30", peer_jar.display());
+        let mut child = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &script]).spawn().unwrap();
+        let mut seen = false;
+        for _ in 0..100 {
+            if core_artifact::holders(&target.jar()).unwrap().iter().any(|(pid, _)| *pid == child.id()) {
+                seen = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let unknown = core_artifact::assert_unused(&fixture.0, &target.jar());
+        let runs = fixture.0.join("runs").join("peer");
+        fs::create_dir_all(&runs).unwrap();
+        let run = Run { id: "peer-run".into(), host: identity(std::process::id()).unwrap().unwrap(), java: identity(child.id()).unwrap().unwrap() };
+        save(&runs.join("identity.json"), &run).unwrap();
+        let shared = core_artifact::assert_unused(&fixture.0, &target.jar());
+        let own = core_artifact::assert_unused(&fixture.0, &peer_jar);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert!(seen, "another name of the file is reported");
+        assert_eq!(unknown.unwrap_err(), "CoreInUse", "an unknown holder still counts");
+        shared.unwrap();
+        assert_eq!(own.unwrap_err(), "CoreInUse", "the peer's own folder is in use");
+    }
+
+    // #62 with #112: an official name follows the update and stays a name of
+    // the stored core; the old name of the shared file is simply removed.
+    #[test]
+    fn a_renamed_update_names_the_new_shared_core() {
+        let fixture = Fixture::new();
+        let target = official_paper(&fixture, "paper-26.2-112.jar");
+        let first = profile(b"first", "112");
+        let source = fixture.0.join("first.jar");
+        fs::write(&source, b"first").unwrap();
+        let old = target.directory.join("paper-26.2-112.jar");
+        fs::remove_file(&old).unwrap();
+        shared_core::place(&fixture.0, &source, &first.sha256, &old).unwrap();
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let second = profile(b"second", "134");
+        install_verified(&fixture.0, "server", "update", &first.sha256, &candidate, &second).unwrap();
+        let new = target.directory.join("paper-26.2-134.jar");
+        assert!(!old.exists());
+        assert_eq!(shared_core::users(&fixture.0, &new, &second.sha256), Some(1));
+        assert_eq!(shared_core::names(&fixture.0.join("shared-cores").join(format!("{}.jar", first.sha256))).unwrap(), 1);
     }
 
     // #41: an unverified Purpur can be updated once its build is known by the
@@ -1332,6 +1688,9 @@ mod tests {
                 before,
                 after,
                 created_at: epoch_ms(),
+                // A request recorded before #112 states no file names.
+                before_file: None,
+                after_file: None,
             };
             write_durable(&target.store().join(PENDING), &intent, false).unwrap();
             assert!(assert_start_allowed(&target.directory).is_err());

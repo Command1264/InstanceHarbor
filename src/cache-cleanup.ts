@@ -1,6 +1,6 @@
 import type { MessageId } from './i18n'
 
-export type CacheCategory = 'download' | 'legacyWebView' | 'webView'
+export type CacheCategory = 'download' | 'legacyWebView' | 'webView' | 'sharedCore'
 export type CacheState = 'ready' | 'inUse' | 'scheduled' | 'unavailable'
 export type CacheItem = { category: CacheCategory; path: string; bytes: number; complete: boolean; state: CacheState; reason?: string }
 export type CachePreview = { items: CacheItem[]; revision: string }
