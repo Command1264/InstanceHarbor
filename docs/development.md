@@ -33,6 +33,8 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   GUI、CLI 或 Agent 啟動 Manager 時都會出現圖示，但不會開啟 GUI 視窗。
 - GUI 啟動後每 5 秒向自己工作區的 Manager 登記（`gui-attach`，只接受同一安裝的 GUI 程序），Manager 不在時會先啟動它。
   所以 GUI 開著時一定有圖示；Manager 中途被結束，下一次登記會再啟動它。
+  登記連續失敗時，間隔依序拉長為 10、20、40 秒，最長 60 秒，成功一次就回到 5 秒（`src-tauri/src/manager_attach.rs`）。
+  這樣 Manager 一直啟動失敗時，每個 GUI 每分鐘最多再啟動它一次。
 - 一個工作區最多一個圖示。開發版的提示文字以「InstanceHarbor Dev — <工作區資料夾名稱>」開頭，同時有多個工作區時可以分辨。
 - 圖示註冊時不帶提示文字，Manager 隨即補上。Windows 11 會把註冊時的提示文字當成圖示名稱，提示文字改變後
   名稱會變成「註冊時的文字 目前的文字」，產品名稱因此重複。現在名稱開頭多一個空白，不影響顯示。
@@ -75,6 +77,86 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
 - 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512；正式版藍色、開發版紅色，見「開發版紅色圖示」）。`muda` 需要 comctl32 第 6 版，
   執行檔已帶對應 manifest；程式庫的單元測試執行檔沒有，所以系統匣程式碼不編進測試建置。
+  例外是處理視窗訊息的 `pump_messages`，它只用 user32，有自己的單元測試。
+- 系統匣執行緒每 30 毫秒處理一次視窗訊息，每次最多 64 則（`PUMP_LIMIT`），剩下的留到下一次。
+  這樣即使有訊息一直重新出現（例如沒有被處理掉的 `WM_PAINT`），執行緒也一定會回到等待並檢查是否該結束（#118）。
+
+## Manager CPU 與堆疊（#118）
+
+常駐 Manager 長時間占用 CPU 或不回應 GUI 時，先記錄 CPU 取樣，再擷取堆疊。兩者都不會暫停或改變 Manager。
+
+### CPU 取樣
+
+`tests/measure-manager-cpu.ps1` 讀取工作區的 `resident-manager.json` 找到 Manager，取樣指定秒數，
+回報整個程序與最忙的幾個執行緒各用了多少「一個 CPU 核心」的百分比。一直沒有等待的執行緒會接近 100。
+
+```powershell
+./tests/measure-manager-cpu.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor/workspaces/default') -Seconds 10
+```
+
+記下 `busiest` 中執行緒的 ID（十進位），擷取堆疊後用來找對應的執行緒。
+
+### 擷取堆疊
+
+WinDbg（Microsoft Store 或 `winget install Microsoft.WinDbg`）附有命令列除錯器，執行別名是 `cdbX64`
+（Windows SDK 的 Debugging Tools 則是 `cdb.exe`，參數相同）。
+`-pv` 是非侵入式附加：只讀取程序的記憶體與執行緒狀態，不暫停 Manager，`qd` 離開時不結束它。
+只對自己啟動、要調查的 Manager 執行。沒有 PDB 時最簡單的形式是 `cdbX64 -pv -p <PID> -c "~*k; qd"`。
+
+```powershell
+$manager = (Get-Content (Join-Path $env:LOCALAPPDATA 'InstanceHarbor/workspaces/default/resident-manager.json') -Raw | ConvertFrom-Json).pid
+$symbols = '<專案資料夾>\artifacts\symbols'   # 見下一節「PDB 保存位置」
+cdbX64 -pv -p $manager -y "srv*$symbols" -c ".lines -e; .reload /f ihctl.exe; ~*k; qd" > manager-stacks.txt
+```
+
+- `~*k` 列出每個執行緒的呼叫堆疊。輸出中每段以 `.  0  Id: 1a2b.3c4d` 開頭，點後面的十六進位是執行緒 ID；
+  把取樣得到的十進位 ID 換成十六進位（PowerShell：`'{0:x}' -f 15428`）即可對照。
+- 間隔 1 到 2 秒擷取兩三次。空轉的執行緒每次都在同一段程式附近；一直停在 `NtWaitFor*`、`ZwRemoveIoCompletion`、
+  `NtDelayExecution` 的執行緒是在等待，不是空轉。
+- `-y "srv*<資料夾>"` 指定保存 PDB 的資料夾；`.reload /f ihctl.exe` 立即載入相符的 PDB，`.lines -e` 讓每一層顯示
+  `[原始檔 @ 行號]`。沒有相符的 PDB 時，InstanceHarbor 的位置只顯示 `ihctl+0x...` 位移，Windows 模組也只有匯出的函式名稱。
+- 2026-11-26 以開發版 Manager 實測：附加前後 Manager 都在執行、沒有被暫停；10 個執行緒都列出，
+  例如 pipe 執行緒停在 `host_pipe::serve_local`，主執行緒停在 `resident_manager.rs` 主迴圈的 `sleep`。
+- 輸出含本機路徑（原始檔與 PDB 位置），回報到公開 Issue 前先移除。
+
+### PDB 保存位置
+
+PDB 含本機建置路徑，**只留在建置的電腦**：不 commit、不上傳 GitHub、不放進 ZIP 或 Setup
+（`pack-windows.ps1` 只收列出的檔名，不會帶入 PDB）。
+
+- `build-product.ps1 -Release` 建置後呼叫 `save-release-symbols.ps1`，把 `InstanceHarbor.exe`、`ihctl.exe`
+  與對應的 PDB 複製到符號資料夾，採 Windows 符號伺服器的目錄結構（`ihctl.pdb/<GUID><Age>/ihctl.pdb`、
+  `ihctl.exe/<時間戳記><大小>/ihctl.exe`），所以同一個資料夾可以存放每個版本，`cdb` 會依執行檔自動找到相符的 PDB。
+  `index.jsonl` 每行記錄版本、commit、SHA-256 與 PDB 鍵值。同一位置已有不同內容時腳本失敗，不覆寫。
+- 預設位置是專案資料夾（放 `repo/` 與 `worktrees/` 的那一層）的 `artifacts/symbols`。
+  以 `-SymbolDirectory` 或環境變數 `IH_SYMBOL_DIRECTORY` 改用其他資料夾；位置在 repository 或任何 worktree 內時腳本拒絕執行。
+- 發行設定的 PDB 帶有函式名稱與行號（`Cargo.toml` 的 `[profile.release] debug = "line-tables-only"`）。
+  MSVC 把除錯資訊放在 PDB，執行檔大小不變。
+- 執行檔只記錄 PDB 的檔名：`build.rs` 對 MSVC 執行檔明確傳 `/PDBALTPATH:%_PDB%`（rustc 預設也會傳），
+  `save-release-symbols.ps1` 發現執行檔記錄了絕對路徑時會失敗。
+- 執行檔不得含建置電腦的資料夾路徑。標準程式庫與依賴套件的 panic 位置原本帶著
+  `<使用者資料夾>\.rustup\...` 與 `<使用者資料夾>\.cargo\registry\...`（1.1.0 及更早的版本都有）。
+  `build-product.ps1 -Release` 與 `-Development` 以 `--remap-path-prefix` 把 rustc sysroot、`CARGO_HOME` 與 checkout
+  改寫成 `/rust`、`/cargo`、`/instanceharbor`（經 `CARGO_ENCODED_RUSTFLAGS`，路徑含空白也可以；它取代 `.cargo/config.toml`
+  的 rustflags，所以同時帶上 `+crt-static`）。PDB 內的原始檔路徑也因此改寫，`cdb` 的 `.lines` 仍顯示檔名與行號。
+- GUI 執行檔原本也含 checkout 的 `src-tauri` 絕對路徑：專案用 cargo 直接建置、沒有開 Tauri 的 `custom-protocol` feature，
+  Tauri 因此把每次建置都當成 `tauri dev`，`generate_context!` 寫入設定檔所在資料夾。`Cargo.toml` 現在開啟這個 feature。
+  本專案沒有 `devUrl`，所以頁面網址（`http://tauri.localhost`）、CSP 與內嵌的前端資產都與之前相同。
+- `verify-no-local-paths.ps1 -Binary <exe>...` 以 ASCII 與 UTF-16LE 搜尋執行檔，找到含磁碟代號的 `.pdb` 路徑、checkout
+  （repository、主 checkout 或任何 worktree）、使用者資料夾、`CARGO_HOME`、`RUSTUP_HOME` 或 rustc sysroot 時失敗。
+  `build-product.ps1 -Release`／`-Development` 建置後與 `pack-windows.ps1` 封裝前都會執行；`pack-windows.ps1` 也拒絕任何 `.pdb`。
+- 已發布的舊版（1.1.0 及更早）沒有保存 PDB，只能讀到 Windows 模組的函式名稱。
+
+### 稽核結果
+
+#118 檢查了 Manager、Host 與 GUI 的每個迴圈、輪詢、重試與等待，結果列在 PR 中。修正的項目：
+
+- 系統匣執行緒每次最多處理 64 則視窗訊息（見「系統匣」）。
+- 清單讀取（GUI 每 1.5 秒一次，經 Manager 唯一的 pipe 執行緒）不再每次重新計算無法辨識的核心 JAR 的 SHA-256；
+  JAR 的大小、建立時間或修改時間改變時才重算。
+- GUI 背景讀取清單時，上一次還沒完成就略過這一次，不再排在後面立刻執行。
+- 核心預先下載的來源檢查失敗後 30 秒再試，不再每 3 秒重試。
+- GUI 登記失敗時拉長間隔（見「系統匣」）。
 
 ## 視窗開啟大小
 

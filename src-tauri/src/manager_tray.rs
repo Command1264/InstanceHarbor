@@ -315,15 +315,30 @@ fn confirm(text: &str) -> bool {
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), flags) == 6 }
 }
 
-#[cfg(not(test))]
-fn pump_messages() {
-    let mut message: Msg = unsafe { std::mem::zeroed() };
-    unsafe {
-        while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, 1) != 0 {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
-        }
+/// Messages one pass handles at most, so the loop always reaches its sleep and its
+/// stop and exit checks.
+const PUMP_LIMIT: usize = 64;
+
+/// Calls `next` until it reports an empty queue or `limit` handled messages.
+fn drain(limit: usize, mut next: impl FnMut() -> bool) -> usize {
+    let mut handled = 0;
+    while handled < limit && next() {
+        handled += 1;
     }
+    handled
+}
+
+/// Handles the messages waiting for this thread, at most `PUMP_LIMIT` of them.
+fn pump_messages() -> usize {
+    let mut message: Msg = unsafe { std::mem::zeroed() };
+    drain(PUMP_LIMIT, || unsafe {
+        if PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, 1) == 0 {
+            return false;
+        }
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+        true
+    })
 }
 
 /// Asks the windows of attached GUI processes to close, as their X button would.
@@ -367,7 +382,6 @@ fn closes_on_quit(visible: bool, extended_style: isize) -> bool {
 
 type RawWindow = *mut std::ffi::c_void;
 
-#[cfg(not(test))]
 #[repr(C)]
 struct Msg {
     window: RawWindow,
@@ -381,11 +395,8 @@ struct Msg {
 
 #[link(name = "user32")]
 unsafe extern "system" {
-    #[cfg(not(test))]
     fn PeekMessageW(message: *mut Msg, window: RawWindow, min: u32, max: u32, remove: u32) -> i32;
-    #[cfg(not(test))]
     fn TranslateMessage(message: *const Msg) -> i32;
-    #[cfg(not(test))]
     fn DispatchMessageW(message: *const Msg) -> isize;
     #[cfg(not(test))]
     fn MessageBoxW(window: RawWindow, text: *const u16, caption: *const u16, flags: u32) -> i32;
@@ -396,6 +407,14 @@ unsafe extern "system" {
     fn IsWindowVisible(window: RawWindow) -> i32;
     fn GetWindowLongPtrW(window: RawWindow, index: i32) -> isize;
     fn PostMessageW(window: RawWindow, message: u32, wparam: usize, lparam: isize) -> i32;
+    #[cfg(test)]
+    fn PostThreadMessageW(thread: u32, message: u32, wparam: usize, lparam: isize) -> i32;
+}
+
+#[cfg(test)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetCurrentThreadId() -> u32;
 }
 
 #[cfg(test)]
@@ -409,6 +428,32 @@ mod tests {
         assert!(!closes_on_quit(false, 0));
         // Tao's event target: WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOOLWINDOW.
         assert!(!closes_on_quit(true, 0x0800_0000 | 0x20 | 0x80000 | 0x80));
+    }
+
+    #[test]
+    fn one_pump_pass_handles_a_bounded_number_of_messages() {
+        // A message that is always pending again (an unvalidated WM_PAINT, a window that
+        // reposts to itself) used to keep the tray thread inside one pass forever (#118).
+        let mut pending = PUMP_LIMIT * 10;
+        let mut next = || pending.checked_sub(1).map(|left| pending = left).is_some();
+        assert_eq!(drain(PUMP_LIMIT, &mut next), PUMP_LIMIT);
+        assert_eq!(pending, PUMP_LIMIT * 9);
+        assert_eq!(drain(PUMP_LIMIT, || false), 0);
+    }
+
+    #[test]
+    fn pump_leaves_messages_beyond_the_limit_for_the_next_pass() {
+        let thread = unsafe { GetCurrentThreadId() };
+        // WM_APP, posted to this thread's own queue; PeekMessage creates the queue.
+        let mut message: Msg = unsafe { std::mem::zeroed() };
+        unsafe { PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, 0) };
+        for _ in 0..PUMP_LIMIT * 3 {
+            assert_ne!(unsafe { PostThreadMessageW(thread, 0x8000, 0, 0) }, 0);
+        }
+        assert_eq!(pump_messages(), PUMP_LIMIT);
+        assert_eq!(pump_messages(), PUMP_LIMIT);
+        assert_eq!(pump_messages(), PUMP_LIMIT);
+        assert_eq!(pump_messages(), 0);
     }
 
     #[test]

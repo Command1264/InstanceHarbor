@@ -36,6 +36,8 @@ if (!$parent.PSIsContainer -or [IO.Path]::GetExtension($destination) -cne '.zip'
 }
 
 $names = @('InstanceHarbor.exe', 'ihctl.exe')
+# Neither PDBs nor executables that name the build machine's folders may ship (#118).
+& (Join-Path $PSScriptRoot 'verify-no-local-paths.ps1') -Binary @($names | ForEach-Object { Join-Path $binaryRoot.FullName $_ }) | Out-Host
 $gui = Get-PlainItem (Join-Path $binaryRoot.FullName 'InstanceHarbor.exe')
 if ($gui.VersionInfo.ProductName -eq 'InstanceHarbor Dev') {
     throw 'Development binaries cannot be packaged as the stable product.'
@@ -139,6 +141,7 @@ try {
         $zip = [IO.Compression.ZipArchive]::new($zipStream, [IO.Compression.ZipArchiveMode]::Create, $true)
         try {
             foreach ($name in ($names + $consoleNames + $crtNames + $noticeNames + $guideNames)) {
+                if ($name -like '*.pdb') { throw "PDBs stay on the build machine: $name" }
                 $sourceRoot = if ($name -cin $consoleNames) { $consoleRoot }
                     elseif ($name -cin $crtNames) { $crtRoot }
                     elseif ($name -cin $noticeNames) { $noticeRoot }

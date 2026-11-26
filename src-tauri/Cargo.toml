@@ -21,7 +21,10 @@ required-features = ["acceptance-ui"]
 [build-dependencies]
 tauri-build = "=2.6.3"
 [dependencies]
-tauri = { version = "=2.11.5", features = ["tray-icon"] }
+# custom-protocol: without it Tauri treats every build as `tauri dev` and generate_context!
+# writes the absolute src-tauri path into the GUI executable (#118). With no devUrl the
+# page URL, CSP and embedded assets are the same either way.
+tauri = { version = "=2.11.5", features = ["tray-icon", "custom-protocol"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "=1.1.5"
@@ -33,6 +36,12 @@ tray-icon = { version = "=0.24.2", default-features = false }
 [profile.dev]
 debug = 0
 incremental = false
+
+[profile.release]
+# Function names and line numbers in the PDB, which stays on the build machine and is
+# never shipped, so stacks of a running Manager can be read (#118). MSVC keeps debug
+# information out of the executables, so they do not grow.
+debug = "line-tables-only"
 
 [profile.dev-channel]
 inherits = 'release'
