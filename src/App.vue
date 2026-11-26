@@ -33,6 +33,7 @@ import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type C
 import { startupListRendered, startupMark, startupWindowPresented } from './startup-timing'
 import { registryDiagnosticText, registryIssueMessage } from './registry-issues'
 import { startupUpdateCheck, updateStatus, updateTabRequested } from './app-update-store'
+import { onPageShown, pageHidden } from './page-visibility'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
@@ -799,6 +800,7 @@ let logsFollowTimer:ReturnType<typeof setInterval>|undefined
 watch(followedLogRun,run=>{
   clearInterval(logsFollowTimer)
   logsFollowTimer=run?setInterval(()=>{
+    if(pageHidden())return
     const name=target.value?.name
     if(name && !logsReading.value && !logsError.value)void loadLogs(name,run,true)
   },2000):undefined
@@ -1169,9 +1171,18 @@ onMounted(async()=>{
 onMounted(() => {
   if (!nativeBridge) return
   refreshCatalog()
-  catalogTimer = setInterval(refreshCatalog, catalogRefreshInterval)
+  catalogTimer = setInterval(()=>{if(!pageHidden())refreshCatalog()}, catalogRefreshInterval)
 })
 onUnmounted(() => clearInterval(catalogTimer))
+// Fast open (#56): a window shown again reads what changed while it was hidden.
+let stopPageShown:(()=>void)|undefined
+onMounted(()=>{
+  stopPageShown=onPageShown(()=>{
+    void refresh()
+    if(nativeBridge){void refreshJobs();refreshCatalog()}
+  })
+})
+onUnmounted(()=>stopPageShown?.())
 onMounted(()=>{
   document.addEventListener('contextmenu',suppressBrowserMenu)
   media.addEventListener('change',themeListener)
@@ -1180,6 +1191,7 @@ onMounted(()=>{
   if(nativeBridge)void discoverJava()
   void refresh()
   timer=setInterval(()=>{
+    if(pageHidden())return
     void refresh()
     if(++pollTick%2===0)void refreshJobs()
   },1500)

@@ -9,13 +9,13 @@ use crate::webview_events;
 use std::path::Path;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2Environment,
-    ICoreWebView2EnvironmentOptions, ICoreWebView2ProcessFailedEventArgs2,
+    ICoreWebView2EnvironmentOptions, ICoreWebView2ProcessFailedEventArgs2, ICoreWebView2_3,
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_REASON,
     COREWEBVIEW2_SCROLLBAR_STYLE_DEFAULT,
 };
 use webview2_com::{
     CoreWebView2EnvironmentOptions, CreateCoreWebView2EnvironmentCompletedHandler,
-    ProcessFailedEventHandler,
+    ProcessFailedEventHandler, TrySuspendCompletedHandler,
 };
 use windows_core::{Interface, HSTRING, PCWSTR};
 
@@ -199,5 +199,28 @@ fn end_process(pid: u32) {
             TerminateProcess(process, 1);
             CloseHandle(process);
         }
+    }
+}
+
+/// Fast open (#56): a hidden window's WebView2 is made invisible and suspended, so its page
+/// (`document.visibilityState` becomes `hidden`) and renderer stop. Showing resumes it.
+pub fn suspend(webview: tauri::webview::PlatformWebview, suspend: bool) {
+    let controller = webview.controller();
+    let result = (|| -> windows_core::Result<()> {
+        unsafe { controller.SetIsVisible(!suspend)? };
+        let core = unsafe { controller.CoreWebView2()? }.cast::<ICoreWebView2_3>()?;
+        if suspend {
+            let done = TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(())));
+            unsafe { core.TrySuspend(&done) }
+        } else {
+            unsafe { core.Resume() }
+        }
+    })();
+    if let Err(error) = result {
+        webview_events::step(
+            if suspend { "suspend" } else { "resume" },
+            "failed",
+            Some(hresult(&error)),
+        );
     }
 }

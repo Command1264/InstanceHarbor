@@ -188,7 +188,12 @@ fn exit_app_locked(
 /// would not receive WM_CLOSE. It is told over its own pipe instead (#114).
 #[cfg_attr(test, allow(dead_code))]
 fn farewell(root: &Path, gui: &[AttachedGui]) {
-    manager_tray::close_gui_windows(&verified_guis(gui, probe_gui));
+    let verified = verified_guis(gui, probe_gui);
+    // A GUI in fast open mode may have its window hidden; it gets no WM_CLOSE (#56).
+    for pid in &verified {
+        gui_singleton::signal_exit(*pid);
+    }
+    manager_tray::close_gui_windows(&verified);
     if let Err(error) = console_viewer::quit(root) {
         eprintln!("Console viewer did not confirm quit: {error}");
         if let Ok(log) = crate::diagnostics::global() {
@@ -1733,6 +1738,8 @@ mod gui_identity_tests {
         let farewell = source.split("fn farewell(").nth(1).and_then(|rest| rest.split("\n}\n").next());
         let farewell = farewell.expect("farewell() closes the windows on quit");
         assert!(farewell.contains("manager_tray::close_gui_windows(") && farewell.contains("console_viewer::quit("));
+        // A GUI kept running with its window hidden (#56) gets no WM_CLOSE: it is told by its exit event.
+        assert!(farewell.contains("gui_singleton::signal_exit("));
         assert!(source.contains("exit_app_locked(state, state.lock().map_err(fail)?, |gui| farewell(root, &gui))"));
         assert!(source.contains("(\"app-exit\", []) => {
             if !exit_app_locked(shared, state, |gui| farewell(root, &gui))?"));

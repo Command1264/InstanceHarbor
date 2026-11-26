@@ -31,6 +31,10 @@ struct Preferences {
     console_title_overrides: BTreeMap<String, String>,
     #[serde(default, rename = "corePrefetch")]
     core_prefetch: bool,
+    /// Keep the GUI running with its window hidden after X, so the next open is instant (#56).
+    /// Off is left out of the file, so versions that reject unknown fields still read it.
+    #[serde(default, rename = "fastOpen", skip_serializing_if = "std::ops::Not::not")]
+    fast_open: bool,
     // No longer used: the Manager owns the tray and closing the window ends the GUI.
     // Kept so files from 1.0.0 still load and a rollback keeps the user's choice.
     // Omit the default so 1.0.0-rc2, which rejects unknown fields, can still read the file.
@@ -108,6 +112,7 @@ impl Default for Preferences {
             console_title_template: default_console_title(),
             console_title_overrides: BTreeMap::new(),
             core_prefetch: false,
+            fast_open: false,
             close_to_tray: default_close_to_tray(),
         }
     }
@@ -115,6 +120,16 @@ impl Default for Preferences {
 
 fn preferences_path(root: &Path) -> PathBuf {
     root.join("preferences.json")
+}
+
+/// Whether X only hides the GUI window. An unreadable file means the default, off.
+/// `root` may be spelled as the launcher gave it; the file is read through its canonical
+/// path, as every other command does.
+pub fn fast_open_enabled(root: &Path) -> bool {
+    fs::canonicalize(root)
+        .map_err(fail)
+        .and_then(|root| load_preferences(&root))
+        .is_ok_and(|preferences| preferences.fast_open)
 }
 
 pub(super) fn core_prefetch_enabled(root: &Path) -> Result<bool> {
@@ -568,6 +583,9 @@ fn save_preferences(root: &Path, raw: &str, expected: Option<&str>) -> Result<Va
     }
     if input.get("corePrefetch").is_none() {
         value.core_prefetch = previous.core_prefetch;
+    }
+    if input.get("fastOpen").is_none() {
+        value.fast_open = previous.fast_open;
     }
     if input.get("closeToTray").is_none() {
         value.close_to_tray = previous.close_to_tray;
@@ -1647,6 +1665,33 @@ mod tests {
         save_preferences(&root, r#"{"theme":"dark","pins":[],"closeToTray":false}"#, None).unwrap();
         save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
         assert!(!stored(&root));
+        fs::remove_file(preferences_path(&root)).unwrap();
+        fs::remove_dir(&fixture).unwrap();
+    }
+
+    #[test]
+    fn fast_open_is_off_by_default_written_only_when_on_and_kept_by_other_saves() {
+        let fixture = std::env::temp_dir().join(format!("ih-fast-open-{}-{}", std::process::id(), clock()));
+        fs::create_dir(&fixture).unwrap();
+        let root = fs::canonicalize(&fixture).unwrap();
+        assert!(!load_preferences(&root).unwrap().fast_open);
+        assert!(!fast_open_enabled(&root));
+
+        // Off stays out of the file, so older versions that reject unknown fields still read it.
+        save_preferences(&root, r#"{"theme":"dark","pins":[]}"#, None).unwrap();
+        assert!(!fs::read_to_string(preferences_path(&root)).unwrap().contains("fastOpen"));
+
+        save_preferences(&root, r#"{"theme":"dark","pins":[],"fastOpen":true}"#, None).unwrap();
+        assert!(fast_open_enabled(&root));
+        // The GUI passes IH_WORKSPACE as the launcher spelled it, not the canonical path.
+        assert_ne!(fixture, root);
+        assert!(fast_open_enabled(&fixture));
+        // A save from another settings tab leaves it on.
+        save_preferences(&root, r#"{"theme":"light","pins":[]}"#, None).unwrap();
+        assert!(fast_open_enabled(&root));
+        save_preferences(&root, r#"{"theme":"light","pins":[],"fastOpen":false}"#, None).unwrap();
+        assert!(!fast_open_enabled(&root));
+        assert!(!fs::read_to_string(preferences_path(&root)).unwrap().contains("fastOpen"));
         fs::remove_file(preferences_path(&root)).unwrap();
         fs::remove_dir(&fixture).unwrap();
     }
