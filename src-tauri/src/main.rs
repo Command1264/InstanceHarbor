@@ -10,6 +10,7 @@ mod system_accent;
 #[cfg(windows)]
 mod webview_runtime;
 mod startup_prefetch;
+mod startup_theme;
 mod startup_timing;
 #[cfg(windows)]
 mod exit_watchdog;
@@ -22,6 +23,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static IPC_ID: AtomicU64 = AtomicU64::new(1);
 static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
 static PREFETCH: startup_prefetch::Prefetch = startup_prefetch::Prefetch::new();
+static STARTUP_THEME: startup_theme::Slot = startup_theme::Slot::new();
+fn background_color(dark: bool) -> tauri::window::Color {
+    let (red, green, blue) = startup_theme::background(dark);
+    tauri::window::Color(red, green, blue, 255)
+}
 fn diagnostic_write(result: Result<(), String>) {
     if let Err(error) = result {
         eprintln!("GUI diagnostic write failed: {error}")
@@ -201,10 +207,14 @@ fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(
     };
     window.set_theme(theme).map_err(|error| error.to_string())?;
     #[cfg(windows)]
-    let caption = caption_color(
-        &window,
-        window.theme().map_err(|error| error.to_string())? == tauri::Theme::Dark,
-    );
+    let dark = window.theme().map_err(|error| error.to_string())? == tauri::Theme::Dark;
+    #[cfg(windows)]
+    let caption = caption_color(&window, dark);
+    // Keep what WebView2 shows before it draws in step with the page (see startup_theme).
+    #[cfg(windows)]
+    if let Err(error) = window.set_background_color(Some(background_color(dark))) {
+        eprintln!("Could not set the window background color: {error}");
+    }
     // Only the first call reveals the window. Later theme refreshes must not pull a
     // window the user hid in the notification area back onto the screen.
     if !WINDOW_REVEALED.load(Ordering::SeqCst)
@@ -630,7 +640,11 @@ fn main() {
     #[cfg(windows)]
     for verb in startup_prefetch::VERBS {
         PREFETCH.start(verb, move || {
-            tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None))
+            let reply = tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None));
+            if verb == "preferences-snapshot" {
+                STARTUP_THEME.publish(startup_theme::preference_of(&reply));
+            }
+            reply
         });
     }
     let mut context = tauri::generate_context!();
@@ -672,7 +686,13 @@ fn main() {
             startup_timing::mark("setup");
             #[cfg(windows)]
             for config in &main_window {
-                let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+                // WebView2 shows this color until it draws the page (see startup_theme).
+                let dark = startup_theme::dark(
+                    STARTUP_THEME.wait(startup_theme::WAIT),
+                    startup_theme::windows_dark,
+                );
+                let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                    .background_color(background_color(dark));
                 let window = match workspace_binding::webview_data_directory() {
                     Some(folder) => window.data_directory(folder),
                     None => window,
