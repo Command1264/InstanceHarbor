@@ -87,7 +87,7 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 | 標記 | 位置 | 意義 |
 |---|---|---|
 | `main` … `diagnostics-open` | `native` | `main` 開始、安裝租約、WebView2 檢查、工作區、單一實例鎖、診斷紀錄開啟 |
-| `setup`、`window-built`、`setup-done` | `native` | Tauri setup 開始、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
+| `setup`、`window-theme`、`window-built`、`setup-done` | `native` | Tauri setup 開始、決定建立視窗時的背景色（見「開啟視窗時的背景色」）、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
 | `present-window`、`window-shown` | `native` | 頁面第一次呼叫 `present_window`、視窗實際顯示 |
 | `page-navigation-start` | `page` | WebView2 開始載入頁面 |
 | `page-script-start`、`page-mounted` | `page` | 主程式包執行完畢、Vue 掛載完成 |
@@ -114,6 +114,32 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 降到約 950 ms。試過但沒有超出雜訊的做法，因此未採用：設定頁與操作紀錄頁延遲載入（主程式包 274 kB → 157 kB，
 掛載時間沒有可量測的差異）、把診斷紀錄寫入移到 blocking 執行緒池、WebView2 參數
 `--no-proxy-server --disable-background-networking --disable-component-update`。
+
+### 開啟視窗時的背景色
+
+主視窗建立時隱藏，頁面套用主題後才由 `present_window` 顯示。視窗出現的瞬間，WebView2 要重新繪製，
+完成前先填入預設背景色；沒設定時是白色，深色主題下會閃一下白。
+
+- 建立主視窗前，依主題設定視窗與 WebView2 的背景色（Tauri `background_color`）：深色 `#121c2b`、淺色 `#f4f6fa`，
+  與 `src/app.css` 的 `--bg` 相同（`src-tauri/src/startup_theme.rs`，單元測試會核對兩者一致）。
+- 建立時的主題取自 `startup_prefetch` 預先讀取的外觀設定，但不等待：還沒讀完、讀不到或設定為「跟隨系統」時，
+  依 Windows 的應用程式色彩模式（`AppsUseLightTheme`）決定。
+- 頁面第一次呼叫 `present_window` 時，在顯示視窗之前依實際主題再設定一次背景色，所以建立時猜錯也不會閃色；
+  之後切換主題時同樣更新。
+- 曾試過讓 setup 最多等預讀 50 ms：每次實際等 32–50 ms（setup 開始時預讀通常還沒完成），沒有必要，已移除。
+
+逐格檢查：`tests/capture-gui-startup-frames.ps1` 從視窗出現起每 16 ms 擷取一次螢幕（實際約 30–40 ms 一格），
+持續 2 秒，統計與主題不符的畫格，並另存那些畫格。
+
+```powershell
+./tests/capture-gui-startup-frames.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-frames') -Theme dark -Launch Tray -Runs 10
+```
+
+- `-Theme` 為 `dark`、`light` 或 `system`（腳本會改寫該工作區的外觀設定），`-Launch Direct` 直接啟動，
+  `-Launch Tray` 對該工作區自己的 Manager 系統匣視窗送出左鍵點擊訊息，由 Manager 開啟 GUI。
+- 同時開著的其他 GUI 會出現在同一位置。腳本在測試視窗還隱藏時，於同一位置放一塊預期主題底色的背景板，
+  並把測試視窗與背景板設為最上層，結束時移除；Windows 的開窗動畫保持開啟。執行期間螢幕中央會被這兩個視窗蓋住約 2 秒。
+- 修改前在開發機以深色主題直接啟動共 15 次，3 次抓到內容區全白的畫格（視窗出現後約 40–90 ms，標題列已是深色）。
 
 ## 介面語言
 
