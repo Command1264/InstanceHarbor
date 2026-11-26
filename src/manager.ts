@@ -265,6 +265,8 @@ export function errorText(error: unknown) {
   if (raw.includes('JavaScanDirectoryConflict')) return tr('manager.error.javaScanDirectoryConflict')
   if (raw.includes('AutoJavaUnavailable')) return tr('manager.error.autoJavaUnavailable')
   if (raw.includes('GlobalJavaConflict')) return tr('manager.error.globalJavaConflict')
+  if (raw.includes('CreationDefaultsConflict')) return tr('manager.error.creationDefaultsConflict')
+  if (raw.includes('InvalidCreationDefaults')) return tr('manager.error.invalidCreationDefaults')
   if (raw.includes('GlobalJavaIncompatible')) return tr('manager.error.globalJavaIncompatible')
   if (raw.includes('GlobalJavaUnavailable') || raw.includes('InvalidJavaPath')) return tr('manager.error.globalJavaUnavailable')
   if (raw.includes('JavaEnvironmentOverride')) return tr('manager.error.javaEnvironmentOverride')

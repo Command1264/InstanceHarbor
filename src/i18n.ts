@@ -515,6 +515,7 @@ const baseMessages = {
   'console.pasteConfirm': ['仍要貼上', 'Paste anyway'],
   'console.disconnected': ['終端連線中斷，正在等待原工作階段。', 'Terminal disconnected. Waiting for the original session.'],
   'recovery.heading': ['復原金鑰', 'Recovery key'],
+  'recovery.retiring': ['復原金鑰將在之後的版本移除。新啟動的伺服器不再使用金鑰；正常停止再啟動後，伺服器就不再依賴金鑰。仍在執行、啟動時已綁定金鑰的伺服器，可在下方「執行中工作階段」接管。金鑰檔與備份檔不會被自動刪除。', 'The recovery key will be removed in a later version. Servers started from now on do not use it; after a normal stop and start, a server no longer depends on the key. A server that is still running and was bound to the key when it started can be taken over under Running sessions below. Key and backup files are not deleted automatically.'],
   'recovery.noConnection': ['連線後可管理復原金鑰。', 'Connect to the management service to manage the recovery key.'],
   'recovery.reading': ['正在核對金鑰', 'Checking the key'],
   'recovery.none': ['目前工作區尚未登記復原金鑰。', 'This workspace has no registered recovery key.'],
