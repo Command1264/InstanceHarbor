@@ -771,7 +771,22 @@ GUI 診斷紀錄每次啟動寫一組檔案，檔名為 `gui-<GUI 啟動的本�
 比較的是筆數與錯誤代碼，不比較回傳值。真的無法寫入（磁碟已滿、沒有存取權）時，GUI 警告並顯示上表的資料夾。
 
 1.0 之前的版本把 WebView2 資料放在 `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`）。
-裡面只有介面快取，1.0 不再使用，可以手動刪除。`<應用程式資料夾>` 下的 `diagnostics` 與 `lifecycle` 屬於 V1，1.0 不讀寫它們。
+裡面只有介面快取，1.0 不再使用，可以手動刪除，或用下面的「清除快取」。`<應用程式資料夾>` 下的 `diagnostics` 與 `lifecycle` 屬於 V1，1.0 不讀寫它們。
+
+#### 清除快取
+
+「應用程式設定 → 清除快取」先列出每一類項目與大小，按「清除快取」並確認後才刪除。只處理下列明確位置：
+
+| 類別 | 位置 | 說明 |
+|---|---|---|
+| 核心下載暫存 | 工作區 `staging` 內名稱完全符合 `download-<SHA-256>`、`pending-download-<PID>-<時間>`、`core-download-<PID>-<時間>` 的資料夾 | 建立中的工作持有 `download-<SHA-256>.lock`，或寫入暫存的程序仍在執行時，標示為使用中並略過 |
+| 舊版介面快取 | `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`） | 1.0 以前的 WebView2 資料 |
+| 介面快取（WebView2） | 上表「WebView2 資料」的位置 | GUI 執行中無法刪除。清除時在工作區寫入 `webview-cache-clear.json`，下次啟動 GUI、WebView2 開啟前刪除；開發版只影響該工作區自己的資料夾。啟動腳本以 `WEBVIEW2_USER_DATA_FOLDER` 指定其他資料夾時不提供清除 |
+
+清單與刪除時都略過連結與 junction，不刪除其他檔名，也不以萬用字元決定目標；`staging` 內的建立暫存（`gui-create-*`）、續做紀錄、`core-prefetch` 與工作區其他資料都不在範圍內。
+確認後若清單已變更（例如有新的下載），會要求重新核對。刪除失敗的項目逐項列出原因（檔案使用中、沒有存取權限等），不影響其他項目。
+排定的 WebView2 刪除失敗時保留排定與原因，設定頁顯示原因，下次啟動再試一次；結果也寫入 GUI 診斷紀錄（`webview-cache-cleared`／`webview-cache-clear-failed`）。
+不再使用的共用核心待共用核心（#62）完成後再加入。
 
 工作區的 `workspace.json` 記錄格式值。1.0 新建的工作區寫入 `instanceharbor-workspace-1`。
 rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`；1.0 照常開啟且不改寫，所以舊版仍能開啟它們。

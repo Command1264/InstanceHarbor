@@ -476,6 +476,8 @@ pub fn safe_action(action: &str) -> &str {
         | "save-global-java-settings"
         | "creation-defaults"
         | "save-creation-defaults"
+        | "cache-preview"
+        | "cache-clear"
         | "test-admin-settings"
         | "save-test-admin-settings"
         | "test-admin-fetch-luckperms"

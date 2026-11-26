@@ -626,6 +626,19 @@ fn main() {
         Err(error)=>eprintln!("GUI diagnostics unavailable: {error}"),
     }
     startup_timing::mark("diagnostics-open");
+    // Settings may have scheduled this WebView2 folder for deletion; WebView2 has not opened it yet.
+    #[cfg(windows)]
+    if let Some(result) = instanceharbor::clear_scheduled_webview() {
+        if let Ok(log) = diagnostics::global() {
+            diagnostic_write(log.record(match &result {
+                Ok(()) => json!({"type":"webview-cache-cleared"}),
+                Err(error) => json!({"type":"webview-cache-clear-failed","error":diagnostics::safe_error(error)}),
+            }));
+        }
+        if let Err(error) = result {
+            eprintln!("Scheduled WebView2 cache clear failed: {error}");
+        }
+    }
     // The workspace is bound; read what the first screen needs while WebView2 starts.
     #[cfg(windows)]
     for verb in startup_prefetch::VERBS {
