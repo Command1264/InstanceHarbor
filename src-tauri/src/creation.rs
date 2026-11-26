@@ -428,7 +428,8 @@ fn stage(root: &Path, inspection: &Inspection, draft: &Draft, work: &str, prepar
         }
         Assets::Official => prepared.ok_or("CoreDownloadUnverified")?,
     };
-    core_maintenance::copy_verified(&core, &stage.path.join("server.jar"), &profile.sha256)?;
+    // A new instance names the shared core of its SHA-256 (#62).
+    shared_core::place(root, &core, &profile.sha256, &stage.path.join("server.jar"))?;
     if profile.mojang_sha256().is_some_and(|expected| {
         !mojang.as_ref().is_some_and(|(_, hash)| expected == hash)
     }) {
@@ -984,6 +985,10 @@ mod tests {
         let result = confirm(root, work, &raw, &|_| {}).unwrap();
         assert_eq!(result["whitelist"], Value::Null);
         assert!(target.is_dir());
+        // #62: a new instance's core is a name of the stored core of its SHA-256.
+        let sha = content_revision::revision(b"synthetic artifact").unwrap();
+        assert_eq!(shared_core::users(root, &target.join("server.jar"), &sha), Some(1));
+        assert!(shared_core::read_only(&target.join("server.jar")));
         let (policy, revision) = scan_policy::load(root).unwrap();
         assert_eq!(revision, original_revision);
         assert!(policy.management_roots().is_empty());

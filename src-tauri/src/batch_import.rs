@@ -306,7 +306,7 @@ fn inspect_candidate(
         return Err("MissingCoreArtifact".into());
     }
     // A running server keeps its core open; report that before port checks.
-    core_artifact::assert_unused(&core)?;
+    core_artifact::assert_unused(root, &core)?;
     let core_file = hold_file(&core)?;
     let core_token = file_token(&core, &core_file)?;
     held.push(core_file);

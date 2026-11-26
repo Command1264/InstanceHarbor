@@ -129,7 +129,7 @@ fn project(
         if include_metadata {
             // The observed state stays usable when only the directory cannot be resolved.
             match managed_directory(root, &config.name, config.directory.as_deref()) {
-                Ok(directory) => instances.push(presentation::instance_metadata(&config, &directory)),
+                Ok(directory) => instances.push(presentation::instance_metadata(root, &config, &directory)),
                 Err(error) => {
                     report(&error);
                 }

@@ -4,6 +4,7 @@ export const componentsMessages = {
   'components.cache.download': ['核心下載暫存', 'Core download leftovers'],
   'components.cache.legacyWebView': ['舊版介面快取（1.0 以前）', 'Interface cache from versions before 1.0'],
   'components.cache.webView': ['介面快取（WebView2）', 'Interface cache (WebView2)'],
+  'components.cache.sharedCore': ['沒有實例使用的共用核心', 'Shared cores that no instance uses'],
   'components.cache.webViewHelp': ['GUI 執行中無法刪除，清除時改為下次啟動 GUI 前刪除。', 'It cannot be deleted while the GUI runs. Clearing it deletes it before the GUI starts next time.'],
   'components.cache.webViewNextStart': ['下次啟動 GUI 前刪除', 'Deleted before the GUI starts next time'],
   'components.cache.none': ['沒有項目', 'Nothing to clear'],

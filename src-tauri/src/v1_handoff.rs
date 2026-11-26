@@ -89,7 +89,7 @@ fn plan(root: &Path, name: &str, directory: &str) -> Result<Plan> {
         (property_port(&target)?, None, config)
     };
     legacy_preview::v1_stopped(&target, port)?;
-    core_artifact::assert_unused(&core)?;
+    core_artifact::assert_unused(root, &core)?;
     let revision = content_revision::revision(&serde_json::to_vec(&json!({
         "name": name, "directory": path_format::display(&target), "markers": evidence,
         "core": [&core_name, content_revision::file_revision(&core)?], "config": config, "port": port,

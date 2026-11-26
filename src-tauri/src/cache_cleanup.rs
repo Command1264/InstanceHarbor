@@ -6,7 +6,9 @@
 //! - the WebView2 folder that versions before 1.0 used
 //!   (`%LOCALAPPDATA%\local.instanceharbor.v2`, development `local.instanceharbor.v2.dev`);
 //! - the current channel's WebView2 folder, which the running GUI holds open, so
-//!   clearing it only schedules the deletion for the next GUI start.
+//!   clearing it only schedules the deletion for the next GUI start;
+//! - shared cores (#62), `shared-cores/<SHA-256>.jar`, that no instance names any
+//!   more: the file has only its own name and no process has it open.
 //!
 //! Each entry is checked again when it is deleted. Entries that a running job
 //! uses are skipped, and one failure does not stop the others.
@@ -25,6 +27,7 @@ enum Category {
     Download,
     LegacyWebView,
     WebView,
+    SharedCore,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Debug)]
@@ -236,8 +239,22 @@ fn read_marker(root: &Path) -> Result<Option<Marker>> {
     serde_json::from_slice(&bytes).map(Some).map_err(|_| "InvalidWebViewCacheMarker".into())
 }
 
+/// Shared cores with only their own name (#62). One opened by a process is in use.
+fn shared_core_items(root: &Path) -> Result<Vec<Item>> {
+    Ok(shared_core::unused(root)?.into_iter().map(|core| Item {
+        category: Category::SharedCore,
+        path: path_format::display(&core.path),
+        location: core.path,
+        bytes: core.bytes,
+        complete: true,
+        state: if core.open { State::InUse } else { State::Ready },
+        reason: None,
+    }).collect())
+}
+
 fn preview_items(root: &Path, places: &Places) -> Result<Vec<Item>> {
     let mut items = download_items(root)?;
+    items.extend(shared_core_items(root)?);
     if plain_directory(&places.legacy).map_err(fail)? {
         let (bytes, complete) = tree_size(&places.legacy);
         items.push(Item {
@@ -323,6 +340,11 @@ fn clear_item(root: &Path, item: &Item) -> std::result::Result<&'static str, Str
             Ok("deleted")
         }
         Category::LegacyWebView => remove_folder(&item.location).map(|()| "deleted"),
+        Category::SharedCore => {
+            // Checked again under its lock: an instance may have named it since the preview.
+            let hash = item.location.file_stem().and_then(|name| name.to_str()).unwrap_or("");
+            shared_core::remove_unused(root, hash).map(|()| "deleted")
+        }
         Category::WebView => {
             let marker = Marker { folder: item.path.clone(), error: None };
             let path = root.join(MARKER_FILE);
@@ -462,6 +484,33 @@ mod tests {
 
     /// A PID that no running process has: Windows PIDs are multiples of four.
     const ENDED_PID: u32 = 4_294_967_293;
+
+    // #62: a shared core is listed only while no instance names it, and an
+    // open one is in use. Clearing checks its names again.
+    #[test]
+    fn unused_shared_cores_are_listed_and_cleared() {
+        let fixture = Fixture::new();
+        let places = fixture.places();
+        let source = fixture.base.join("core.jar");
+        fs::write(&source, b"shared core").unwrap();
+        let sha = content_revision::revision(b"shared core").unwrap();
+        let link = fixture.root.join("instances").join("server.jar");
+        assert_eq!(shared_core::place(&fixture.root, &source, &sha, &link).unwrap(), shared_core::Placement::Linked);
+        let shared = |preview: &Value| preview["items"].as_array().unwrap().iter()
+            .filter(|item| item["category"] == "sharedCore").cloned().collect::<Vec<_>>();
+        assert!(shared(&fixture.preview(&places)).is_empty(), "an instance still names it");
+        fs::remove_file(&link).unwrap();
+        let listed = shared(&fixture.preview(&places));
+        assert_eq!((listed.len(), &listed[0]["state"], &listed[0]["bytes"]), (1, &json!("ready"), &json!(11)));
+        let reader = File::open(fixture.root.join("shared-cores").join(format!("{sha}.jar"))).unwrap();
+        assert_eq!(shared(&fixture.preview(&places))[0]["state"], "inUse");
+        drop(reader);
+        let revision = fixture.preview(&places)["revision"].as_str().unwrap().to_owned();
+        let result = clear(&fixture.root, &places, &json!({"revision":revision}).to_string()).unwrap();
+        assert!(result["results"].as_array().unwrap().iter().any(|row| row["category"] == "sharedCore" && row["outcome"] == "deleted"));
+        assert!(!fixture.root.join("shared-cores").join(format!("{sha}.jar")).exists());
+        assert!(shared(&result["preview"]).is_empty());
+    }
 
     #[test]
     fn only_exact_download_leftover_names_are_cache_entries() {

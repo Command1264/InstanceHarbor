@@ -37,6 +37,7 @@ export const instancesMessages = {
   'instances.coreReason.CoreUnreadable': ['無法讀取目前的核心檔。', 'The current core file could not be read.'],
   'instances.coreReason.CoreProfileUnverified': ['無法辨識這個核心檔的種類與版本；核心檔可能已被替換。', 'The kind and version of this core file could not be identified. The file may have been replaced.'],
   'instances.coreReason.other': ['無法辨識目前的核心。', 'The current core could not be identified.'],
+  'instances.sharedCore': ['共用核心：{count} 台使用同一份', 'Shared core: {count} instances use the same file'],
   'instances.coreOffline': ['版本由核心檔內容讀出，未與內建清單或官方來源比對。', 'The version was read from the core file and has not been compared with the built-in list or the official source.'],
   'instances.createInstance': ['建立實例', 'Create instance'],
   'instances.searchLabel': ['搜尋實例', 'Search instances'],
