@@ -11,6 +11,7 @@ type Handle = *mut c_void;
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn CreateMutexW(attributes: Handle, owner: i32, name: *const u16) -> Handle;
+    fn OpenMutexW(access: u32, inherit: i32, name: *const u16) -> Handle;
 }
 
 #[link(name = "user32")]
@@ -46,6 +47,21 @@ pub(super) fn acquire_named(name: &str) -> io::Result<Option<OwnedHandle>> {
         return Ok(None);
     }
     Ok(Some(handle))
+}
+
+/// Whether some process holds `name` now. Unlike `acquire_named`, it never creates the mutex,
+/// so a process starting at the same moment is not turned away.
+pub(super) fn exists_named(name: &str) -> io::Result<bool> {
+    let name: Vec<_> = name.encode_utf16().chain([0]).collect();
+    // SYNCHRONIZE
+    let handle = unsafe { OpenMutexW(0x0010_0000, 0, name.as_ptr()) };
+    if handle.is_null() {
+        let error = io::Error::last_os_error();
+        // ERROR_FILE_NOT_FOUND: no process holds it.
+        return if error.raw_os_error() == Some(2) { Ok(false) } else { Err(error) };
+    }
+    drop(unsafe { OwnedHandle::from_raw_handle(handle) });
+    Ok(true)
 }
 
 pub fn focus_existing() -> bool {
@@ -96,4 +112,20 @@ unsafe extern "system" fn find_existing(window: Handle, context: isize) -> i32 {
     }
     target.2 = window;
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exists_named_sees_a_held_lease_without_creating_one() {
+        let name = format!(r"Local\instanceharbor-test-lease-{}", std::process::id());
+        assert!(!exists_named(&name).unwrap());
+        // Checking did not create it: the first acquire still wins.
+        let lease = acquire_named(&name).unwrap().expect("no one holds the lease yet");
+        assert!(exists_named(&name).unwrap());
+        drop(lease);
+        assert!(!exists_named(&name).unwrap());
+    }
 }
