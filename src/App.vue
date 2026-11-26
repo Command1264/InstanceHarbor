@@ -26,6 +26,7 @@ import {instanceNameIssue} from './instance-name'
 import {suppressBrowserMenu} from './context-menu'
 import { batchFailureReasonId, newBatchFailures, type BatchFailure } from './operation-failures'
 import { diagnosticWarning, type DiagnosticStatus } from './diagnostic-warning'
+import { queuesBehindActive } from './refresh-queue'
 import { provideAppLanguage, type LanguagePreference } from './i18n'
 import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, resolveTheme, shouldRespondToSystemTheme } from './theme'
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
@@ -549,6 +550,7 @@ const accentListener=()=>{
 async function refresh(manual=false){
   if(!nativeBridge){connection.value='browser';if(manual)feedback.value=t('app.bridgeMissing');return}
   if(refreshActive){
+    if(!queuesBehindActive(manual?'manual':'background'))return
     if(manual && manualRefreshPending.value)return
     if(manual){clearRefreshFeedback();manualRefreshPending.value=true}
     refreshQueued=true;queuedManual ||= manual;return

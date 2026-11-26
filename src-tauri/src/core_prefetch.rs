@@ -355,6 +355,23 @@ pub(super) fn supervise(root: &Path) {
     }
 }
 
+/// How long the next source check waits: the regular interval, or a shorter but still
+/// spaced retry after a failed check. Without a deadline after a failure, every 3 s cycle
+/// hashed each core and contacted the sources again (#118).
+const CHECK_INTERVAL: Duration = Duration::from_secs(120);
+const CHECK_RETRY: Duration = Duration::from_secs(30);
+
+fn schedule_check(
+    next_check: &mut Option<(Instant, Vec<String>)>,
+    names: Vec<String>,
+    outcome: Result<()>,
+    now: Instant,
+) -> Result<()> {
+    let wait = if outcome.is_ok() { CHECK_INTERVAL } else { CHECK_RETRY };
+    *next_check = Some((now + wait, names));
+    outcome
+}
+
 fn cycle(root: &Path, next_check: &mut Option<(Instant, Vec<String>)>) -> Result<()> {
     let enabled = presentation::core_prefetch_enabled(root)?;
     if !enabled {
@@ -377,8 +394,8 @@ fn cycle(root: &Path, next_check: &mut Option<(Instant, Vec<String>)>) -> Result
             .as_ref()
             .is_none_or(|(deadline, previous)| Instant::now() >= *deadline || previous != &names);
         if due {
-            refresh(root, &names, &mut demands)?;
-            *next_check = Some((Instant::now() + Duration::from_secs(120), names));
+            let outcome = refresh(root, &names, &mut demands);
+            schedule_check(next_check, names, outcome, Instant::now())?;
         }
         demands.retain(|name, item| {
             active
@@ -428,6 +445,17 @@ fn cycle(root: &Path, next_check: &mut Option<(Instant, Vec<String>)>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_source_check_waits_before_the_next_attempt() {
+        let now = Instant::now();
+        let names = vec!["agent".to_owned()];
+        let mut next = None;
+        assert!(schedule_check(&mut next, names.clone(), Err("CoreSourceUnavailable".into()), now).is_err());
+        assert_eq!(next, Some((now + CHECK_RETRY, names.clone())), "a failure still sets a deadline");
+        schedule_check(&mut next, names.clone(), Ok(()), now).unwrap();
+        assert_eq!(next, Some((now + CHECK_INTERVAL, names)));
+    }
 
     #[test]
     fn candidate_is_shared_across_reopens_and_collected_only_after_last_reader() {

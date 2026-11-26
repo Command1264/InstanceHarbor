@@ -34,5 +34,11 @@ tray-icon = { version = "=0.24.2", default-features = false }
 debug = 0
 incremental = false
 
+[profile.release]
+# Function names and line numbers in the PDB, which stays on the build machine and is
+# never shipped, so stacks of a running Manager can be read (#118). MSVC keeps debug
+# information out of the executables, so they do not grow.
+debug = "line-tables-only"
+
 [profile.dev-channel]
 inherits = 'release'

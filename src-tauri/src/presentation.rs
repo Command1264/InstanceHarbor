@@ -357,13 +357,24 @@ fn core_metadata(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<Co
 }
 
 fn current_core(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<CoreProfile>) -> Value {
+    current_core_with(row, jar, trust, content_revision::file_revision)
+}
+
+fn current_core_with(
+    row: &Instance,
+    jar: &Path,
+    trust: impl Fn(String) -> Option<CoreProfile>,
+    digest: impl Fn(&Path) -> Result<String>,
+) -> Value {
     if no_redirect(jar).is_err() {
         return json!({"state":"unknown","reason":"CorePathUnverified"});
     }
     let identity = core_identity::read_identity(jar);
     let sha = match &identity {
-        Ok(Some(identity)) => core_hash(jar, &identity.directory_revision),
-        _ => content_revision::file_revision(jar),
+        Ok(Some(identity)) => core_hash(jar, &identity.directory_revision, &digest),
+        // Without a readable ZIP directory the file's size and Windows timestamps tell
+        // whether it changed; replacing or rewriting the JAR changes them.
+        _ => file_stamp(jar).and_then(|stamp| core_hash(jar, &stamp, &digest)),
     };
     let Ok(sha) = sha else {
         return json!({"state":"unknown","reason":"CoreUnreadable"});
@@ -386,26 +397,32 @@ fn current_core(row: &Instance, jar: &Path, trust: impl Fn(String) -> Option<Cor
     core
 }
 
-/// The SHA-256 of a core whose ZIP directory was read. The list refreshes every
-/// few seconds and a core is 40 to 90 MB, so the hash is kept while the file
-/// length and directory stay the same. The directory records every entry's CRC,
-/// so a changed entry changes it.
-fn core_hash(jar: &Path, directory_revision: &str) -> Result<String> {
+/// The size and the creation and last-write times of a file, as a cache key.
+fn file_stamp(path: &Path) -> Result<String> {
+    use std::os::windows::fs::MetadataExt;
+    let metadata = fs::metadata(path).map_err(fail)?;
+    Ok(format!("file:{}:{}:{}", metadata.file_size(), metadata.creation_time(), metadata.last_write_time()))
+}
+
+/// The SHA-256 of a core. The list refreshes every 1.5 s and a core is 40 to 90 MB,
+/// so the hash is kept while the file length and `revision` stay the same:
+/// the ZIP directory, which records every entry's CRC, or else `file_stamp`.
+fn core_hash(jar: &Path, revision: &str, digest: impl Fn(&Path) -> Result<String>) -> Result<String> {
     use std::{collections::HashMap, sync::Mutex};
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, (u64, String, String)>>> = OnceLock::new();
     let length = fs::metadata(jar).map_err(fail)?.len();
     let cache = CACHE.get_or_init(Default::default);
-    if let Some((saved_length, revision, sha)) = cache.lock().map_err(|_| "CoreHashCacheUnavailable")?.get(jar) {
-        if *saved_length == length && revision == directory_revision {
+    if let Some((saved_length, saved, sha)) = cache.lock().map_err(|_| "CoreHashCacheUnavailable")?.get(jar) {
+        if *saved_length == length && saved == revision {
             return Ok(sha.clone());
         }
     }
-    let sha = content_revision::file_revision(jar)?;
+    let sha = digest(jar)?;
     let mut cache = cache.lock().map_err(|_| "CoreHashCacheUnavailable")?;
     if cache.len() >= 64 && !cache.contains_key(jar) {
         cache.clear();
     }
-    cache.insert(jar.to_path_buf(), (length, directory_revision.to_owned(), sha.clone()));
+    cache.insert(jar.to_path_buf(), (length, revision.to_owned(), sha.clone()));
     Ok(sha)
 }
 
@@ -1854,6 +1871,28 @@ mod tests {
         let old_paper = core_row(Some(core_profile("PAPER", "1.14.4", "245", sha.clone())));
         let saved = core_metadata(&old_paper, &jar, |hash| core_maintenance::trusted_profile(&old_paper, hash));
         assert_eq!(known(&saved), ("PAPER", "1.14.4", "245"));
+        fs::remove_dir_all(&folder).unwrap();
+    }
+
+    // #118: the GUI reads the list every 1.5 s through the Manager's only pipe thread. A
+    // core without a readable identity (Velocity, vanilla, ZIP64) was hashed in full on
+    // every read, 40 to 90 MB each time.
+    #[test]
+    fn list_core_hashes_an_unidentified_jar_once_until_the_file_changes() {
+        let (folder, jar) = core_fixture(b"core without a readable identity");
+        let row = core_row(None);
+        let hashed = std::cell::Cell::new(0);
+        let digest = |path: &Path| {
+            hashed.set(hashed.get() + 1);
+            content_revision::file_revision(path)
+        };
+        let first = current_core_with(&row, &jar, |_| None, digest);
+        let second = current_core_with(&row, &jar, |_| None, digest);
+        assert_eq!(first, second);
+        assert_eq!(hashed.get(), 1, "an unchanged core is hashed once");
+        fs::write(&jar, b"core without a readable identity, replaced").unwrap();
+        current_core_with(&row, &jar, |_| None, digest);
+        assert_eq!(hashed.get(), 2, "a changed core is hashed again");
         fs::remove_dir_all(&folder).unwrap();
     }
 

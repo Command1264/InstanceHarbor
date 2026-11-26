@@ -33,6 +33,8 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   GUI、CLI 或 Agent 啟動 Manager 時都會出現圖示，但不會開啟 GUI 視窗。
 - GUI 啟動後每 5 秒向自己工作區的 Manager 登記（`gui-attach`，只接受同一安裝的 GUI 程序），Manager 不在時會先啟動它。
   所以 GUI 開著時一定有圖示；Manager 中途被結束，下一次登記會再啟動它。
+  登記連續失敗時，間隔依序拉長為 10、20、40 秒，最長 60 秒，成功一次就回到 5 秒（`src-tauri/src/manager_attach.rs`）。
+  這樣 Manager 一直啟動失敗時，每個 GUI 每分鐘最多再啟動它一次。
 - 一個工作區最多一個圖示。開發版的提示文字以「InstanceHarbor Dev — <工作區資料夾名稱>」開頭，同時有多個工作區時可以分辨。
 - 圖示註冊時不帶提示文字，Manager 隨即補上。Windows 11 會把註冊時的提示文字當成圖示名稱，提示文字改變後
   名稱會變成「註冊時的文字 目前的文字」，產品名稱因此重複。現在名稱開頭多一個空白，不影響顯示。
@@ -68,6 +70,9 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
 - 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512；正式版藍色、開發版紅色，見「開發版紅色圖示」）。`muda` 需要 comctl32 第 6 版，
   執行檔已帶對應 manifest；程式庫的單元測試執行檔沒有，所以系統匣程式碼不編進測試建置。
+  例外是處理視窗訊息的 `pump_messages`，它只用 user32，有自己的單元測試。
+- 系統匣執行緒每 30 毫秒處理一次視窗訊息，每次最多 64 則（`PUMP_LIMIT`），剩下的留到下一次。
+  這樣即使有訊息一直重新出現（例如沒有被處理掉的 `WM_PAINT`），執行緒也一定會回到等待並檢查是否該結束（#118）。
 
 ## 視窗開啟大小
 

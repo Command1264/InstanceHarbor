@@ -1,7 +1,10 @@
 [CmdletBinding()]
 # ConsoleRuntimeSource: a directory or local .nupkg holding the pinned console runtime
 # (console-runtime.json). Defaults to IH_CONSOLE_RUNTIME_SOURCE. Never downloaded here.
-param([switch]$Acceptance,[switch]$Release,[switch]$Development,[string]$ConsoleRuntimeSource=$env:IH_CONSOLE_RUNTIME_SOURCE)
+# SymbolDirectory: where -Release keeps this build's PDBs (with the matching executables) on
+# this machine only. Defaults to IH_SYMBOL_DIRECTORY, else artifacts/symbols in the project
+# folder that holds repo/ and worktrees/. PDBs name local paths: never commit, upload or ship them.
+param([switch]$Acceptance,[switch]$Release,[switch]$Development,[string]$ConsoleRuntimeSource=$env:IH_CONSOLE_RUNTIME_SOURCE,[string]$SymbolDirectory=$env:IH_SYMBOL_DIRECTORY)
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
 Push-Location $PSScriptRoot
@@ -101,5 +104,9 @@ try {
     }
     @{assets=$assets;frontendDirectory=(Resolve-Path -LiteralPath $frontendDirectory).Path;binary=$binary;sha256=(Get-FileHash -LiteralPath $binary).Hash;cliSha256=(Get-FileHash -LiteralPath $cli).Hash;indexSha256=(Get-FileHash -LiteralPath $index).Hash;acceptanceUi=[bool]$Acceptance;development=[bool]$Development;commit=$commit;consoleRuntime=$consoleRuntime}|
         ConvertTo-Json|Set-Content -LiteralPath (Join-Path $folder 'build-manifest.json')
+    if($Release){
+        $symbols=& (Join-Path $PSScriptRoot 'save-release-symbols.ps1') -BinaryDirectory $binaryDirectory -Commit $commit -Destination $SymbolDirectory
+        "PDB 已保存在本機（不得上傳或封裝）：$symbols"
+    }
     'Vue 與原生候選資產已核對。'
 } finally {$env:IH_BUILD_COMMIT=$previousCommit;Pop-Location}

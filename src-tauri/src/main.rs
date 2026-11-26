@@ -14,6 +14,8 @@ mod startup_theme;
 mod startup_timing;
 #[cfg(windows)]
 mod exit_watchdog;
+#[cfg(windows)]
+mod manager_attach;
 mod window_placement;
 #[cfg(windows)]
 use instanceharbor::desktop_channel;
@@ -543,6 +545,7 @@ fn attach_to_manager() {
     };
     let pid = std::process::id().to_string();
     let mut last_error: Option<String> = None;
+    let mut failures = 0u32;
     loop {
         // A closing GUI must not start the Manager again: the user may have just quit it.
         if exit_watchdog::closing() {
@@ -550,10 +553,14 @@ fn attach_to_manager() {
             continue;
         }
         match instanceharbor::dispatch(&[root.clone(), "gui-attach".into(), pid.clone()]) {
-            Ok(_) => last_error = None,
+            Ok(_) => {
+                last_error = None;
+                failures = 0;
+            }
             // A Manager that is quitting is about to close this GUI.
             Err(error) if error == "ManagerExiting" => {}
             Err(error) => {
+                failures = failures.saturating_add(1);
                 if last_error.as_deref() != Some(error.as_str()) {
                     eprintln!("Could not attach to the Manager: {error}");
                     if let Ok(log) = diagnostics::global() {
@@ -563,7 +570,7 @@ fn attach_to_manager() {
                 }
             }
         }
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(manager_attach::retry_delay(failures));
     }
 }
 

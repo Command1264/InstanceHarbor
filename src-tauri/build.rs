@@ -61,6 +61,11 @@ fn main() {
         Err(_) => commit_from_git(),
     };
     println!("cargo:rustc-env={}={commit}", build_commit::VARIABLE);
+    // Record only the PDB file name in the executables. PDBs stay on the build machine
+    // (save-release-symbols.ps1) and the shipped files must not name its local paths.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bins=/PDBALTPATH:%_PDB%");
+    }
     let development = std::env::var_os("CARGO_FEATURE_DEVELOPMENT_CHANNEL").is_some();
     // Blue for the product, red for the development channel; see app_icon.rs.
     let icon = app_icon::for_channel(development);
