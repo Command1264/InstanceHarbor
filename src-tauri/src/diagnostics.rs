@@ -474,6 +474,8 @@ pub fn safe_action(action: &str) -> &str {
         | "scan-policy"
         | "global-java-settings"
         | "save-global-java-settings"
+        | "cache-preview"
+        | "cache-clear"
         | "test-admin-settings"
         | "save-test-admin-settings"
         | "test-admin-fetch-luckperms"

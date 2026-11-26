@@ -14,6 +14,9 @@ mod core_maintenance;
 mod compatibility_probe;
 #[path = "prepare.rs"]
 mod prepare;
+#[path = "cache_cleanup.rs"]
+mod cache_cleanup;
+pub use cache_cleanup::clear_scheduled_webview;
 #[path = "creation.rs"]
 mod creation;
 pub use creation::CreationPhase;
@@ -2663,6 +2666,9 @@ pub fn dispatch_with_creation_progress(
         return Err("UnsupportedWorkspace".into());
     }
     if let Some(result) = global_java::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = cache_cleanup::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = test_admins::dispatch(&root, verb, args) {
