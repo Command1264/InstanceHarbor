@@ -77,7 +77,7 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 | 標記 | 位置 | 意義 |
 |---|---|---|
 | `main` … `diagnostics-open` | `native` | `main` 開始、安裝租約、WebView2 檢查、工作區、單一實例鎖、診斷紀錄開啟 |
-| `setup`、`window-built`、`setup-done` | `native` | Tauri setup 開始、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
+| `setup`、`window-theme`、`window-built`、`setup-done` | `native` | Tauri setup 開始、決定建立視窗時的背景色（見「開啟視窗時的背景色」）、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
 | `present-window`、`window-shown` | `native` | 頁面第一次呼叫 `present_window`、視窗實際顯示 |
 | `page-navigation-start` | `page` | WebView2 開始載入頁面 |
 | `page-script-start`、`page-mounted` | `page` | 主程式包執行完畢、Vue 掛載完成 |
@@ -112,9 +112,11 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 
 - 建立主視窗前，依主題設定視窗與 WebView2 的背景色（Tauri `background_color`）：深色 `#121c2b`、淺色 `#f4f6fa`，
   與 `src/app.css` 的 `--bg` 相同（`src-tauri/src/startup_theme.rs`，單元測試會核對兩者一致）。
-- 主題取自 `startup_prefetch` 預先讀取的外觀設定。setup 最多等 50 ms；讀不到、讀取較慢或設定為「跟隨系統」時，
-  依 Windows 的應用程式色彩模式（`AppsUseLightTheme`）決定，不延後建立視窗。
-- 之後每次 `present_window`（切換主題）也同步更新背景色。
+- 建立時的主題取自 `startup_prefetch` 預先讀取的外觀設定，但不等待：還沒讀完、讀不到或設定為「跟隨系統」時，
+  依 Windows 的應用程式色彩模式（`AppsUseLightTheme`）決定。
+- 頁面第一次呼叫 `present_window` 時，在顯示視窗之前依實際主題再設定一次背景色，所以建立時猜錯也不會閃色；
+  之後切換主題時同樣更新。
+- 曾試過讓 setup 最多等預讀 50 ms：每次實際等 32–50 ms（setup 開始時預讀通常還沒完成），沒有必要，已移除。
 
 逐格檢查：`tests/capture-gui-startup-frames.ps1` 從視窗出現起每 16 ms 擷取一次螢幕（實際約 30–40 ms 一格），
 持續 2 秒，統計與主題不符的畫格，並另存那些畫格。

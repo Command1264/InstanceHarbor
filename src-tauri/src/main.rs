@@ -687,10 +687,8 @@ fn main() {
             #[cfg(windows)]
             for config in &main_window {
                 // WebView2 shows this color until it draws the page (see startup_theme).
-                let dark = startup_theme::dark(
-                    STARTUP_THEME.wait(startup_theme::WAIT),
-                    startup_theme::windows_dark,
-                );
+                let dark = startup_theme::dark(STARTUP_THEME.current(), startup_theme::windows_dark);
+                startup_timing::mark("window-theme");
                 let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
                     .background_color(background_color(dark));
                 let window = match workspace_binding::webview_data_directory() {

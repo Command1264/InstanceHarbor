@@ -4,21 +4,18 @@
 //! appears, WebView2 needs a moment to draw again and fills the window with its default
 //! background until then. Without a set color that is white, which flashes under a dark
 //! theme. The window and WebView2 therefore get the theme's page background (`--bg` in
-//! `src/app.css`) before the window is built.
+//! `src/app.css`) when the window is built, and again from `present_window` just
+//! before it is shown, when the page's theme is known.
 //!
-//! The theme comes from the preferences read that `startup_prefetch` starts before
-//! WebView2. Setup waits for it only briefly; without it, or for "system", the Windows
-//! app color mode decides.
+//! At build time the theme comes from the preferences read that `startup_prefetch`
+//! starts before WebView2, if it has finished. Setup does not wait for it: without it,
+//! or for "system", the Windows app color mode decides.
 use serde_json::Value;
-use std::sync::{Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::OnceLock;
 
 /// `--bg` of the dark and light page themes.
 pub(super) const DARK_BACKGROUND: (u8, u8, u8) = (0x12, 0x1c, 0x2b);
 pub(super) const LIGHT_BACKGROUND: (u8, u8, u8) = (0xf4, 0xf6, 0xfa);
-/// How long setup waits for the prefetched preferences. The read usually finishes before
-/// setup starts; a slower one must not delay the window.
-pub(super) const WAIT: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Preference {
@@ -52,34 +49,20 @@ pub(super) fn background(dark: bool) -> (u8, u8, u8) {
 }
 
 /// Hands the prefetched theme preference from the prefetch thread to setup.
-pub(super) struct Slot {
-    value: Mutex<Option<Option<Preference>>>,
-    ready: Condvar,
-}
+pub(super) struct Slot(OnceLock<Option<Preference>>);
 
 impl Slot {
     pub(super) const fn new() -> Self {
-        Self { value: Mutex::new(None), ready: Condvar::new() }
+        Self(OnceLock::new())
     }
 
     pub(super) fn publish(&self, preference: Option<Preference>) {
-        if let Ok(mut value) = self.value.lock() {
-            *value = Some(preference);
-            self.ready.notify_all();
-        }
+        let _ = self.0.set(preference);
     }
 
-    /// The published preference, or None when none arrives within `limit`.
-    pub(super) fn wait(&self, limit: Duration) -> Option<Preference> {
-        let deadline = Instant::now() + limit;
-        let mut value = self.value.lock().ok()?;
-        loop {
-            if let Some(preference) = *value {
-                return preference;
-            }
-            let left = deadline.checked_duration_since(Instant::now())?;
-            value = self.ready.wait_timeout(value, left).ok()?.0;
-        }
+    /// The preference if the read has finished; never waits.
+    pub(super) fn current(&self) -> Option<Preference> {
+        self.0.get().copied().flatten()
     }
 }
 
@@ -161,27 +144,13 @@ mod tests {
     }
 
     #[test]
-    fn setup_gets_a_published_preference_and_stops_waiting_without_one() {
+    fn setup_reads_the_preference_only_once_it_is_published() {
         let slot = Slot::new();
-        let started = Instant::now();
-        assert_eq!(slot.wait(Duration::from_millis(20)), None);
-        assert!(started.elapsed() >= Duration::from_millis(20));
+        assert_eq!(slot.current(), None);
         slot.publish(Some(Preference::Dark));
-        assert_eq!(slot.wait(Duration::ZERO), Some(Preference::Dark));
+        assert_eq!(slot.current(), Some(Preference::Dark));
         let failed = Slot::new();
         failed.publish(None);
-        assert_eq!(failed.wait(Duration::from_secs(5)), None);
-    }
-
-    #[test]
-    fn a_preference_published_while_waiting_is_received() {
-        let slot = std::sync::Arc::new(Slot::new());
-        let publisher = slot.clone();
-        let thread = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(10));
-            publisher.publish(Some(Preference::Light));
-        });
-        assert_eq!(slot.wait(Duration::from_secs(5)), Some(Preference::Light));
-        thread.join().unwrap();
+        assert_eq!(failed.current(), None);
     }
 }
