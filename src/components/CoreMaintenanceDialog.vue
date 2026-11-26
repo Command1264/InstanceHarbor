@@ -29,7 +29,14 @@ const source = computed(() => {
   return snapshot?.sha256 && state.value && snapshot.sha256 !== state.value.currentSha256 ? undefined : snapshot
 })
 const candidate = computed(() => source.value?.candidate ?? state.value?.prepared)
-const prepared = computed(() => !!candidate.value && candidate.value.sha256 === state.value?.prepared?.sha256)
+const prepared = computed(() => !!candidate.value?.sha256 && candidate.value.sha256 === state.value?.prepared?.sha256)
+// A Purpur candidate is named by the official MD5 of its build (#41).
+const candidateMd5 = computed(() => {
+  const value = candidate.value
+  return value && 'md5' in value ? value.md5 : undefined
+})
+const purpurCheck = computed(() => source.value?.verification === 'purpurMd5'
+  || [state.value?.installed?.family, state.value?.identified?.family].some(family => family?.toUpperCase() === 'PURPUR'))
 const path = ref('')
 // An unverified core shows the version its JAR states, marked as an offline reading.
 const currentVersion = computed(() => {
@@ -95,7 +102,7 @@ const reasonText = computed(() => {
 })
 const blockedText = computed(() => primaryEnabled.value || !reasonText.value ? ''
   : t('components.coreMaintenance.blockedReason', { reason: reasonText.value }))
-const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string }>()
+const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
   catch (failure) { if (!quiet && !error.value) error.value = errorText(failure) }
@@ -138,7 +145,8 @@ async function check() {
 function ask(action: Action, backup?: string) {
   if (busy.value) return
   choice.value = {action,backup,current:state.value?.currentSha256,
-    candidateHash:candidate.value?.sha256,candidateBuild:candidate.value?.build}
+    candidateHash:candidate.value?.sha256 ?? candidateMd5.value,candidateBuild:candidate.value?.build,
+    md5:!candidate.value?.sha256 && !!candidateMd5.value}
   confirm.value?.showModal()
 }
 function primaryAction() {
@@ -205,6 +213,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ (source?.remoteBuild ?? candidate?.build) ? coreBuildText(source?.remoteBuild ?? candidate?.build ?? '') : t('components.coreMaintenance.notChecked') }}</dd>
       <dt>{{ t('components.coreMaintenance.checkedAt') }}</dt><dd>{{ sourceTime }}</dd>
       <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
+      <template v-if="purpurCheck"><dt>{{ t('components.coreMaintenance.verification') }}</dt><dd>{{ t('components.coreMaintenance.purpurMd5') }}</dd></template>
     </dl>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="blockedText" id="core-update-blocked" class="hint" role="status">{{ blockedText }}</p>
@@ -247,6 +256,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   <dialog ref="confirm" class="compact" aria-labelledby="core-confirm-title" @cancel="busy && $event.preventDefault()">
     <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?t('components.coreMaintenance.restoreTitle'):choice?.action==='core-reconcile'?t('components.coreMaintenance.reconcileTitle'):t('components.coreMaintenance.update') }}</h2>
     <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">{{ t('components.coreMaintenance.targetBuild', { build: choice.candidateBuild }) }}</p>
+    <p v-if="choice?.action==='core-install-latest' && choice.md5">{{ t('components.coreMaintenance.purpurMd5Note') }}</p>
     <p>{{ t('components.coreMaintenance.backupNote') }}</p>
     <div class="dialog-actions">
       <button autofocus :disabled="busy" @click="confirm?.close()">{{ t('action.cancel') }}</button>

@@ -65,6 +65,16 @@ pub(super) fn revision(bytes: &[u8]) -> Result<String> {
 }
 
 pub(super) fn file_revision(path: &Path) -> Result<String> {
+    file_digest(path, "SHA256", 32)
+}
+
+/// The MD5 of a file. Only for comparing a download with an official source
+/// that publishes no stronger hash (Purpur, #41); identity stays SHA-256.
+pub(super) fn file_md5(path: &Path) -> Result<String> {
+    file_digest(path, "MD5", 16)
+}
+
+fn file_digest(path: &Path, algorithm_name: &str, size: usize) -> Result<String> {
     no_redirect(path)?;
     let mut file = File::open(path).map_err(|error| file_error("open-core", path, error))?;
     if file.metadata().map_err(fail)?.len() > 512 * 1024 * 1024 {
@@ -94,7 +104,7 @@ pub(super) fn file_revision(path: &Path) -> Result<String> {
         }
     };
     let mut handle = std::ptr::null_mut();
-    let name = [83u16, 72, 65, 50, 53, 54, 0];
+    let name: Vec<u16> = algorithm_name.encode_utf16().chain([0]).collect();
     check(unsafe { BCryptOpenAlgorithmProvider(&mut handle, name.as_ptr(), std::ptr::null(), 0) })?;
     let algorithm = Algorithm(handle);
     let mut hash = std::ptr::null_mut();
@@ -125,7 +135,7 @@ pub(super) fn file_revision(path: &Path) -> Result<String> {
         }
         check(unsafe { BCryptHashData(hash.0, buffer.as_ptr(), length as u32, 0) })?;
     }
-    let mut output = [0u8; 32];
+    let mut output = vec![0u8; size];
     check(unsafe { BCryptFinishHash(hash.0, output.as_mut_ptr(), output.len() as u32, 0) })?;
     Ok(output
         .into_iter()
@@ -149,6 +159,16 @@ mod tests {
         let hashed = file_revision(&path);
         fs::remove_file(path).unwrap();
         assert_eq!(hashed.unwrap(), revision(&data).unwrap());
+    }
+
+    #[test]
+    fn standard_md5_vector_of_a_file() {
+        let temp = std::env::temp_dir().join(format!("ih-content-md5-{}-{}", std::process::id(), clock()));
+        fs::write(&temp, b"abc").unwrap();
+        let path = temp.canonicalize().unwrap();
+        let hashed = file_md5(&path);
+        fs::remove_file(path).unwrap();
+        assert_eq!(hashed.unwrap(), "900150983cd24fb0d6963f7d28e17f72");
     }
 
     #[test]

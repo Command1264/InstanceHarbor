@@ -517,6 +517,13 @@ Velocity 沒有這行輸出：在後台做過 Host 無法讀回的編輯後按 E
 核心維護支援同核心與同版本線的單台替換、備份還原及中斷核對。
 Velocity 可在同一個 Velocity 版本內換 build（例如 4.2.1-SNAPSHOT build 38 → 43），Port 以 `velocity.toml` 的 `bind` 核對。
 `-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。核心檔名沿用登記的名稱，不改寫。
+Purpur 以官方 API（`api.purpurmc.org/v2/purpur/<版本>?detailed=true`）檢查同一個 Minecraft 版本線的新 build，只接受 `result` 為 `SUCCESS` 的 build。
+API 只提供 MD5，所以目前 JAR 的 build 以 MD5 比對官方清單找出；找不到相符的 build 時不提供更新（`CoreSourceUnverifiedLocalHash`）。
+候選以官方 MD5 指定，下載走 HTTPS，內容須與該 MD5 相符；之後計算 SHA-256 登記為已核對，往後的核對都用 SHA-256。
+畫面以「核對方式：以 Purpur 官方 MD5 核對」和 SHA-256 核對區分。未核對、只由 JAR 自述為 Purpur 的實例也能更新，更新後改為已核對。
+Purpur 的候選在下載前沒有 SHA-256，所以不支援預先下載與批次更新，批次預覽會提示改用單台核心維護。API 不提供檔案大小，下載時只顯示已下載的大小。
+
+替換核心時，目的地 JAR 只要有任何開啟的檔案代碼（例如清單正在計算無法離線辨識的核心雜湊，或防毒軟體掃描）就會失敗。替換最多等待 5 秒讓這類讀取結束，仍失敗才回報錯誤。
 來源檢查依核心及版本分組。開發或部署時可用程序環境
 `INSTANCEHARBOR_PAPERMC_CONTACT_URL` 指定另一個有效的 HTTPS 聯絡網址。
 Spigot 1.8.8 的原生提交距離和同版本發布資訊各自核對。原生版本顯示落後只提供診斷資訊，Spigot 更新仍需使用已核對的本機 JAR。
