@@ -780,6 +780,23 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 應用程式設定的「復原金鑰」可操作同一套保管功能。
 已釘住復原金鑰的工作階段可從原生介面或 PowerShell 接管。流程見可信 Host 接管。
 
+復原金鑰正分階段移除（Issue #96）。目前是第 1 階段：
+
+- 啟動伺服器時不再寫入 `runs/<實例>/recovery-pin.json`，工作區有沒有金鑰都一樣。新的 run 一律使用無金鑰的控制條件：
+  同一個 Windows 帳戶，且執行檔是安裝資料夾的 GUI 或 `ihctl.exe`。Manager 重啟或更新後都能直接接手。
+- 舊版啟動、已釘住金鑰而且仍在執行的 Host 照舊驗證：同一個安裝的新 Manager 用 `Rebind` 接手；安裝改變時，
+  用 `ihctl WORKSPACE host-recover NAME RUN`（或設定頁「執行中工作階段」）以金鑰簽名的 `RecoverChallenge`／`RecoverProof` 接手。
+  正常停止再啟動後，這台伺服器就不再依賴金鑰。
+- 設定頁的「復原金鑰」分頁只在工作區已有金鑰時顯示，並說明此功能即將移除。沒有金鑰的工作區看不到這個分頁，
+  `recovery-key-*` 指令與 `manage-recovery-backup.ps1` 仍可使用，第 2 階段才移除。
+- 金鑰檔（工作區根目錄的 `recovery-key.dpapi.json`）與匯出的 `.ihrecovery` 備份檔不會被自動刪除。
+  確認沒有仍在執行、已釘住的 run（`runs/<實例>/recovery-pin.json` 所在的實例仍在執行）後，可以手動刪除；
+  刪除金鑰檔後設定頁不再顯示「復原金鑰」分頁。
+
+`verify-recovery-pin.ps1` 用測試替身（`tests/controlled-server.rs`）驗證這些行為：無金鑰工作區、有金鑰時新啟動的 run 沒有 pin，
+以及搭配 `-LegacyBinaryDirectory`（指向 1.1.0 或更早的建置）時，舊版釘住的 run 仍能由重啟後的 Manager 接管與停止。
+`-Evidence` 必須是新的資料夾。開發版建置只開啟 `InstanceHarbor Dev\workspaces\<名稱>`，所以另以 `-Workspace` 指定新的隔離工作區。
+
 工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑。管理資料夾、匯入與新建可以使用工作區 instances 底下或工作區以外的任意本機資料夾；工作區的內部資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑一律拒絕，登記後仍依掃描白名單決定是否納管。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI；V1 伺服器改用「從 V1 移交伺服器」的 CLI 指令。
 
 Windows 一般匯入支援放有已核對 Velocity JAR（任意檔名）與
