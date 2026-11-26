@@ -122,6 +122,8 @@ struct State {
     fault: bool,
     /// GUI processes that asked to close with the Manager (tray Quit).
     gui: Vec<AttachedGui>,
+    /// Quit is still telling the GUIs and the console viewer to close; the Manager waits.
+    closing_windows: bool,
 }
 
 /// A GUI process that asked to close with the Manager. A PID alone is not enough:
@@ -155,23 +157,44 @@ fn verified_guis(recorded: &[AttachedGui], probe: impl Fn(u32) -> GuiProbe) -> V
         .collect()
 }
 
-/// Tray Quit and `app-exit`: ends the Manager and closes the windows of attached GUIs
-/// that are still the same processes. `Ok(false)` while batch or core-update work would
-/// be cut off.
+/// Tray Quit and `app-exit`: ends the Manager, closes the windows of attached GUIs that
+/// are still the same processes, and ends the console viewer. Servers and their Hosts keep
+/// running. `Ok(false)` while batch or core-update work would be cut off.
 #[cfg_attr(test, allow(dead_code))]
-fn exit_app(state: &Mutex<State>) -> Result<bool> {
-    exit_app_locked(state.lock().map_err(fail)?)
+fn exit_app(root: &Path, state: &Mutex<State>) -> Result<bool> {
+    exit_app_locked(state, state.lock().map_err(fail)?, |gui| farewell(root, &gui))
 }
 
-fn exit_app_locked(mut state: std::sync::MutexGuard<'_, State>) -> Result<bool> {
+/// `farewell` runs without the lock, after new requests (such as `console-open`, which
+/// would start a viewer again) are refused with `ManagerExiting`.
+fn exit_app_locked(
+    shared: &Mutex<State>,
+    mut state: std::sync::MutexGuard<'_, State>,
+    farewell: impl FnOnce(Vec<AttachedGui>),
+) -> Result<bool> {
     if active_work(&state) {
         return Ok(false);
     }
     state.exiting = true;
+    state.closing_windows = true;
     let gui = std::mem::take(&mut state.gui);
     drop(state);
-    manager_tray::close_gui_windows(&verified_guis(&gui, probe_gui));
+    farewell(gui);
+    shared.lock().map_err(fail)?.closing_windows = false;
     Ok(true)
+}
+
+/// The viewer is not an attached GUI: its X button only hides it, and a hidden window
+/// would not receive WM_CLOSE. It is told over its own pipe instead (#114).
+#[cfg_attr(test, allow(dead_code))]
+fn farewell(root: &Path, gui: &[AttachedGui]) {
+    manager_tray::close_gui_windows(&verified_guis(gui, probe_gui));
+    if let Err(error) = console_viewer::quit(root) {
+        eprintln!("Console viewer did not confirm quit: {error}");
+        if let Ok(log) = crate::diagnostics::global() {
+            let _ = log.record(json!({"type":"console-viewer-quit","error":crate::diagnostics::safe_error(&error)}));
+        }
+    }
 }
 
 /// Work the Manager must finish before it may exit; servers themselves never count.
@@ -436,6 +459,7 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
     if verb == "agent-list" {
         return agent_inventory::list(root, &args);
     }
+    let shared = state;
     let mut state = state.lock().map_err(fail)?;
     if state.exiting {
         return Err("ManagerExiting".into());
@@ -638,7 +662,7 @@ fn reply(root: &Path, directory: &Path, state: &Mutex<State>, input: &str) -> Re
         }
         // The same flow as tray Quit, without its question; Setup uses it to update.
         ("app-exit", []) => {
-            if !exit_app_locked(state)? {
+            if !exit_app_locked(shared, state, |gui| farewell(root, &gui))? {
                 return Err("ManagerHasActiveWork".into());
             }
             Ok(json!({"exiting":true}))
@@ -1386,6 +1410,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
         exiting: false,
         fault: false,
         gui: Vec::new(),
+        closing_windows: false,
     }));
     let identity = identity(std::process::id())
         .map_err(fail)?
@@ -1432,6 +1457,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
     let _tray = {
         let (count_root, check_root) = (root.to_path_buf(), root.to_path_buf());
         let (check_state, exit_state, exiting_state) = (Arc::clone(&state), Arc::clone(&state), Arc::clone(&state));
+        let exit_root = root.to_path_buf();
         manager_tray::start(
             root,
             exe.with_file_name(crate::desktop_channel::GUI_EXECUTABLE),
@@ -1453,7 +1479,7 @@ pub(super) fn run(root: &Path) -> Result<Value> {
                         servers => manager_tray::ExitCheck::Confirm(Some(servers)),
                     })
                 }),
-                request_exit: Box::new(move || exit_app(&exit_state)),
+                request_exit: Box::new(move || exit_app(&exit_root, &exit_state)),
                 exiting: Box::new(move || exiting_state.lock().map_or(true, |state| state.exiting)),
             },
         )
@@ -1528,7 +1554,9 @@ pub(super) fn run(root: &Path) -> Result<Value> {
         }
         {
             let state = state.lock().map_err(fail)?;
-            if state.exiting {
+            // Wait while Quit still tells the GUIs and the console viewer to close; that
+            // step is bounded (the viewer request gives up after a few seconds).
+            if state.exiting && !state.closing_windows {
                 // Give the bounded pipe reply time to reach its caller.
                 drop(state);
                 thread::sleep(Duration::from_millis(500));
@@ -1657,5 +1685,57 @@ mod gui_identity_tests {
         let recorded = [gui(20, 1, r"X:\InstanceHarbor\instanceharbor.exe")];
         assert!(verified_guis(&recorded, |_| (Ok(None), None)).is_empty());
         assert!(verified_guis(&[], |_| unreachable!("no GUI is probed")).is_empty());
+    }
+
+    fn idle_state() -> State {
+        State {
+            batches: Vec::new(),
+            core_batches: Err("NoJournal".into()),
+            core_in_flight: false,
+            exiting: false,
+            fault: false,
+            gui: vec![gui(30, 1, r"X:\InstanceHarbor\instanceharbor.exe")],
+            closing_windows: false,
+        }
+    }
+
+    #[test]
+    fn quit_closes_attached_guis_and_the_console_viewer() {
+        let state = Mutex::new(idle_state());
+        let mut closed = None;
+        assert!(exit_app_locked(&state, state.lock().unwrap(), |gui| {
+            closed = Some(gui.len());
+            // The main loop must not end the Manager while the windows are still being told.
+            assert!(state.try_lock().is_ok_and(|state| state.exiting && state.closing_windows));
+        })
+        .unwrap());
+        assert_eq!(closed, Some(1));
+        let state = state.lock().unwrap();
+        assert!(state.exiting && !state.closing_windows && state.gui.is_empty());
+    }
+
+    #[test]
+    fn quit_with_work_in_progress_closes_nothing() {
+        let mut busy = idle_state();
+        busy.core_in_flight = true;
+        let state = Mutex::new(busy);
+        assert!(!exit_app_locked(&state, state.lock().unwrap(), |_| unreachable!("nothing is closed")).unwrap());
+        let state = state.lock().unwrap();
+        assert!(!state.exiting && state.gui.len() == 1);
+    }
+
+    #[test]
+    fn tray_quit_and_app_exit_both_ask_the_console_viewer_to_exit() {
+        // Production code only: this test names the same calls.
+        let source = include_str!("resident_manager.rs").replace("\r\n", "\n");
+        let source = source.split("#[cfg(test)]\nmod gui_identity_tests").next().unwrap();
+        assert!(!source.contains("fn tray_quit_and_app_exit_both_ask_the_console_viewer_to_exit"));
+        let farewell = source.split("fn farewell(").nth(1).and_then(|rest| rest.split("\n}\n").next());
+        let farewell = farewell.expect("farewell() closes the windows on quit");
+        assert!(farewell.contains("manager_tray::close_gui_windows(") && farewell.contains("console_viewer::quit("));
+        assert!(source.contains("exit_app_locked(state, state.lock().map_err(fail)?, |gui| farewell(root, &gui))"));
+        assert!(source.contains("(\"app-exit\", []) => {
+            if !exit_app_locked(shared, state, |gui| farewell(root, &gui))?"));
+        assert!(source.contains("request_exit: Box::new(move || exit_app(&exit_root, &exit_state))"));
     }
 }

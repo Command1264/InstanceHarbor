@@ -3,6 +3,7 @@ import '../experiments/conpty-a-prototype/ui/vendor/xterm.css'
 import { resolveLanguage, translate } from './i18n'
 import { attachConsoleScroll } from './console-scroll'
 import { attachConsoleClipboard, CONSOLE_INPUT_LIMIT } from './console-clipboard'
+import { endsTab } from './console-session'
 import './native-console.css'
 
 function loadScript(url) {
@@ -346,7 +347,7 @@ async function readSession(session, exchange) {
       chunk = await exchange({ op: 'read', offset })
     } catch (error) {
       if (session.closed) return
-      if (['ConsoleRunChanged', 'ConsoleRunEnded'].includes(String(error))) {
+      if (endsTab(error)) {
         if (await closeSession(session)) return
       } else if (++failures === 3) {
         message(session.error, t('console.disconnected'))
