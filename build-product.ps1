@@ -25,6 +25,7 @@ try {
     if($commit -eq 'unknown'){Write-Warning '無法從 Git 取得 commit，執行檔會標示為 unknown。'}
     elseif($Release -and $commit.EndsWith('-dirty')){Write-Warning "工作目錄有未提交的變更，執行檔會標示為 $commit。"}
     $previousCommit=$env:IH_BUILD_COMMIT
+    $previousRustFlags=$env:CARGO_ENCODED_RUSTFLAGS
     $env:IH_BUILD_COMMIT=$commit
     $frontendDirectory=if($Development){'dist-dev'}else{'dist'}
     $npm=& (Join-Path $PSScriptRoot 'resolve-npm.ps1')
@@ -48,6 +49,19 @@ try {
     if ($Acceptance) { $cargoArgs += @('--features', 'acceptance-ui') }
     $cargoArgs += @('--bin', $binaryTarget, '--bin', 'ihctl')
     $binaryName = $binaryTarget + '.exe'
+    if($Release -or $Development){
+        # Published and development executables must not name this machine's folders: panic
+        # locations of the standard library and of dependencies carry their source paths.
+        # The encoded form keeps paths with spaces intact. It replaces the rustflags of
+        # .cargo/config.toml, so the static C runtime is repeated here.
+        $sysroot=(& rustc --print sysroot|Out-String).Trim()
+        $cargoHome=if($env:CARGO_HOME){$env:CARGO_HOME}else{Join-Path $HOME '.cargo'}
+        $flags=@('-C','target-feature=+crt-static',
+            "--remap-path-prefix=$([IO.Path]::GetFullPath($sysroot))=/rust",
+            "--remap-path-prefix=$([IO.Path]::GetFullPath($cargoHome))=/cargo",
+            "--remap-path-prefix=$([IO.Path]::GetFullPath($PSScriptRoot))=/instanceharbor")
+        $env:CARGO_ENCODED_RUSTFLAGS=$flags -join [char]0x1f
+    }
     & cargo @cargoArgs
     $index=Join-Path $frontendDirectory 'index.html'
     $html=Get-Content -LiteralPath $index -Raw
@@ -57,6 +71,7 @@ try {
     $binaryText=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($builtBinary))
     if($assets.Count -lt 2){throw '找不到 Vite 資產身分。'}
     $cliVersion=(& $builtCli --version|Out-String).Trim()
+    if($Release -or $Development){& (Join-Path $PSScriptRoot 'verify-no-local-paths.ps1') -Binary $builtBinary,$builtCli}
     if(!$cliVersion.EndsWith(" ($commit)")){throw "ihctl 未包含本次建置的 commit（$commit）：$cliVersion"}
     foreach($asset in $assets){if(!$binaryText.Contains($asset)){throw "原生候選未包含最新前端資產：$asset"}}
     # Blue icons for the product and acceptance builds, red ones for development only.
@@ -109,4 +124,4 @@ try {
         "PDB 已保存在本機（不得上傳或封裝）：$symbols"
     }
     'Vue 與原生候選資產已核對。'
-} finally {$env:IH_BUILD_COMMIT=$previousCommit;Pop-Location}
+} finally {$env:IH_BUILD_COMMIT=$previousCommit;$env:CARGO_ENCODED_RUSTFLAGS=$previousRustFlags;Pop-Location}
