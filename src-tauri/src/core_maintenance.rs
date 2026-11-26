@@ -325,7 +325,13 @@ impl Target {
     }
 
     fn stopped(&self, root: &Path) -> Result<()> {
-        if property_port(&self.directory)? != self.config.port {
+        // A Velocity proxy states its port in velocity.toml, not server.properties (#41).
+        let configured = if registered_velocity(&self.config).is_some() {
+            velocity_binding(&self.directory)?.0 .1
+        } else {
+            property_port(&self.directory)?
+        };
+        if configured != self.config.port {
             return Err("PortChanged".into());
         }
         port_unassigned(root, self.config.port, &self.config.name)?;
@@ -333,7 +339,7 @@ impl Target {
         if observed["state"] != "Stopped" {
             return Err("InstanceNotConfirmedStopped".into());
         }
-        port_free(self.config.port)?;
+        instance_port_free(&self.config)?;
         if observed["run"].is_null() {
             return self
                 .config
@@ -957,6 +963,37 @@ mod tests {
             b"unmodified data"
         );
         assert!(assert_start_allowed(&target.directory).is_ok());
+    }
+
+    // #41: a Velocity proxy is checked against velocity.toml and keeps the
+    // registered core file name after a build update and its restore.
+    #[test]
+    fn velocity_build_update_keeps_the_registered_name_and_restores() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let directory = target.directory.clone();
+        fs::remove_file(directory.join("server.properties")).unwrap();
+        fs::rename(directory.join("server.jar"), directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap();
+        let velocity = |bytes: &[u8], build: &str| CoreProfile { family: "VELOCITY".into(), minecraft: "4.2.1-SNAPSHOT".into(), ..profile(bytes, build) };
+        target.config.core_file = Some("velocity-4.2.1-SNAPSHOT-38.jar".into());
+        target.config.core_profile = Some(velocity(b"first", "38"));
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        assert!(state(&fixture.0, "server").unwrap()["reason"].as_str().is_some_and(|reason| reason != "PortChanged"),
+            "a missing velocity.toml is not read as server.properties");
+        fs::write(directory.join("velocity.toml"), format!("bind = \"127.0.0.1:{}\"\n", target.config.port)).unwrap();
+        let candidate = fixture.0.join("velocity-4.2.1-SNAPSHOT-43.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let (before, after) = (velocity(b"first", "38"), velocity(b"second", "43"));
+        assert_eq!(state(&fixture.0, "server").unwrap()["canWrite"], true);
+        install_verified(&fixture.0, "server", "proxy-update", &before.sha256, &candidate, &after).unwrap();
+        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"second");
+        assert!(!directory.join("velocity-4.2.1-SNAPSHOT-43.jar").exists());
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["build"], "43");
+        let args = ["server".into(), "proxy-restore".into(), after.sha256.clone(), "proxy-update".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"first");
+        fs::write(directory.join("velocity.toml"), "bind = \"127.0.0.1:1\"\n").unwrap();
+        assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "PortChanged");
     }
 
     // #60: the dialog names each step after the download.

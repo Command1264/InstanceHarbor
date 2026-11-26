@@ -33,6 +33,8 @@ struct SourceKey {
 struct PaperBuild {
     id: u64,
     stable: bool,
+    /// Velocity publishes every build of a `-SNAPSHOT` version as `BETA`.
+    beta: bool,
     size: Option<u64>,
     sha256: Option<String>,
     url: Option<String>,
@@ -292,6 +294,7 @@ fn paper_builds(value: Value) -> Result<Vec<PaperBuild>> {
         let build = PaperBuild {
             id,
             stable: channel == "STABLE",
+            beta: channel == "BETA",
             size: artifact_size(download),
             sha256: hash.map(str::to_ascii_lowercase),
             url: url.map(str::to_owned),
@@ -541,6 +544,18 @@ fn exact_stable_download<'a>(builds: &'a [PaperBuild], profile: &CoreProfile) ->
         .ok_or_else(|| "CreationPreviewChanged".into())
 }
 
+/// Whether a build may be offered as an update. Paper and Folia offer only
+/// `STABLE` builds. Velocity also offers `BETA`, the only channel of its
+/// `-SNAPSHOT` versions (#41); `ALPHA` builds are never offered.
+fn update_eligible(family: &str, build: &PaperBuild) -> bool {
+    build.stable || (family == "VELOCITY" && build.beta)
+}
+
+/// Families whose candidates the prefetch store prepares and shares.
+pub(super) fn prefetch_family(family: &str) -> bool {
+    matches!(family, "PAPER" | "VELOCITY")
+}
+
 fn unknown(name: &str, reason: &str) -> Value {
     json!({"name":name,"status":"Unknown","reason":reason})
 }
@@ -578,7 +593,7 @@ fn result(name: &str, profile: &CoreProfile, metadata: &Metadata) -> Value {
             let local = hashes.next();
             let newest = builds
                 .iter()
-                .filter(|build| build.stable)
+                .filter(|build| update_eligible(&profile.family, build))
                 .max_by_key(|build| build.id);
             match (local, hashes.next(), newest) {
                 (Some(local), None, _) if profile.build.parse::<u64>().ok() != Some(local.id) => {
@@ -823,9 +838,9 @@ pub(super) fn install_latest_guarded(
         sha256: hash.to_owned(),
     };
 
-    // The prefetch store only prepares Paper. A batch keeps any other candidate
-    // in its own store, so each SHA-256 is downloaded once per batch.
-    let lease = match lease.filter(|_| profile.family == "PAPER") {
+    // The prefetch store prepares Paper and Velocity. A batch keeps any other
+    // candidate in its own store, so each SHA-256 is downloaded once per batch.
+    let lease = match lease.filter(|_| prefetch_family(&profile.family)) {
         Some(lease) => Some(lease),
         None if cache == CandidateCache::Batch => {
             Some(core_prefetch::Store::batch(root)?.lease(&profile.sha256)?)
@@ -1484,6 +1499,32 @@ mod tests {
             );
             assert_eq!(result("target", &existing, &refused)["reason"], "CoreSourceInvalidContact");
         }
+    }
+
+    // #41: Velocity -SNAPSHOT versions publish only BETA builds. They are
+    // offered within the same version; ALPHA never is, and Paper keeps STABLE only.
+    #[test]
+    fn velocity_offers_the_newest_beta_build_of_the_same_version() {
+        let velocity = |id: u64, channel: &str, hash: &str| build(id, channel, hash, Some(&format!(
+            "https://fill-data.papermc.io/v1/objects/{hash}/velocity-4.2.1-SNAPSHOT-{id}.jar")));
+        let existing = profile("VELOCITY", "4.2.1-SNAPSHOT", "38", LOCAL);
+        let key = source_key(&existing).unwrap();
+        assert_eq!(group_url(&key), "https://fill.papermc.io/v3/projects/velocity/versions/4.2.1-SNAPSHOT/builds");
+        let source = fetch_group(&key, Ok(TEST_AGENT), &|_, _| Ok(json!([
+            velocity(44, "ALPHA", &"f".repeat(64)),
+            velocity(43, "BETA", CANDIDATE),
+            velocity(38, "BETA", LOCAL),
+        ])));
+        let row = result("proxy", &existing, &source);
+        assert_eq!((row["status"].as_str(), row["candidate"]["build"].as_str()), (Some("UpdateAvailable"), Some("43")));
+        assert_eq!(result("proxy", &profile("VELOCITY", "4.2.1-SNAPSHOT", "43", CANDIDATE), &source)["status"], "Current");
+        // The same channels for Paper offer nothing newer than STABLE.
+        let paper = profile("PAPER", "26.3", "205", LOCAL);
+        let paper_source = fetch_group(&source_key(&paper).unwrap(), Ok(TEST_AGENT), &|_, _| Ok(json!([
+            build(222, "BETA", CANDIDATE, None), build(205, "STABLE", LOCAL, None),
+        ])));
+        assert_eq!(result("server", &paper, &paper_source)["status"], "Current");
+        assert!(prefetch_family("VELOCITY") && prefetch_family("PAPER") && !prefetch_family("FOLIA"));
     }
 
     #[test]
