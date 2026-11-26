@@ -51,9 +51,19 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
   送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
 - 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
 - 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。
+- 「結束」與 `app-exit` 只對 GUI 的應用程式視窗送 `WM_CLOSE`，略過工具視窗（`WS_EX_TOOLWINDOW`）。
+  GUI 事件迴圈有一個可見的工具視窗（Tao 的「Thread Event Target」）負責接收結束請求；1.1.0 及更早的版本中它也會收到 `WM_CLOSE` 而被銷毀，
+  GUI 收不到結束請求，每次都要等下面的看門狗 10 秒後才結束（#92）。
+- 伺服器後台視窗是另一個 GUI 程序（`native-console`），不向 Manager 登記，「結束」與 `app-exit` 不會關閉它；伺服器繼續執行，後台也留著。
 - 結束看門狗：主視窗關閉後，GUI 暫停向 Manager 登記，避免重新啟動使用者剛結束的 Manager。
   10 秒後程序仍在、且已沒有任何可見視窗時，記錄 `gui-exit-watchdog` 並直接結束程序；仍有可見視窗代表關閉被取消，看門狗解除。
   開發版可設定環境變數 `IH_DEV_HANG_ON_EXIT=1` 啟動 GUI，讓程序在結束時卡住，用來驗證看門狗。
+- 結束計時：`tests/measure-gui-exit.ps1` 以 `app-exit`、系統匣「結束」、視窗關閉鈕三種方式反覆開關 GUI，記錄每次從送出到程序結束的時間，
+  並檢查期間的 GUI 診斷紀錄沒有 `gui-exit-watchdog`。系統匣「結束」是對該工作區 Manager 的系統匣視窗送出選單命令（muda 依建立順序編號，「結束」為 1002）。
+
+  ```powershell
+  ./tests/measure-gui-exit.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-exit') -Runs 20
+  ```
 - 回退相容：`preferences.json` 仍保留舊的 `closeToTray` 值但不再使用。值為預設時不寫入檔案；若曾在 1.0.0 關閉此設定，
   回退到 `1.0.0-rc2` 前請先在 1.0.0 重新開啟並儲存，否則 rc2 無法讀取外觀設定。
 - 圖示由 `tray-icon` 繪製，使用 tauri-build 嵌入每個執行檔的應用程式圖示（資源 32512；正式版藍色、開發版紅色，見「開發版紅色圖示」）。`muda` 需要 comctl32 第 6 版，
@@ -77,7 +87,7 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 | 標記 | 位置 | 意義 |
 |---|---|---|
 | `main` … `diagnostics-open` | `native` | `main` 開始、安裝租約、WebView2 檢查、工作區、單一實例鎖、診斷紀錄開啟 |
-| `setup`、`window-built`、`setup-done` | `native` | Tauri setup 開始、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
+| `setup`、`window-theme`、`window-built`、`setup-done` | `native` | Tauri setup 開始、決定建立視窗時的背景色（見「開啟視窗時的背景色」）、`WebviewWindowBuilder::build` 回傳（含建立 WebView2）、系統匣建立完成 |
 | `present-window`、`window-shown` | `native` | 頁面第一次呼叫 `present_window`、視窗實際顯示 |
 | `page-navigation-start` | `page` | WebView2 開始載入頁面 |
 | `page-script-start`、`page-mounted` | `page` | 主程式包執行完畢、Vue 掛載完成 |
@@ -105,6 +115,32 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 掛載時間沒有可量測的差異）、把診斷紀錄寫入移到 blocking 執行緒池、WebView2 參數
 `--no-proxy-server --disable-background-networking --disable-component-update`。
 
+### 開啟視窗時的背景色
+
+主視窗建立時隱藏，頁面套用主題後才由 `present_window` 顯示。視窗出現的瞬間，WebView2 要重新繪製，
+完成前先填入預設背景色；沒設定時是白色，深色主題下會閃一下白。
+
+- 建立主視窗前，依主題設定視窗與 WebView2 的背景色（Tauri `background_color`）：深色 `#121c2b`、淺色 `#f4f6fa`，
+  與 `src/app.css` 的 `--bg` 相同（`src-tauri/src/startup_theme.rs`，單元測試會核對兩者一致）。
+- 建立時的主題取自 `startup_prefetch` 預先讀取的外觀設定，但不等待：還沒讀完、讀不到或設定為「跟隨系統」時，
+  依 Windows 的應用程式色彩模式（`AppsUseLightTheme`）決定。
+- 頁面第一次呼叫 `present_window` 時，在顯示視窗之前依實際主題再設定一次背景色，所以建立時猜錯也不會閃色；
+  之後切換主題時同樣更新。
+- 曾試過讓 setup 最多等預讀 50 ms：每次實際等 32–50 ms（setup 開始時預讀通常還沒完成），沒有必要，已移除。
+
+逐格檢查：`tests/capture-gui-startup-frames.ps1` 從視窗出現起每 16 ms 擷取一次螢幕（實際約 30–40 ms 一格），
+持續 2 秒，統計與主題不符的畫格，並另存那些畫格。
+
+```powershell
+./tests/capture-gui-startup-frames.ps1 -Workspace (Join-Path $env:LOCALAPPDATA 'InstanceHarbor Dev/workspaces/agent-frames') -Theme dark -Launch Tray -Runs 10
+```
+
+- `-Theme` 為 `dark`、`light` 或 `system`（腳本會改寫該工作區的外觀設定），`-Launch Direct` 直接啟動，
+  `-Launch Tray` 對該工作區自己的 Manager 系統匣視窗送出左鍵點擊訊息，由 Manager 開啟 GUI。
+- 同時開著的其他 GUI 會出現在同一位置。腳本在測試視窗還隱藏時，於同一位置放一塊預期主題底色的背景板，
+  並把測試視窗與背景板設為最上層，結束時移除；Windows 的開窗動畫保持開啟。執行期間螢幕中央會被這兩個視窗蓋住約 2 秒。
+- 修改前在開發機以深色主題直接啟動共 15 次，3 次抓到內容區全白的畫格（視窗出現後約 40–90 ms，標題列已是深色）。
+
 ## 介面語言
 
 - 「應用程式設定」→「介面語言」的選項依序為「跟隨系統」、English、繁體中文。預設為「跟隨系統」，沒有語言設定的舊偏好設定也視為跟隨系統。
@@ -120,6 +156,10 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 - 焦點框的寬度與外擴距離由 `src/app.css` 的 `--focus-ring-width`、`--focus-ring-offset` 定義，合計為 `--focus-ring-extent`。
 - 對話框裡的 `OverlayScroll` 捲動區在上緣與左緣保留 `--focus-ring-extent` 的內距，並以相同的負外距抵銷，內容位置與寬度不變；右緣與下緣原本的內距已大於焦點框外擴量。
 - 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。
+- 首次讀取的進度條 `InitialQueryProgress` 有兩種版面。實例清單與操作紀錄這類整頁清單加 `centered`：進度條以絕對定位
+  對齊最近的定位祖先，在它前一個元素（例如表格標題列）以下的區域水平與垂直置中。在 `OverlayScroll` 裡，這個祖先是不會捲動的
+  外框，所以表格比可見區域寬、出現橫向捲軸時，進度條仍停在可見區域中間。操作紀錄頁讀取時讓卡片填滿可見高度，進度條在卡片中間。
+  對話框內維持預設的靠左版面。`src/initial-query-progress.test.mjs` 會檢查這項規則。
 - `OverlayScroll` 的捲動區只在內容需要捲動時才能用 Tab 選到，讓鍵盤可以捲動；不需要捲動時，Tab 直接跳到裡面的控制項，不會停在整個容器上。
 
 ## 用 DevTools 檢查 GUI 畫面
@@ -415,7 +455,10 @@ V1 管理的伺服器可以原地交給 1.0 管理，世界、插件與插件資
 啟動前重新核對核心和 Java，每次成功派工會在工作階段記錄使用的執行檔。已儲存的實例手動路徑優先。
 Windows 預設 mise 搜尋使用帳戶本身的 Local AppData。隔離日誌的位置可獨立指定。明確設定的 `MISE_DATA_DIR` 仍優先。
 
-建立實例時指定名稱、Port、工作區 `instances/` 內的父資料夾及核心來源。
+建立實例時指定名稱、Port、上層資料夾及核心來源。上層資料夾預設帶入「應用程式設定 → 建立實例」的「新伺服器的預設位置」，未設定時是工作區的 `instances`，每次建立仍可修改。
+預設位置可選的資料夾與管理資料夾相同：工作區 `instances` 或其子目錄，或工作區以外的本機資料夾；工作區的其他資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑會被拒絕並保留原設定。按「使用預設位置」後儲存即清除設定。
+變更只影響之後的建立，已存在的伺服器不會搬動。設定存在工作區的 `creation-defaults.json`（例如 `{"parent": "D:\\Servers"}`，清除後為 `{}`）。
+舊版（1.1.0 以前）不讀這個檔案，回退後照舊使用 `instances`，重新使用新版時讀回原設定。
 名稱限 1 至 64 個小寫英文字母、數字、連字號或句點，開頭使用字母或數字，版本可直接寫入名稱，例如 `paper-1.14.4`。
 名稱不能以句點結尾（Windows 會自動去掉結尾的句點），句點前的部分也不能是 Windows 保留名稱（例如 `con.1`）。
 同一規則適用於匯入、管理資料夾自動登記與 V1 移交；request ID、run ID 與工作 ID 仍只使用小寫英數與連字號。
@@ -531,11 +574,29 @@ Velocity 沒有這行輸出：在後台做過 Host 無法讀回的編輯後按 E
 獨立主控台視窗（tier 3）的退出碼 0、130、143 與 `0xC000013A` 無法區分是否為使用者關窗，不重啟；其他退出碼依當機設定處理。
 
 核心維護支援同核心與同版本線的單台替換、備份還原及中斷核對。
+Velocity 可在同一個 Velocity 版本內換 build（例如 4.2.1-SNAPSHOT build 38 → 43），Port 以 `velocity.toml` 的 `bind` 核對。
+`-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。核心檔名沿用登記的名稱，不改寫。
+已核對的 Velocity 也可以換到較新的 Velocity 版本（例如 4.2.1-SNAPSHOT → 4.3.1），入口是核心維護的「更換 Velocity 版本」，分兩步確認：
+
+1. 選擇目標版本（`core-velocity-versions`）。版本清單取自 fill API 的 `projects/velocity`，依 API 回傳順序判斷新舊，只列出比目前新的版本；SNAPSHOT 照常列出並標示。
+2. 摘要頁（`core-velocity-target`）列出「目前版本 → 目標版本」、目標版本最新可用的 build 與發布頻道，以及風險：插件可能需要更新、不備份 `plugins` 與插件資料、會備份 `velocity.toml` 與 `forwarding.secret`。
+   勾選「我了解跨版本更新的風險」後才能確認，確認後執行 `core-install-version`。
+
+跨版本更新沿用同版本更新的停止條件與交易，另外把 `velocity.toml` 與 `forwarding.secret` 備份在該請求的 `proxy-files`。
+還原跨版本的備份時，先保留目前的這兩個檔案，再放回備份當時的檔案並替換核心；替換沒有完成時，核對會放回目前的檔案。
+批次更新只處理同版本的候選，不會包含跨版本更新。
+Purpur 以官方 API（`api.purpurmc.org/v2/purpur/<版本>?detailed=true`）檢查同一個 Minecraft 版本線的新 build，只接受 `result` 為 `SUCCESS` 的 build。
+API 只提供 MD5，所以目前 JAR 的 build 以 MD5 比對官方清單找出；找不到相符的 build 時不提供更新（`CoreSourceUnverifiedLocalHash`）。
+候選以官方 MD5 指定，下載走 HTTPS，內容須與該 MD5 相符；之後計算 SHA-256 登記為已核對，往後的核對都用 SHA-256。
+畫面以「核對方式：以 Purpur 官方 MD5 核對」和 SHA-256 核對區分。未核對、只由 JAR 自述為 Purpur 的實例也能更新，更新後改為已核對。
+Purpur 的候選在下載前沒有 SHA-256，所以不支援預先下載與批次更新，批次預覽會提示改用單台核心維護。API 不提供檔案大小，下載時只顯示已下載的大小。
+
+替換核心時，目的地 JAR 只要有任何開啟的檔案代碼（例如清單正在計算無法離線辨識的核心雜湊，或防毒軟體掃描）就會失敗。替換最多等待 5 秒讓這類讀取結束，仍失敗才回報錯誤。
 來源檢查依核心及版本分組。開發或部署時可用程序環境
 `INSTANCEHARBOR_PAPERMC_CONTACT_URL` 指定另一個有效的 HTTPS 聯絡網址。
 Spigot 1.8.8 的原生提交距離和同版本發布資訊各自核對。原生版本顯示落後只提供診斷資訊，Spigot 更新仍需使用已核對的本機 JAR。
 在「應用程式設定 → 核心更新」可開啟「預先下載核心更新」，預設關閉。開啟後，常駐 Manager
-會核對同版本線的 Paper 更新，並在工作區依 SHA-256 共用候選。準備期間各實例可繼續運行。
+會核對同版本線的 Paper 與 Velocity 更新，並在工作區依 SHA-256 共用候選。準備期間各實例可繼續運行。
 確認更新且符合原有的停止條件後，管理端核對本機候選，再為各台分別備份及替換。
 最後一台已更新或移除管理，且目前無安裝使用該檔案時，Manager 會回收候選。關閉設定會停止背景下載，
 並回收已無安裝使用的預先下載副本。已準備的候選及待更新實例可在 Manager 重開後重新核對。
@@ -544,6 +605,16 @@ Spigot 1.8.8 的原生提交距離和同版本發布資訊各自核對。原生�
 在進度視窗或操作紀錄選擇「取消剩餘」，仍在排隊或準備候選 JAR 的項目會取消。
 已進入核心替換交易的項目會完成或保留結果供核對。已更新項目的備份可從單台核心維護還原。
 Manager 重開時先核對已進入替換交易的原請求，已取消的項目保持取消。其餘未進入交易的項目依原計畫重新核對登記與核心身分。
+
+單台核心維護與批次更新都標示目前的階段：核對更新來源、下載核心、使用已下載的核心、核對 SHA-256、備份目前的核心、替換核心。
+下載時，來源提供檔案大小（PaperMC fill API 的 `size`）就顯示有數值的進度條與「已下載 / 總大小」，例如 `23.4 / 52.7 MB`（1 MB 為 1024² 位元組）。
+來源沒有提供大小時退回無限進度條，只顯示已下載的大小，不推算百分比。
+
+- **單台**：GUI 以 `core_maintenance_with_progress` 指令執行 `core-install-latest`、`core-install` 與 `core-restore`，階段經 Tauri Channel 即時回報。
+- **批次**：由常駐 Manager 執行。目前項目的階段寫入 `core-batches/<批次 ID>.progress`，`core-batch-list` 讀出後附在執行中項目的 `progress` 欄位。
+  這個檔案只供顯示，遺失或過期都不影響批次結果；同一階段的位元組最多每 0.4 秒寫一次。
+- **同一核心只下載一次**：批次中相同 SHA-256 的候選共用一份。開啟預先下載時，Paper 使用 `staging/core-prefetch`；其他情況放在
+  `staging/core-batch-candidates`。第二台起顯示「使用已下載的核心」，不顯示下載進度。沒有任何進行中的批次項目需要時，Manager 回收該候選。
 操作紀錄預設隱藏 90 天前已結案資料，
 保留原始紀錄及結果未確認的工作。
 
@@ -787,7 +858,22 @@ GUI 診斷紀錄每次啟動寫一組檔案，檔名為 `gui-<GUI 啟動的本�
 比較的是筆數與錯誤代碼，不比較回傳值。真的無法寫入（磁碟已滿、沒有存取權）時，GUI 警告並顯示上表的資料夾。
 
 1.0 之前的版本把 WebView2 資料放在 `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`）。
-裡面只有介面快取，1.0 不再使用，可以手動刪除。`<應用程式資料夾>` 下的 `diagnostics` 與 `lifecycle` 屬於 V1，1.0 不讀寫它們。
+裡面只有介面快取，1.0 不再使用，可以手動刪除，或用下面的「清除快取」。`<應用程式資料夾>` 下的 `diagnostics` 與 `lifecycle` 屬於 V1，1.0 不讀寫它們。
+
+#### 清除快取
+
+「應用程式設定 → 清除快取」先列出每一類項目與大小，按「清除快取」並確認後才刪除。只處理下列明確位置：
+
+| 類別 | 位置 | 說明 |
+|---|---|---|
+| 核心下載暫存 | 工作區 `staging` 內名稱完全符合 `download-<SHA-256>`、`pending-download-<PID>-<時間>`、`core-download-<PID>-<時間>` 的資料夾 | 建立中的工作持有 `download-<SHA-256>.lock`，或寫入暫存的程序仍在執行時，標示為使用中並略過 |
+| 舊版介面快取 | `%LOCALAPPDATA%\local.instanceharbor.v2`（開發版 `local.instanceharbor.v2.dev`） | 1.0 以前的 WebView2 資料 |
+| 介面快取（WebView2） | 上表「WebView2 資料」的位置 | GUI 執行中無法刪除。清除時在工作區寫入 `webview-cache-clear.json`，下次啟動 GUI、WebView2 開啟前刪除；開發版只影響該工作區自己的資料夾。啟動腳本以 `WEBVIEW2_USER_DATA_FOLDER` 指定其他資料夾時不提供清除 |
+
+清單與刪除時都略過連結與 junction，不刪除其他檔名，也不以萬用字元決定目標；`staging` 內的建立暫存（`gui-create-*`）、續做紀錄、`core-prefetch` 與工作區其他資料都不在範圍內。
+確認後若清單已變更（例如有新的下載），會要求重新核對。刪除失敗的項目逐項列出原因（檔案使用中、沒有存取權限等），不影響其他項目。
+排定的 WebView2 刪除失敗時保留排定與原因，設定頁顯示原因，下次啟動再試一次；結果也寫入 GUI 診斷紀錄（`webview-cache-cleared`／`webview-cache-clear-failed`）。
+不再使用的共用核心待共用核心（#62）完成後再加入。
 
 工作區的 `workspace.json` 記錄格式值。1.0 新建的工作區寫入 `instanceharbor-workspace-1`。
 rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`；1.0 照常開啟且不改寫，所以舊版仍能開啟它們。
@@ -802,6 +888,23 @@ rc2 與開發版建立的工作區保留 `instanceharbor-v2-windows-preview-1`�
 備份只供同一個絕對工作區路徑復原，回復前須核對公開金鑰與世代。
 應用程式設定的「復原金鑰」可操作同一套保管功能。
 已釘住復原金鑰的工作階段可從原生介面或 PowerShell 接管。流程見可信 Host 接管。
+
+復原金鑰正分階段移除（Issue #96）。目前是第 1 階段：
+
+- 啟動伺服器時不再寫入 `runs/<實例>/recovery-pin.json`，工作區有沒有金鑰都一樣。新的 run 一律使用無金鑰的控制條件：
+  同一個 Windows 帳戶，且執行檔是安裝資料夾的 GUI 或 `ihctl.exe`。Manager 重啟或更新後都能直接接手。
+- 舊版啟動、已釘住金鑰而且仍在執行的 Host 照舊驗證：同一個安裝的新 Manager 用 `Rebind` 接手；安裝改變時，
+  用 `ihctl WORKSPACE host-recover NAME RUN`（或設定頁「執行中工作階段」）以金鑰簽名的 `RecoverChallenge`／`RecoverProof` 接手。
+  正常停止再啟動後，這台伺服器就不再依賴金鑰。
+- 設定頁的「復原金鑰」分頁只在工作區已有金鑰時顯示，並說明此功能即將移除。沒有金鑰的工作區看不到這個分頁，
+  `recovery-key-*` 指令與 `manage-recovery-backup.ps1` 仍可使用，第 2 階段才移除。
+- 金鑰檔（工作區根目錄的 `recovery-key.dpapi.json`）與匯出的 `.ihrecovery` 備份檔不會被自動刪除。
+  確認沒有仍在執行、已釘住的 run（`runs/<實例>/recovery-pin.json` 所在的實例仍在執行）後，可以手動刪除；
+  刪除金鑰檔後設定頁不再顯示「復原金鑰」分頁。
+
+`verify-recovery-pin.ps1` 用測試替身（`tests/controlled-server.rs`）驗證這些行為：無金鑰工作區、有金鑰時新啟動的 run 沒有 pin，
+以及搭配 `-LegacyBinaryDirectory`（指向 1.1.0 或更早的建置）時，舊版釘住的 run 仍能由重啟後的 Manager 接管與停止。
+`-Evidence` 必須是新的資料夾。開發版建置只開啟 `InstanceHarbor Dev\workspaces\<名稱>`，所以另以 `-Workspace` 指定新的隔離工作區。
 
 工作區由明確路徑建立。掃描允許與排除名單支援絕對及相對路徑。管理資料夾、匯入與新建可以使用工作區 instances 底下或工作區以外的任意本機資料夾；工作區的內部資料夾、包含工作區的上層資料夾、磁碟根目錄與 UNC 路徑一律拒絕，登記後仍依掃描白名單決定是否納管。測試使用 IPv4 回環監聽。GUI 新建沿用全域 Java 設定，並自動核對需要的 Mojang JAR。1.0 遷移入口已移出正式 GUI；V1 伺服器改用「從 V1 移交伺服器」的 CLI 指令。
 

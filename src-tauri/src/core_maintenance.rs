@@ -19,6 +19,24 @@ unsafe extern "system" {
     fn GetDriveTypeW(root: *const u16) -> u32;
 }
 
+/// The step a core update or restore is in, reported to the GUI (#60).
+/// `Downloading` carries the official size when the source states one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+pub enum CoreUpdatePhase {
+    Checking,
+    Downloading { received: u64, total: Option<u64> },
+    /// The candidate with this SHA-256 was already downloaded, for example by
+    /// an earlier item of the same batch or by the prefetch setting.
+    Reusing,
+    Verifying,
+    BackingUp,
+    Replacing,
+}
+
+/// A progress sink that ignores every update.
+pub(super) fn no_progress(_: CoreUpdatePhase) {}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     rename_all = "camelCase",
@@ -27,8 +45,54 @@ unsafe extern "system" {
     deny_unknown_fields
 )]
 enum Action {
-    Install { candidate_sha256: String },
+    Install {
+        candidate_sha256: String,
+        /// A Velocity update to another Velocity version, confirmed twice (#41).
+        #[serde(default, skip_serializing_if = "is_false")]
+        cross_version: bool,
+    },
     Restore { backup_id: String },
+}
+
+/// Velocity files backed up and restored with a cross-version change (#41).
+/// The `plugins` folder is not: the confirmation says so.
+const PROXY_FILES: [&str; 2] = ["velocity.toml", "forwarding.secret"];
+const PROXY_BACKUP: &str = "proxy-files";
+
+/// Whether a change moves a Velocity proxy to another Velocity version.
+fn crosses_versions(before: &CoreProfile, after: &CoreProfile) -> bool {
+    before.family == "VELOCITY" && after.family == "VELOCITY" && before.minecraft != after.minecraft
+}
+
+/// Copies the proxy files that exist in `from` into the new folder `to`.
+fn backup_proxy_files(from: &Path, to: &Path) -> Result<()> {
+    fs::create_dir(to).map_err(|error| file_error("create-proxy-backup", to, error))?;
+    for name in PROXY_FILES {
+        let source = from.join(name);
+        if checked_entry(&source, false)? {
+            let copy = to.join(name);
+            fs::copy(&source, &copy).map_err(|error| file_error("backup-proxy-file", &copy, error))?;
+            OpenOptions::new().write(true).open(&copy).and_then(|file| file.sync_all()).map_err(fail)?;
+        }
+    }
+    Ok(())
+}
+
+/// Puts the proxy files of a backup folder back into the proxy folder.
+fn restore_proxy_files(backup: &Path, directory: &Path) -> Result<()> {
+    existing(backup, true)?;
+    for name in PROXY_FILES {
+        let saved = backup.join(name);
+        if !checked_entry(&saved, false)? {
+            continue;
+        }
+        let destination = directory.join(name);
+        let temporary = directory.join(format!("{name}.{}.{}.tmp", std::process::id(), clock()));
+        fs::copy(&saved, &temporary).map_err(|error| file_error("restore-proxy-file", &temporary, error))?;
+        OpenOptions::new().write(true).open(&temporary).and_then(|file| file.sync_all()).map_err(fail)?;
+        move_durable(&temporary, &destination, checked_entry(&destination, false)?)?;
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -133,12 +197,18 @@ pub(super) fn move_durable_with_stage(source: &Path, destination: &Path, replace
     let to: Vec<_> = destination.as_os_str().encode_wide().chain([0]).collect();
     // WRITE_THROUGH and, only for an already-verified destination, REPLACE_EXISTING.
     let flags = 0x8 | u32::from(replace);
-    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
-        return Err(file_error(
-            stage,
-            destination,
-            io::Error::last_os_error(),
-        ));
+    // Replacing fails while any handle to the destination is open, even a
+    // short read-only one: the list hashing a core it cannot identify offline,
+    // or a virus scanner. Wait for such readers, for at most 5 seconds.
+    let mut attempts = 0;
+    while unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } == 0 {
+        let error = io::Error::last_os_error();
+        attempts += 1;
+        // ERROR_ACCESS_DENIED and ERROR_SHARING_VIOLATION.
+        if !replace || !matches!(error.raw_os_error(), Some(5 | 32)) || attempts >= 50 {
+            return Err(file_error(stage, destination, error));
+        }
+        thread::sleep(Duration::from_millis(100));
     }
     Ok(())
 }
@@ -251,22 +321,48 @@ pub(super) fn trusted_profile(config: &Instance, sha256: String) -> Option<CoreP
     })
 }
 
+/// A Purpur core that may be updated although it is not verified (#41): the
+/// registered Purpur profile of this exact JAR, or else what the JAR states
+/// about itself. Its build is confirmed by the official MD5 before an update.
+pub(super) fn purpur_identity(config: &Instance, jar: &Path, sha256: &str) -> Option<CoreProfile> {
+    if let Some(profile) = config.core_profile.as_ref().filter(|profile| profile.sha256 == sha256) {
+        return (profile.family == "PURPUR").then(|| profile.clone());
+    }
+    let claim = core_artifact::claim(jar).filter(|claim| claim.family == "PURPUR")?;
+    Some(CoreProfile {
+        family: claim.family,
+        minecraft: claim.minecraft,
+        build: String::new(),
+        sha256: sha256.to_owned(),
+        unverified: true,
+        java: claim.java,
+    })
+}
+
 fn verify_pair(before: &CoreProfile, after: &CoreProfile, action: &Action) -> Result<()> {
+    // Another version is allowed only for Velocity: an install confirmed as
+    // cross-version, or the restore of a recorded backup (#41).
+    let cross = crosses_versions(before, after);
+    let cross_allowed = match action {
+        Action::Install { cross_version, .. } => *cross_version,
+        Action::Restore { .. } => true,
+    };
     if !valid_hash(&before.sha256)
         || !valid_hash(&after.sha256)
         || before.family != after.family
-        || before.minecraft != after.minecraft
+        || (before.minecraft != after.minecraft && !(cross && cross_allowed))
         || before.sha256 == after.sha256
-        || before.build == after.build
+        || (!cross && before.build == after.build)
+        || matches!(action, Action::Install { cross_version: true, .. } if !cross)
     {
         return Err("CoreCandidateIncompatible".into());
     }
-    if let Action::Install { candidate_sha256 } = action {
+    if let Action::Install { candidate_sha256, .. } = action {
         if candidate_sha256 != &after.sha256 {
             return Err("CoreArtifactHashMismatch".into());
         }
-        if let (Ok(current), Ok(candidate)) =
-            (before.build.parse::<u64>(), after.build.parse::<u64>())
+        if let (false, Ok(current), Ok(candidate)) =
+            (cross, before.build.parse::<u64>(), after.build.parse::<u64>())
         {
             if candidate <= current {
                 return Err("CoreCandidateIsNotNewer".into());
@@ -307,7 +403,13 @@ impl Target {
     }
 
     fn stopped(&self, root: &Path) -> Result<()> {
-        if property_port(&self.directory)? != self.config.port {
+        // A Velocity proxy states its port in velocity.toml, not server.properties (#41).
+        let configured = if registered_velocity(&self.config).is_some() {
+            velocity_binding(&self.directory)?.0 .1
+        } else {
+            property_port(&self.directory)?
+        };
+        if configured != self.config.port {
             return Err("PortChanged".into());
         }
         port_unassigned(root, self.config.port, &self.config.name)?;
@@ -315,7 +417,7 @@ impl Target {
         if observed["state"] != "Stopped" {
             return Err("InstanceNotConfirmedStopped".into());
         }
-        port_free(self.config.port)?;
+        instance_port_free(&self.config)?;
         if observed["run"].is_null() {
             return self
                 .config
@@ -444,9 +546,14 @@ fn state(root: &Path, name: &str) -> Result<Value> {
                 (sha == &pending.after.sha256).then(|| pending.after.clone())
             })
         });
+    // An unverified Purpur may still be updated: the source check confirms its
+    // build by the official MD5, and the update registers it as verified (#41).
+    let purpur = installed.is_none().then(|| {
+        current.as_ref().ok().and_then(|sha| purpur_identity(&target.config, &target.jar(), sha))
+    }).flatten();
     let reason = if pending.is_some() {
         Some("CoreMaintenancePending".to_owned())
-    } else if installed.is_none() {
+    } else if installed.is_none() && purpur.is_none() {
         Some(
             current
                 .as_ref()
@@ -474,7 +581,8 @@ fn state(root: &Path, name: &str) -> Result<Value> {
                     && installed.as_ref().is_some_and(|profile| {
                         profile.sha256 != result.intent.before.sha256
                             && profile.family == result.intent.before.family
-                            && profile.minecraft == result.intent.before.minecraft
+                            && (profile.minecraft == result.intent.before.minecraft
+                                || crosses_versions(profile, &result.intent.before))
                     })
                 {
                     backups.push((
@@ -488,7 +596,9 @@ fn state(root: &Path, name: &str) -> Result<Value> {
     }
     backups.sort_by(|left, right| (right.0, &right.1).cmp(&(left.0, &left.1)));
     let backups: Vec<Value> = backups.into_iter().map(|(created_at, id, profile)| {
-        json!({"createdAt": created_at, "id": id, "profile": profile})
+        // A restore to another Velocity version also restores its proxy files.
+        let cross = installed.as_ref().is_some_and(|current| crosses_versions(current, &profile));
+        json!({"createdAt": created_at, "id": id, "profile": profile, "crossVersion": cross})
     }).collect();
     let pending = pending.map(|intent| {
         json!({"request":intent.request, "kind":kind(&intent.action), "action":intent.action,
@@ -505,7 +615,8 @@ fn state(root: &Path, name: &str) -> Result<Value> {
         .flatten()
         .map(|identity| {
             json!({"family":identity.family,"minecraft":identity.minecraft_version,"build":identity.build})
-        });
+        })
+        .or_else(|| purpur.as_ref().map(|profile| json!({"family":profile.family,"minecraft":profile.minecraft,"build":null})));
     Ok(
         json!({"name":name,"installed":installed,"identified":identified,"currentSha256":current.ok(),"pending":pending,
         "backups":backups,"canWrite":reason.is_none(),"reason":reason,"prepared":prepared}),
@@ -584,6 +695,18 @@ fn finish(root: &Path, target: &Target, intent: Intent, replayed: bool) -> Resul
         write_durable(&result_path, &result, false)?;
     }
     if result.outcome == Outcome::NotApplied {
+        // A restore may have put back proxy files before the JAR stayed: undo it.
+        let proxy = folder.join(PROXY_BACKUP);
+        if checked_entry(&proxy, true)? {
+            restore_proxy_files(&proxy, &target.directory)?;
+            for name in PROXY_FILES {
+                let saved = proxy.join(name);
+                if checked_entry(&saved, false)? {
+                    fs::remove_file(&saved).map_err(|error| file_error("discard-unapplied-core", &saved, error))?;
+                }
+            }
+            fs::remove_dir(&proxy).map_err(|error| file_error("discard-unapplied-core", &proxy, error))?;
+        }
         for name in ["next.jar", "before.jar"] {
             let unused = folder.join(name);
             if checked_entry(&unused, false)? {
@@ -603,6 +726,7 @@ fn finish(root: &Path, target: &Target, intent: Intent, replayed: bool) -> Resul
     Ok(report(&result, replayed))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_action(
     root: &Path,
     target: Target,
@@ -610,6 +734,8 @@ fn run_action(
     expected_current_sha256: &str,
     action: Action,
     candidate: Option<(&Path, &CoreProfile)>,
+    known_before: Option<&CoreProfile>,
+    progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
     if !token(request) || !valid_hash(expected_current_sha256) {
@@ -632,7 +758,16 @@ fn run_action(
     if before_sha != expected_current_sha256 {
         return Err("CoreCurrentChanged".into());
     }
-    let before = trusted_profile(&target.config, before_sha).ok_or("CoreProfileUnverified")?;
+    // `known_before` is an unverified Purpur whose build the source matched by
+    // its official MD5; it must still be the registered core.
+    let before = trusted_profile(&target.config, before_sha.clone())
+        .or_else(|| {
+            let registered = purpur_identity(&target.config, &target.jar(), &before_sha)?;
+            known_before.filter(|known| {
+                known.sha256 == before_sha && known.family == registered.family && known.minecraft == registered.minecraft
+            }).cloned()
+        })
+        .ok_or("CoreProfileUnverified")?;
     let store = target.store();
     let (source, after) = match (&action, candidate) {
         (Action::Install { .. }, Some((source, profile))) => {
@@ -653,6 +788,7 @@ fn run_action(
         _ => return Err("InvalidCoreMaintenanceRequest".into()),
     };
     verify_pair(&before, &after, &action)?;
+    progress(CoreUpdatePhase::Verifying);
     require_hash(&source, &after.sha256)?;
     begin_commit()?;
     if !checked_entry(&store, true)? {
@@ -690,17 +826,31 @@ fn run_action(
     let prepare_and_replace = || -> Result<()> {
         let stage = folder.join("next.jar");
         copy_verified(&source, &stage, &intent.after.sha256)?;
+        progress(CoreUpdatePhase::BackingUp);
         copy_verified(
             &target.jar(),
             &folder.join("before.jar"),
             &intent.before.sha256,
         )?;
+        if crosses_versions(&intent.before, &intent.after) {
+            // The current proxy files are kept with this request; a restore
+            // to the other version then puts back the files of its backup.
+            backup_proxy_files(&target.directory, &folder.join(PROXY_BACKUP))?;
+            target.stopped(root)?;
+            if let Action::Restore { backup_id } = &intent.action {
+                let saved = store.join(backup_id).join(PROXY_BACKUP);
+                if checked_entry(&saved, true)? {
+                    restore_proxy_files(&saved, &target.directory)?;
+                }
+            }
+        }
         target.stopped(root)?;
         if registration_revision(root, &target.config.name)? != intent.registration_revision {
             return Err("CoreMaintenanceRegistrationChanged".into());
         }
         require_hash(&stage, &intent.after.sha256)?;
         require_hash(&target.jar(), &intent.before.sha256)?;
+        progress(CoreUpdatePhase::Replacing);
         move_durable(&stage, &target.jar(), true)
     };
     prepare_and_replace()
@@ -709,6 +859,7 @@ fn run_action(
         .map_err(|cause| format!("CoreMaintenancePending: reconcile request {request}: {cause}"))
 }
 
+#[cfg(test)]
 pub(super) fn install_verified(
     root: &Path,
     name: &str,
@@ -717,9 +868,10 @@ pub(super) fn install_verified(
     candidate_path: &Path,
     profile: &CoreProfile,
 ) -> Result<Value> {
-    install_verified_guarded(root, name, request, expected_current_sha256, candidate_path, profile, || Ok(()))
+    install_verified_guarded(root, name, request, expected_current_sha256, candidate_path, profile, &no_progress, || Ok(()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn install_verified_guarded(
     root: &Path,
     name: &str,
@@ -727,6 +879,7 @@ pub(super) fn install_verified_guarded(
     expected_current_sha256: &str,
     candidate_path: &Path,
     profile: &CoreProfile,
+    progress: &dyn Fn(CoreUpdatePhase),
     begin_commit: impl FnOnce() -> Result<()>,
 ) -> Result<Value> {
     let target = Target::resolve(root, name)?;
@@ -737,10 +890,50 @@ pub(super) fn install_verified_guarded(
         expected_current_sha256,
         Action::Install {
             candidate_sha256: profile.sha256.clone(),
+            cross_version: false,
         },
         Some((candidate_path, profile)),
+        None,
+        progress,
         begin_commit,
     )
+}
+
+/// Moves a stopped Velocity proxy to `profile`, a build of another Velocity
+/// version that the user confirmed twice (#41). velocity.toml and
+/// forwarding.secret are backed up with the request and restored with it.
+pub(super) fn install_cross_version(
+    root: &Path,
+    name: &str,
+    request: &str,
+    expected_current_sha256: &str,
+    candidate_path: &Path,
+    profile: &CoreProfile,
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Result<Value> {
+    let target = Target::resolve(root, name)?;
+    let action = Action::Install { candidate_sha256: profile.sha256.clone(), cross_version: true };
+    run_action(root, target, request, expected_current_sha256, action,
+        Some((candidate_path, profile)), None, progress, || Ok(()))
+}
+
+/// Installs `after` over an unverified Purpur whose build is `before` (#41).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_identified(
+    root: &Path,
+    name: &str,
+    request: &str,
+    expected_current_sha256: &str,
+    candidate_path: &Path,
+    before: &CoreProfile,
+    after: &CoreProfile,
+    progress: &dyn Fn(CoreUpdatePhase),
+    begin_commit: impl FnOnce() -> Result<()>,
+) -> Result<Value> {
+    let target = Target::resolve(root, name)?;
+    let action = Action::Install { candidate_sha256: after.sha256.clone(), cross_version: false };
+    run_action(root, target, request, expected_current_sha256, action,
+        Some((candidate_path, after)), Some(before), progress, begin_commit)
 }
 
 fn install_pinned(
@@ -750,9 +943,10 @@ fn install_pinned(
     current: &str,
     candidate: &str,
     expected: &str,
+    progress: &dyn Fn(CoreUpdatePhase),
 ) -> Result<Value> {
     let profile = pinned_core_profile(expected.to_owned()).ok_or("CoreCandidateUnverified")?;
-    install_verified(root, name, request, current, Path::new(candidate), &profile)
+    install_verified_guarded(root, name, request, current, Path::new(candidate), &profile, progress, || Ok(()))
 }
 
 fn reconcile(root: &Path, name: &str, request: &str) -> Result<Value> {
@@ -774,10 +968,19 @@ fn reconcile(root: &Path, name: &str, request: &str) -> Result<Value> {
 }
 
 pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Result<Value>> {
+    dispatch_with_progress(root, verb, args, &no_progress)
+}
+
+pub(super) fn dispatch_with_progress(
+    root: &Path,
+    verb: &str,
+    args: &[String],
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Option<Result<Value>> {
     Some(match (verb, args) {
         ("core-state", [name]) => state(root, name),
         ("core-install", [name, id, before, path, after]) => {
-            install_pinned(root, name, id, before, path, after)
+            install_pinned(root, name, id, before, path, after, progress)
         }
         ("core-restore", [name, id, before, backup]) => {
             Target::resolve(root, name).and_then(|target| {
@@ -790,6 +993,8 @@ pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Resul
                         backup_id: backup.clone(),
                     },
                     None,
+                    None,
+                    progress,
                     || Ok(()),
                 )
             })
@@ -900,6 +1105,8 @@ mod tests {
                 backup_id: "update".into(),
             },
             None,
+            None,
+            &no_progress,
             || Ok(()),
         )
         .unwrap();
@@ -920,6 +1127,185 @@ mod tests {
         assert!(assert_start_allowed(&target.directory).is_ok());
     }
 
+    // #41: a Velocity proxy is checked against velocity.toml and keeps the
+    // registered core file name after a build update and its restore.
+    #[test]
+    fn velocity_build_update_keeps_the_registered_name_and_restores() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let directory = target.directory.clone();
+        fs::remove_file(directory.join("server.properties")).unwrap();
+        fs::rename(directory.join("server.jar"), directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap();
+        let velocity = |bytes: &[u8], build: &str| CoreProfile { family: "VELOCITY".into(), minecraft: "4.2.1-SNAPSHOT".into(), ..profile(bytes, build) };
+        target.config.core_file = Some("velocity-4.2.1-SNAPSHOT-38.jar".into());
+        target.config.core_profile = Some(velocity(b"first", "38"));
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        assert!(state(&fixture.0, "server").unwrap()["reason"].as_str().is_some_and(|reason| reason != "PortChanged"),
+            "a missing velocity.toml is not read as server.properties");
+        fs::write(directory.join("velocity.toml"), format!("bind = \"127.0.0.1:{}\"\n", target.config.port)).unwrap();
+        let candidate = fixture.0.join("velocity-4.2.1-SNAPSHOT-43.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let (before, after) = (velocity(b"first", "38"), velocity(b"second", "43"));
+        assert_eq!(state(&fixture.0, "server").unwrap()["canWrite"], true);
+        install_verified(&fixture.0, "server", "proxy-update", &before.sha256, &candidate, &after).unwrap();
+        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"second");
+        assert!(!directory.join("velocity-4.2.1-SNAPSHOT-43.jar").exists());
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["build"], "43");
+        let args = ["server".into(), "proxy-restore".into(), after.sha256.clone(), "proxy-update".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(directory.join("velocity-4.2.1-SNAPSHOT-38.jar")).unwrap(), b"first");
+        fs::write(directory.join("velocity.toml"), "bind = \"127.0.0.1:1\"\n").unwrap();
+        assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "PortChanged");
+    }
+
+    // #41: an unverified Purpur can be updated once its build is known by the
+    // official MD5; the update registers it as verified, and it restores.
+    #[test]
+    fn unverified_purpur_updates_to_a_verified_registration_and_restores() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let purpur = |bytes: &[u8], build: &str| CoreProfile { family: "PURPUR".into(), minecraft: "26.3".into(), ..profile(bytes, build) };
+        target.config.core_profile = Some(CoreProfile { unverified: true, ..purpur(b"first", "") });
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        let state_now = state(&fixture.0, "server").unwrap();
+        assert_eq!((&state_now["canWrite"], &state_now["installed"]), (&json!(true), &Value::Null));
+        assert_eq!(state_now["identified"], json!({"family":"PURPUR","minecraft":"26.3","build":null}));
+        let candidate = fixture.0.join("purpur-26.3-2660.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let (before, after) = (purpur(b"first", "2634"), purpur(b"second", "2660"));
+        // Without the matched build the core stays unverified, as before.
+        assert_eq!(install_verified(&fixture.0, "server", "plain", &before.sha256, &candidate, &after).unwrap_err(),
+            "CoreProfileUnverified");
+        let paper = CoreProfile { family: "PAPER".into(), ..before.clone() };
+        assert_eq!(install_identified(&fixture.0, "server", "wrong", &before.sha256, &candidate, &paper, &after, &no_progress, || Ok(()))
+            .unwrap_err(), "CoreProfileUnverified");
+        install_identified(&fixture.0, "server", "purpur", &before.sha256, &candidate, &before, &after, &no_progress, || Ok(()))
+            .unwrap();
+        let registered = instance(&fixture.0, "server").unwrap().core_profile.unwrap();
+        assert_eq!((registered.build.as_str(), registered.unverified), ("2660", false));
+        let state_now = state(&fixture.0, "server").unwrap();
+        assert_eq!(state_now["installed"]["build"], "2660");
+        assert_eq!(state_now["backups"][0]["profile"]["build"], "2634");
+        let args = ["server".into(), "purpur-restore".into(), after.sha256.clone(), "purpur".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(target.jar()).unwrap(), b"first");
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["build"], "2634");
+    }
+
+    // A short read-only reader of the destination (the list hashing a core it
+    // cannot identify offline, or a virus scanner) must not fail a replacement.
+    #[test]
+    fn replacement_waits_for_a_short_reader_of_the_destination() {
+        let fixture = Fixture::new();
+        let (source, destination) = (fixture.0.join("next.jar"), fixture.0.join("server.jar"));
+        fs::write(&destination, b"old").unwrap();
+        fs::write(&source, b"new").unwrap();
+        let reader = File::open(&destination).unwrap();
+        let held = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            drop(reader);
+        });
+        move_durable(&source, &destination, true).unwrap();
+        held.join().unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"new");
+        // A reader that stays open is still reported, after a bounded wait.
+        fs::write(&source, b"newer").unwrap();
+        let _reader = File::open(&destination).unwrap();
+        assert!(move_durable(&source, &destination, true).is_err());
+    }
+
+    // #41: an imported Purpur usually has no registered profile; what its JAR
+    // states is enough to allow the update, never another family.
+    #[test]
+    fn unregistered_purpur_is_writable_by_its_own_claim() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        target.config.core_profile = None;
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        let list = "versions\ta\tb\tc\t26.2/server-26.2.jar\t26.2/server.patch\t26.2/purpur-26.2.jar\n";
+        core_artifact::tests::jar_with(&target.jar(), &[("META-INF/patches.list", list.as_bytes())]);
+        let state_now = state(&fixture.0, "server").unwrap();
+        assert_eq!(state_now["identified"], json!({"family":"PURPUR","minecraft":"26.2","build":null}));
+        assert_eq!(state_now["reason"], Value::Null);
+        let paper = list.replace("purpur-26.2", "paper-26.2");
+        core_artifact::tests::jar_with(&target.jar(), &[("META-INF/patches.list", paper.as_bytes())]);
+        assert_eq!(state(&fixture.0, "server").unwrap()["reason"], "CoreProfileUnverified");
+    }
+
+    // #41: a confirmed cross-version change keeps velocity.toml and
+    // forwarding.secret with the request; its restore puts them back.
+    #[test]
+    fn velocity_cross_version_change_backs_up_and_restores_proxy_files() {
+        let fixture = Fixture::new();
+        let mut target = fixture.workspace();
+        let directory = target.directory.clone();
+        fs::remove_file(directory.join("server.properties")).unwrap();
+        let velocity = |bytes: &[u8], version: &str, build: &str| CoreProfile {
+            family: "VELOCITY".into(), minecraft: version.into(), ..profile(bytes, build) };
+        target.config.core_profile = Some(velocity(b"first", "4.2.1-SNAPSHOT", "43"));
+        save(&record_path(&fixture.0, "server"), &target.config).unwrap();
+        let toml = format!("bind = \"127.0.0.1:{}\"\nconfig-version = \"2.7\"\n", target.config.port);
+        fs::write(directory.join("velocity.toml"), &toml).unwrap();
+        fs::write(directory.join("forwarding.secret"), b"secret-a").unwrap();
+        let (before, after) = (velocity(b"first", "4.2.1-SNAPSHOT", "43"), velocity(b"second", "4.3.1", "45"));
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        // A plain install never crosses versions; a cross-version one must.
+        assert_eq!(install_verified(&fixture.0, "server", "plain", &before.sha256, &candidate, &after).unwrap_err(),
+            "CoreCandidateIncompatible");
+        let same = velocity(b"second", "4.2.1-SNAPSHOT", "45");
+        assert_eq!(install_cross_version(&fixture.0, "server", "same", &before.sha256, &candidate, &same, &no_progress).unwrap_err(),
+            "CoreCandidateIncompatible");
+        install_cross_version(&fixture.0, "server", "cross", &before.sha256, &candidate, &after, &no_progress).unwrap();
+        let saved = target.store().join("cross").join(PROXY_BACKUP);
+        assert_eq!(fs::read_to_string(saved.join("velocity.toml")).unwrap(), toml);
+        assert_eq!(fs::read(saved.join("forwarding.secret")).unwrap(), b"secret-a");
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["minecraft"], "4.3.1");
+        // The new version rewrites its files; the restore puts back the old ones.
+        let migrated = format!("bind = \"127.0.0.1:{}\"\nconfig-version = \"2.8\"\n", target.config.port);
+        fs::write(directory.join("velocity.toml"), &migrated).unwrap();
+        fs::write(directory.join("forwarding.secret"), b"secret-b").unwrap();
+        let backups = state(&fixture.0, "server").unwrap()["backups"].clone();
+        assert_eq!((&backups[0]["id"], &backups[0]["crossVersion"]), (&json!("cross"), &json!(true)));
+        let args = ["server".into(), "undo".into(), after.sha256.clone(), "cross".into()];
+        dispatch(&fixture.0, "core-restore", &args).unwrap().unwrap();
+        assert_eq!(fs::read(target.jar()).unwrap(), b"first");
+        assert_eq!(fs::read_to_string(directory.join("velocity.toml")).unwrap(), toml);
+        assert_eq!(fs::read(directory.join("forwarding.secret")).unwrap(), b"secret-a");
+        assert_eq!(state(&fixture.0, "server").unwrap()["installed"]["minecraft"], "4.2.1-SNAPSHOT");
+        // The restore kept the newer files, so undoing it brings them back.
+        assert_eq!(fs::read(target.store().join("undo").join(PROXY_BACKUP).join("forwarding.secret")).unwrap(), b"secret-b");
+        // Paper never crosses Minecraft versions, even through this entry.
+        let paper = (profile(b"a", "1"), CoreProfile { minecraft: "26.3".into(), ..profile(b"b", "2") });
+        let action = Action::Install { candidate_sha256: paper.1.sha256.clone(), cross_version: true };
+        assert_eq!(verify_pair(&paper.0, &paper.1, &action).unwrap_err(), "CoreCandidateIncompatible");
+    }
+
+    // #60: the dialog names each step after the download.
+    #[test]
+    fn install_and_restore_report_verify_backup_and_replace_in_order() {
+        let fixture = Fixture::new();
+        fixture.workspace();
+        let candidate = fixture.0.join("candidate.jar");
+        fs::write(&candidate, b"second").unwrap();
+        let (before, after) = (profile(b"first", "112"), profile(b"second", "134"));
+        let steps = std::cell::RefCell::new(Vec::new());
+        let record = |step| steps.borrow_mut().push(step);
+        install_verified_guarded(&fixture.0, "server", "update", &before.sha256, &candidate, &after, &record, || Ok(()))
+            .unwrap();
+        use CoreUpdatePhase::*;
+        assert_eq!(steps.take(), [Verifying, BackingUp, Replacing]);
+        let args = ["server".into(), "restore".into(), after.sha256.clone(), "update".into()];
+        dispatch_with_progress(&fixture.0, "core-restore", &args, &record).unwrap().unwrap();
+        assert_eq!(steps.take(), [Verifying, BackingUp, Replacing]);
+        // A rejected candidate stops at verification and never backs up.
+        fs::write(&candidate, b"tampered").unwrap();
+        let third = profile(b"third", "140");
+        assert!(install_verified_guarded(&fixture.0, "server", "bad", &before.sha256, &candidate, &third, &record, || Ok(()))
+            .is_err());
+        assert_eq!(steps.take(), [Verifying]);
+    }
+
     #[test]
     fn reconciliation_observes_either_side_of_the_atomic_replacement() {
         for outcome in [Outcome::NotApplied, Outcome::Applied] {
@@ -936,6 +1322,7 @@ mod tests {
                 request: "interrupted".into(),
                 action: Action::Install {
                     candidate_sha256: after.sha256.clone(),
+                    cross_version: false,
                 },
                 name: "server".into(),
                 directory: target.directory.clone(),
@@ -979,6 +1366,7 @@ mod tests {
         let mut after = profile(b"second", "134");
         let action = Action::Install {
             candidate_sha256: after.sha256.clone(),
+            cross_version: false,
         };
         assert!(verify_pair(&before, &after, &action).is_ok());
         after.minecraft = "26.3".into();

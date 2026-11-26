@@ -10,12 +10,18 @@ mod content_revision;
 mod deferred_settings;
 #[path = "core_maintenance.rs"]
 mod core_maintenance;
+pub use core_maintenance::CoreUpdatePhase;
 #[path = "compatibility_probe.rs"]
 mod compatibility_probe;
 #[path = "prepare.rs"]
 mod prepare;
+#[path = "cache_cleanup.rs"]
+mod cache_cleanup;
+pub use cache_cleanup::clear_scheduled_webview;
 #[path = "creation.rs"]
 mod creation;
+#[path = "creation_defaults.rs"]
+mod creation_defaults;
 pub use creation::CreationPhase;
 #[path = "prepare_diagnostics.rs"]
 mod prepare_diagnostics;
@@ -1529,8 +1535,6 @@ struct StartPlan {
     config: Instance,
     executable: PathBuf,
     yaml_preflight: Option<Value>,
-    recovery_lock: File,
-    recovery_pin: Option<host_recovery::Pin>,
 }
 
 fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
@@ -1583,23 +1587,17 @@ fn plan_start(root: &Path, config: &Instance) -> Result<StartPlan> {
         None
     };
     drop(runtime_lease);
-    let recovery_lock = command_lock(root, "recovery-key.lock", true)?;
-    recovery_lock.try_lock_shared().map_err(|_| "ManagerBusy".to_owned())?;
-    let recovery_pin = if let Some(key) = recovery_keys::current(root, &recovery_workspace_id(root)?)? {
-        let manager = resident_manager::initial_host_manager(root)?;
-        Some(host_recovery::Pin { key, manager })
-    } else { None };
+    // New runs are never pinned to a recovery key (#96). A Host started by an
+    // earlier build still reads its recovery-pin.json in host().
     Ok(StartPlan {
         config: refreshed,
         executable,
         yaml_preflight,
-        recovery_lock,
-        recovery_pin,
     })
 }
 
 fn launch_start(root: &Path, plan: StartPlan, attempt: u8, console_window: bool) -> Result<Value> {
-    let StartPlan { config, executable, yaml_preflight, recovery_lock, recovery_pin } = plan;
+    let StartPlan { config, executable, yaml_preflight } = plan;
     let config = &config;
     let run = format!("{}-{}", std::process::id(), clock());
     let folder = root.join("runs").join(&config.name);
@@ -1614,10 +1612,6 @@ fn launch_start(root: &Path, plan: StartPlan, attempt: u8, console_window: bool)
     if config.java.as_os_str().is_empty() {
         save(&folder.join("launch-java.json"), &executable)?;
     }
-    if let Some(pin) = recovery_pin {
-        save(&folder.join(host_recovery::PIN_FILE), &pin)?;
-    }
-    drop(recovery_lock);
     if attempt > 0 {
         save(&folder.join("auto-restart-attempt.json"), &attempt)?;
     } else if console_window {
@@ -2624,10 +2618,25 @@ pub fn dispatch(arguments: &[String]) -> Result<Value> {
     dispatch_with_creation_progress(arguments, &|_| {})
 }
 
-
 pub fn dispatch_with_creation_progress(
     arguments: &[String],
     progress: &dyn Fn(CreationPhase),
+) -> Result<Value> {
+    dispatch_with_progress(arguments, progress, &core_maintenance::no_progress)
+}
+
+/// Runs a core install or restore and reports its steps to `progress` (#60).
+pub fn dispatch_with_core_progress(
+    arguments: &[String],
+    progress: &dyn Fn(CoreUpdatePhase),
+) -> Result<Value> {
+    dispatch_with_progress(arguments, &|_| {}, progress)
+}
+
+fn dispatch_with_progress(
+    arguments: &[String],
+    progress: &dyn Fn(CreationPhase),
+    core_progress: &dyn Fn(CoreUpdatePhase),
 ) -> Result<Value> {
     let [workspace, verb, args @ ..] = arguments else {
         return Err("Usage: ihctl WORKSPACE ACTION ...".into());
@@ -2663,6 +2672,12 @@ pub fn dispatch_with_creation_progress(
         return Err("UnsupportedWorkspace".into());
     }
     if let Some(result) = global_java::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = creation_defaults::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = cache_cleanup::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = test_admins::dispatch(&root, verb, args) {
@@ -2725,7 +2740,18 @@ pub fn dispatch_with_creation_progress(
     }
     if verb == "core-install-latest" {
         let [name, request, current, candidate] = args else { return Err("InvalidCoreArguments".into()); };
-        return core_source::install_latest(&root, name, request, current, candidate);
+        return core_source::install_latest(&root, name, request, current, candidate, core_progress);
+    }
+    if verb == "core-velocity-versions" {
+        let [name] = args else { return Err("InvalidCoreArguments".into()); };
+        return core_source::velocity_versions(&root, name);
+    }
+    if verb == "core-velocity-target" {
+        let [name, version] = args else { return Err("InvalidCoreArguments".into()); };
+        return core_source::velocity_target(&root, name, version);
+    }
+    if verb == "core-install-version" {
+        return core_source::install_version(&root, args, core_progress);
     }
     if verb == "core-catalog-versions" {
         let [family] = args else { return Err("InvalidCoreArguments".into()); };
@@ -2915,7 +2941,7 @@ pub fn dispatch_with_creation_progress(
             }
         }
     }
-    if let Some(result) = core_maintenance::dispatch(&root, verb, args) {
+    if let Some(result) = core_maintenance::dispatch_with_progress(&root, verb, args, core_progress) {
         return result;
     }
     if let Some(result) = server_removal::dispatch(&root, verb, args) {

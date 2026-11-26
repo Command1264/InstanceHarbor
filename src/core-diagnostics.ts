@@ -6,7 +6,7 @@ type Diagnostics = {
   instance: string
   installed?: Profile | null
   installedSha256?: string | null
-  candidate?: { build: string; sha256: string }
+  candidate?: { build: string; sha256?: string; md5?: string }
   checkedAt?: number
   pendingRequest?: string
   lastRequest?: string
@@ -21,6 +21,9 @@ function profilePart(value?: string): string | undefined {
 }
 function digest(value?: string | null): string | undefined {
   return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value) ? value.toLowerCase() : undefined
+}
+function md5(value?: string | null): string | undefined {
+  return typeof value === 'string' && /^[a-f0-9]{32}$/i.test(value) ? value.toLowerCase() : undefined
 }
 
 export function coreDiagnosticText(value: Diagnostics): string {
@@ -39,6 +42,7 @@ export function coreDiagnosticText(value: Diagnostics): string {
     candidate: value.candidate ? {
       build: profilePart(value.candidate.build),
       sha256: digest(value.candidate.sha256),
+      md5: md5(value.candidate.md5),
     } : undefined,
     checkedAt: checkedAt && Number.isFinite(checkedAt.getTime()) ? checkedAt.toISOString() : undefined,
     pendingRequest: token(value.pendingRequest),

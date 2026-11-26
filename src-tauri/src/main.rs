@@ -10,6 +10,7 @@ mod system_accent;
 #[cfg(windows)]
 mod webview_runtime;
 mod startup_prefetch;
+mod startup_theme;
 mod startup_timing;
 #[cfg(windows)]
 mod exit_watchdog;
@@ -22,6 +23,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static IPC_ID: AtomicU64 = AtomicU64::new(1);
 static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
 static PREFETCH: startup_prefetch::Prefetch = startup_prefetch::Prefetch::new();
+static STARTUP_THEME: startup_theme::Slot = startup_theme::Slot::new();
+fn background_color(dark: bool) -> tauri::window::Color {
+    let (red, green, blue) = startup_theme::background(dark);
+    tauri::window::Color(red, green, blue, 255)
+}
 fn diagnostic_write(result: Result<(), String>) {
     if let Err(error) = result {
         eprintln!("GUI diagnostic write failed: {error}")
@@ -201,10 +207,14 @@ fn present_window_inner(window: tauri::WebviewWindow, theme: String) -> Result<(
     };
     window.set_theme(theme).map_err(|error| error.to_string())?;
     #[cfg(windows)]
-    let caption = caption_color(
-        &window,
-        window.theme().map_err(|error| error.to_string())? == tauri::Theme::Dark,
-    );
+    let dark = window.theme().map_err(|error| error.to_string())? == tauri::Theme::Dark;
+    #[cfg(windows)]
+    let caption = caption_color(&window, dark);
+    // Keep what WebView2 shows before it draws in step with the page (see startup_theme).
+    #[cfg(windows)]
+    if let Err(error) = window.set_background_color(Some(background_color(dark))) {
+        eprintln!("Could not set the window background color: {error}");
+    }
     // Only the first call reveals the window. Later theme refreshes must not pull a
     // window the user hid in the notification area back onto the screen.
     if !WINDOW_REVEALED.load(Ordering::SeqCst)
@@ -240,13 +250,31 @@ async fn create_with_progress(
     draft: String,
     progress: tauri::ipc::Channel<instanceharbor::CreationPhase>,
 ) -> Result<serde_json::Value, String> {
-    manage_recorded(vec!["gui-create-confirm".into(), work, draft], Some("manual".into()), Some(progress)).await
+    manage_recorded(vec!["gui-create-confirm".into(), work, draft], Some("manual".into()), Some(Progress::Creation(progress))).await
+}
+
+/// A core install or restore whose steps reach the GUI as they happen (#60).
+#[tauri::command]
+async fn core_maintenance_with_progress(
+    arguments: Vec<String>,
+    progress: tauri::ipc::Channel<instanceharbor::CoreUpdatePhase>,
+) -> Result<serde_json::Value, String> {
+    if !arguments.first().is_some_and(|verb| matches!(verb.as_str(), "core-install-latest" | "core-install" | "core-restore" | "core-install-version")) {
+        return Err("InvalidCoreArguments".into());
+    }
+    manage_recorded(arguments, Some("manual".into()), Some(Progress::Core(progress))).await
+}
+
+/// Where a long operation reports its steps.
+enum Progress {
+    Creation(tauri::ipc::Channel<instanceharbor::CreationPhase>),
+    Core(tauri::ipc::Channel<instanceharbor::CoreUpdatePhase>),
 }
 
 async fn manage_recorded(
     arguments: Vec<String>,
     origin: Option<String>,
-    progress: Option<tauri::ipc::Channel<instanceharbor::CreationPhase>>,
+    progress: Option<Progress>,
 ) -> Result<serde_json::Value, String> {
     if arguments.first().is_some_and(|verb| matches!(
         verb.as_str(), "instance-diagnostics" | "import-batch-preview" | "import-batch-status"
@@ -280,7 +308,7 @@ async fn manage_recorded(
 }
 async fn manage_inner(
     arguments: Vec<String>,
-    progress: Option<tauri::ipc::Channel<instanceharbor::CreationPhase>>,
+    progress: Option<Progress>,
 ) -> Result<serde_json::Value, String> {
     let root = std::env::var("IH_WORKSPACE")
         .map_err(|_| "MissingWorkspaceBinding: 未指定管理工作區。")?;
@@ -298,9 +326,14 @@ async fn manage_inner(
     }
     command.extend(arguments);
     tauri::async_runtime::spawn_blocking(move || match progress {
-        Some(channel) => instanceharbor::dispatch_with_creation_progress(&command, &|phase| {
+        Some(Progress::Creation(channel)) => instanceharbor::dispatch_with_creation_progress(&command, &|phase| {
             if let Err(error) = channel.send(phase) {
                 eprintln!("GUI creation progress delivery failed: {error}");
+            }
+        }),
+        Some(Progress::Core(channel)) => instanceharbor::dispatch_with_core_progress(&command, &|phase| {
+            if let Err(error) = channel.send(phase) {
+                eprintln!("GUI core progress delivery failed: {error}");
             }
         }),
         None => instanceharbor::dispatch(&command),
@@ -626,11 +659,28 @@ fn main() {
         Err(error)=>eprintln!("GUI diagnostics unavailable: {error}"),
     }
     startup_timing::mark("diagnostics-open");
+    // Settings may have scheduled this WebView2 folder for deletion; WebView2 has not opened it yet.
+    #[cfg(windows)]
+    if let Some(result) = instanceharbor::clear_scheduled_webview() {
+        if let Ok(log) = diagnostics::global() {
+            diagnostic_write(log.record(match &result {
+                Ok(()) => json!({"type":"webview-cache-cleared"}),
+                Err(error) => json!({"type":"webview-cache-clear-failed","error":diagnostics::safe_error(error)}),
+            }));
+        }
+        if let Err(error) = result {
+            eprintln!("Scheduled WebView2 cache clear failed: {error}");
+        }
+    }
     // The workspace is bound; read what the first screen needs while WebView2 starts.
     #[cfg(windows)]
     for verb in startup_prefetch::VERBS {
         PREFETCH.start(verb, move || {
-            tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None))
+            let reply = tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None));
+            if verb == "preferences-snapshot" {
+                STARTUP_THEME.publish(startup_theme::preference_of(&reply));
+            }
+            reply
         });
     }
     let mut context = tauri::generate_context!();
@@ -657,6 +707,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             manage,
             create_with_progress,
+            core_maintenance_with_progress,
             recovery_backup,
             present_window,
             system_accent_color,
@@ -672,7 +723,11 @@ fn main() {
             startup_timing::mark("setup");
             #[cfg(windows)]
             for config in &main_window {
-                let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
+                // WebView2 shows this color until it draws the page (see startup_theme).
+                let dark = startup_theme::dark(STARTUP_THEME.current(), startup_theme::windows_dark);
+                startup_timing::mark("window-theme");
+                let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                    .background_color(background_color(dark));
                 let window = match workspace_binding::webview_data_directory() {
                     Some(folder) => window.data_directory(folder),
                     None => window,

@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { errorText, manage, type CoreSource } from '../manager'
+import { errorText, manage, manageCoreWithProgress, type CoreSource } from '../manager'
+import type { CoreUpdateProgress } from '../core-progress'
+import CoreUpdateProgressBar from './CoreUpdateProgressBar.vue'
+import VelocityVersionDialog from './VelocityVersionDialog.vue'
 import { formatDisplayTime, isMessageId, useAppLanguage, type TimeFormat } from '../i18n'
 import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
 import { coreBuildText, coreVersionText } from '../core-display'
@@ -15,7 +18,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 type Profile = { family: string; minecraft: string; build: string }
-type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile }[]; canWrite: boolean; reason?: string | null }
+type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile; crossVersion?: boolean }[]; canWrite: boolean; reason?: string | null }
 type Action = 'core-install-latest' | 'core-install' | 'core-restore' | 'core-reconcile'
 const dialog = ref<HTMLDialogElement>()
 const confirm = ref<HTMLDialogElement>()
@@ -28,7 +31,22 @@ const source = computed(() => {
   return snapshot?.sha256 && state.value && snapshot.sha256 !== state.value.currentSha256 ? undefined : snapshot
 })
 const candidate = computed(() => source.value?.candidate ?? state.value?.prepared)
-const prepared = computed(() => !!candidate.value && candidate.value.sha256 === state.value?.prepared?.sha256)
+const prepared = computed(() => !!candidate.value?.sha256 && candidate.value.sha256 === state.value?.prepared?.sha256)
+// A Purpur candidate is named by the official MD5 of its build (#41).
+const candidateMd5 = computed(() => {
+  const value = candidate.value
+  return value && 'md5' in value ? value.md5 : undefined
+})
+// A verified Velocity proxy can also move to another Velocity version (#41).
+const velocityVersion = ref<InstanceType<typeof VelocityVersionDialog>>()
+const velocity = computed(() => state.value?.installed?.family?.toUpperCase() === 'VELOCITY')
+async function versionChanged() {
+  manualSource.value = undefined
+  await read()
+  emit('changed')
+}
+const purpurCheck = computed(() => source.value?.verification === 'purpurMd5'
+  || [state.value?.installed?.family, state.value?.identified?.family].some(family => family?.toUpperCase() === 'PURPUR'))
 const path = ref('')
 // An unverified core shows the version its JAR states, marked as an offline reading.
 const currentVersion = computed(() => {
@@ -43,6 +61,9 @@ const error = ref('')
 const checking = ref(false)
 const busy = ref(false)
 const confirming = ref(false)
+// The step the running install or restore reported last (#60).
+const step = ref<CoreUpdateProgress>()
+const reused = ref(false)
 const { locale, t } = useAppLanguage()
 const lastRequest = ref<string>()
 const copyFeedback = ref<'copied'|'failed'>()
@@ -112,7 +133,7 @@ const blockedReasonText = computed(() => {
 const blockedText = computed(() => spigot.value ? t('core.source.spigot.buildTools')
   : primaryEnabled.value || !blockedReasonText.value ? ''
   : t('components.coreMaintenance.blockedReason', { reason: blockedReasonText.value }))
-const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string }>()
+const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean; crossVersion?: boolean }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
   catch (failure) { if (!quiet && !error.value) error.value = errorText(failure) }
@@ -153,7 +174,9 @@ async function check() {
 function ask(action: Action, backup?: string) {
   if (busy.value) return
   choice.value = {action,backup,current:state.value?.currentSha256,
-    candidateHash:candidate.value?.sha256,candidateBuild:candidate.value?.build}
+    crossVersion:state.value?.backups.find(item=>item.id===backup)?.crossVersion===true,
+    candidateHash:candidate.value?.sha256 ?? candidateMd5.value,candidateBuild:candidate.value?.build,
+    md5:!candidate.value?.sha256 && !!candidateMd5.value}
   confirm.value?.showModal()
 }
 function primaryAction() {
@@ -186,8 +209,15 @@ async function apply() {
     progress.value?.showModal()
     progress.value?.focus()
   }, 250)
+  step.value = undefined
+  reused.value = false
   try {
-    const outcome = await manage<{ outcome: string }>(args)
+    const outcome = selected.action === 'core-reconcile'
+      ? await manage<{ outcome: string }>(args)
+      : await manageCoreWithProgress<{ outcome: string }>(args, update => {
+        step.value = update
+        if (update.phase === 'reusing') reused.value = true
+      })
     result.value = outcome.outcome === 'applied' ? t('components.coreMaintenance.verified') : t('components.coreMaintenance.notReplaced')
     manualSource.value = undefined
     emit('changed')
@@ -199,6 +229,7 @@ async function apply() {
     progress.value?.close()
     confirming.value = false
     busy.value = false
+    step.value = undefined
   }
 }
 function close() { if (!busy.value) { dialog.value?.close(); emit('close') } }
@@ -215,6 +246,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       <template v-if="spigot && latestMinecraftText">
         <dt>{{ t('core.source.spigot.latestMinecraft') }}</dt><dd>{{ latestMinecraftText }}</dd>
       </template>
+      <template v-if="purpurCheck"><dt>{{ t('components.coreMaintenance.verification') }}</dt><dd>{{ t('components.coreMaintenance.purpurMd5') }}</dd></template>
     </dl>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="blockedText" id="core-update-blocked" class="hint" role="status">{{ blockedText }}</p>
@@ -226,8 +258,10 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       <OperationButton :label="t('components.coreMaintenance.check')" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
       <button @click="diagnostics?.showModal()">{{ t('components.coreMaintenance.diagnostics') }}</button>
       <button autofocus @click="close">{{ t('action.close') }}</button>
+      <button v-if="velocity" class="core-dialog-wide" :disabled="!state?.canWrite || busy" @click="velocityVersion?.open()">{{ t('components.velocityVersion.open') }}</button>
     </div>
   </dialog>
+  <VelocityVersionDialog ref="velocityVersion" :name="name" @changed="versionChanged" />
   <dialog ref="diagnostics" aria-labelledby="core-diagnostics-title">
       <h2 id="core-diagnostics-title">{{ t('components.coreMaintenance.diagnostics') }}</h2>
       <p v-if="blockedReasonText" class="hint">{{ blockedReasonText }}</p>
@@ -243,7 +277,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       </div>
       <div class="field"><label for="local-core-sha256">SHA-256</label><input id="local-core-sha256" v-model.trim="sha" name="local-core-sha256" autocomplete="off" spellcheck="false"></div>
       <button :disabled="!state?.canWrite || !path || !/^[0-9a-f]{64}$/i.test(sha)" @click="ask('core-install')">{{ t('components.coreMaintenance.update') }}</button>
-      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">{{ coreBuildText(backup.profile.build) }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
+      <ul v-if="state?.backups.length"><li v-for="backup in state.backups" :key="backup.id">{{ backup.crossVersion ? coreVersionText(backup.profile) : coreBuildText(backup.profile.build) }} <button :disabled="!state.canWrite" @click="ask('core-restore',backup.id)">{{ t('components.coreMaintenance.restore') }}</button></li></ul>
       <details v-if="state" class="detail-section">
         <summary>{{ t('core.diagnostics.show') }}</summary>
         <pre class="selectable" tabindex="0" :aria-label="t('core.diagnostics.show')" translate="no">{{ diagnosticText }}</pre>
@@ -259,6 +293,8 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   <dialog ref="confirm" class="compact" aria-labelledby="core-confirm-title" @cancel="busy && $event.preventDefault()">
     <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?t('components.coreMaintenance.restoreTitle'):choice?.action==='core-reconcile'?t('components.coreMaintenance.reconcileTitle'):t('components.coreMaintenance.update') }}</h2>
     <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">{{ t('components.coreMaintenance.targetBuild', { build: choice.candidateBuild }) }}</p>
+    <p v-if="choice?.action==='core-install-latest' && choice.md5">{{ t('components.coreMaintenance.purpurMd5Note') }}</p>
+    <p v-if="choice?.action==='core-restore' && choice.crossVersion">{{ t('components.velocityVersion.restoreNote') }}</p>
     <p>{{ t('components.coreMaintenance.backupNote') }}</p>
     <div class="dialog-actions">
       <button autofocus :disabled="busy" @click="confirm?.close()">{{ t('action.cancel') }}</button>
@@ -266,10 +302,12 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
     </div>
   </dialog>
   <dialog ref="progress" class="compact" tabindex="-1" aria-labelledby="core-progress-title" @cancel.prevent @keydown.esc.stop.prevent>
-    <h2 id="core-progress-title">{{ t('components.coreMaintenance.progressTitle') }}</h2><p>{{ t('components.coreMaintenance.progressBody') }}</p><progress :aria-label="t('components.coreMaintenance.progressLabel')"></progress>
+    <h2 id="core-progress-title">{{ t('components.coreMaintenance.progressTitle') }}</h2><p>{{ t('components.coreMaintenance.progressBody') }}</p>
+    <CoreUpdateProgressBar :progress="step" :reused="reused" fallback="components.coreMaintenance.progressLabel" />
   </dialog>
 </template>
 <style scoped>
 .core-path-editor { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .5rem; }
 .core-dialog-actions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .5rem; }
+.core-dialog-wide { grid-column: 1 / -1; }
 </style>

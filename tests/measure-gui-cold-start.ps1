@@ -80,7 +80,8 @@ for ($run = 1; $run -le $Runs; $run++) {
         while (!$startup -and [DateTime]::UtcNow -lt $deadline) {
             Start-Sleep -Milliseconds 200
             if ($process.HasExited) { throw "GUI exited with code $($process.ExitCode) before reporting its startup." }
-            $log = Get-ChildItem -LiteralPath $logs -Filter "gui-$($process.Id)-*.jsonl" -ErrorAction SilentlyContinue |
+            # gui-<date>-<time>-<pid>-<sequence>.jsonl (diagnostics.rs)
+            $log = Get-ChildItem -LiteralPath $logs -Filter "gui-*-$($process.Id)-*.jsonl" -ErrorAction SilentlyContinue |
                 Where-Object FullName -notin $before | Select-Object -First 1
             if ($log) { $startup = Read-Startup $log.FullName }
         }

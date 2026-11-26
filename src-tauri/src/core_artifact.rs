@@ -406,10 +406,10 @@ pub(super) fn assert_unused(file: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
-    fn jar_with(path: &Path, entries: &[(&str, &[u8])]) {
+    pub(crate) fn jar_with(path: &Path, entries: &[(&str, &[u8])]) {
         let mut out = Vec::new();
         let mut central = Vec::new();
         for (name, data) in entries {

@@ -3,6 +3,7 @@ import { tr, type LanguagePreference, type MessageId, type TimeFormat } from './
 import type { SelectionColorPreference } from './theme'
 import type { ConsoleChoice } from './console-tier.ts'
 import { javaStartErrorId } from './java-start-error.ts'
+import type { CoreUpdateProgress } from './core-progress.ts'
 import type { RegistryIssue, StateIssue } from './registry-issues.ts'
 export { consoleFallbackReason, consoleSummary, type ConsoleChoice, type ConsolePlan } from './console-tier.ts'
 
@@ -53,7 +54,7 @@ export interface CoreBatch {
   action: 'core-batch-install'
   createdAt: number
   state: 'Running' | 'Completed' | 'CompletedWithIssues'
-  items: { name: string; phase: CoreBatchPhase; reason: string | null }[]
+  items: { name: string; phase: CoreBatchPhase; reason: string | null; progress?: CoreUpdateProgress; reused?: boolean }[]
 }
 export function canCancelCoreBatchItem(item: CoreBatch['items'][number]): boolean {
   return item.phase === 'Queued' || item.phase === 'Preparing'
@@ -102,6 +103,17 @@ export async function confirmCreation(work: string, draft: string, onProgress: (
   const progress = new Channel<CreationProgress>(onProgress)
   try {
     await invoke('create_with_progress', { work, draft, progress })
+  } finally {
+    progress.onmessage = () => {}
+  }
+}
+
+/** A core install or restore that reports each step to `onProgress` (#60). */
+export async function manageCoreWithProgress<T>(arguments_: string[], onProgress: (update: CoreUpdateProgress) => void): Promise<T> {
+  if (!nativeBridge) throw new Error(tr('manager.error.noNativeBridge'))
+  const progress = new Channel<CoreUpdateProgress>(onProgress)
+  try {
+    return await invoke<T>('core_maintenance_with_progress', { arguments: arguments_, progress })
   } finally {
     progress.onmessage = () => {}
   }
@@ -253,6 +265,8 @@ export function errorText(error: unknown) {
   if (raw.includes('JavaScanDirectoryConflict')) return tr('manager.error.javaScanDirectoryConflict')
   if (raw.includes('AutoJavaUnavailable')) return tr('manager.error.autoJavaUnavailable')
   if (raw.includes('GlobalJavaConflict')) return tr('manager.error.globalJavaConflict')
+  if (raw.includes('CreationDefaultsConflict')) return tr('manager.error.creationDefaultsConflict')
+  if (raw.includes('InvalidCreationDefaults')) return tr('manager.error.invalidCreationDefaults')
   if (raw.includes('GlobalJavaIncompatible')) return tr('manager.error.globalJavaIncompatible')
   if (raw.includes('GlobalJavaUnavailable') || raw.includes('InvalidJavaPath')) return tr('manager.error.globalJavaUnavailable')
   if (raw.includes('JavaEnvironmentOverride')) return tr('manager.error.javaEnvironmentOverride')
@@ -278,7 +292,10 @@ export type CoreSource = {
   sha256?: string
   registrationRevision?: string
   remoteBuild?: string
-  candidate?: { build: string; sha256: string }
+  /** A Purpur candidate has only the official MD5 until it is downloaded (#41). */
+  candidate?: { build: string; sha256?: string; md5?: string }
+  /** `purpurMd5` when the source publishes MD5 only. */
+  verification?: string
   reason?: string
   checkedAt?: number
   /** Spigot (#75): the Jenkins build the JAR states, when it states one. */
