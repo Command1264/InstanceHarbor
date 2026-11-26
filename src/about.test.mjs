@@ -43,7 +43,7 @@ test('the About tab has no save or restore buttons', () => {
   const page = read('./SettingsPage.vue')
   const footer = page.match(/<div[^>]*class="settings-footer"[^>]*>/)
   assert.ok(footer, 'SettingsPage must render the settings footer')
-  assert.match(footer[0], /v-if="tab!=='about'"/)
+  assert.match(footer[0], /v-if="tab!=='about'[ "&]/)
 })
 
 test('the product title names the development workspace like the backend does', () => {
