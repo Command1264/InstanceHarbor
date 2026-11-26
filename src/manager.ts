@@ -298,5 +298,8 @@ export type CoreSource = {
   verification?: string
   reason?: string
   checkedAt?: number
-  nativeVersion?: { status: string; behind?: number }
+  /** Spigot (#75): the Jenkins build the JAR states, when it states one. */
+  localBuild?: string | null
+  /** Spigot (#75): whether `latest.json` is this version line, by its build. */
+  latestMinecraft?: { status: 'Same' | 'Newer' | 'Unknown'; build?: string; reason?: string }
 }

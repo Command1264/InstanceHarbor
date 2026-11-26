@@ -2,7 +2,7 @@
 import { tr } from './i18n.ts'
 
 /** Fixed link names the backend opens. The page never sends a URL or path. */
-export type AboutLink = 'repository' | 'issues' | 'license' | 'notices'
+export type AboutLink = 'repository' | 'issues' | 'buildtools' | 'license' | 'notices'
 export interface AboutInfo {
   version: string
   /** Seven hex digits, `-dirty` when built with uncommitted changes, or `unknown` without Git. */

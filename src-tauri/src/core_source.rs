@@ -17,14 +17,16 @@ const DEFAULT_CONTACT: &str = "https://github.com/Command1264/InstanceHarbor";
 const FILL_PROJECTS: &str = "https://fill.papermc.io/v3/projects";
 #[path = "core_source/creation_assets.rs"]
 mod creation_assets;
+#[path = "core_source/spigot_revision.rs"]
+mod spigot_revision;
+use spigot_revision::SpigotRevision;
 
 /// The official Purpur API. v2 publishes MD5 only (#41).
 const PURPUR_API: &str = "https://api.purpurmc.org/v2/purpur";
+/// The public directory BuildTools reads: one `<Minecraft version>.json` per version
+/// line and `latest.json` for the newest one (#75).
 const SPIGOT_VERSIONS: &str = "https://hub.spigotmc.org/versions";
-const SPIGOT_COMMITS: &str = "https://hub.spigotmc.org/stash/rest/api/1.0/projects/SPIGOT/repos";
-const SPIGOT_188_HASH: &str = "6ed6046687ce9255228fe7bd31e097da49beff2a0c577e7be56d14f09753239c";
-const SPIGOT_REF: &str = "3c60ece1480c9b686b06f33daa6ca23c8883e9f2";
-const CRAFTBUKKIT_REF: &str = "741a1bdf3db8c4d5237407df2872d9857427bfaf";
+const SPIGOT_AGENT: &str = "InstanceHarbor/2.0";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct SourceKey {
@@ -57,7 +59,21 @@ enum Release {
 struct Metadata {
     url: String,
     release: Result<Release>,
-    native_distance: Option<Result<u64>>,
+}
+
+/// What a Spigot row is compared with besides its own version file: the commits
+/// read from the JAR, and `latest.json`, fetched once per check.
+struct SpigotLocal<'a> {
+    revision: &'a Result<SpigotRevision>,
+    latest: Option<&'a Result<Release>>,
+}
+
+/// What a check reads from the local JAR beyond its SHA-256.
+enum Local<'a> {
+    /// Purpur: the MD5 its API publishes (#41).
+    Md5(&'a str),
+    /// Spigot: the revisions the JAR states (#75).
+    Spigot(SpigotLocal<'a>),
 }
 
 static SOURCE_WORKERS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
@@ -160,6 +176,30 @@ fn fetch_json(url: &str, user_agent: &str) -> Result<Value> {
         return Err("CoreSourceHttpError".into());
     }
     serde_json::from_slice(&body).map_err(|_| "CoreSourceInvalidJson".into())
+}
+
+/// SpigotMC refuses some automated clients, so a refusal and a missing version
+/// file are told apart from other HTTP failures (#75). No retries.
+fn fetch_spigot_json(url: &str, user_agent: &str) -> Result<Value> {
+    let (code, body) = fetch_status(url, user_agent, false)?;
+    spigot_response(code, &body)
+}
+
+fn spigot_response(code: u16, body: &[u8]) -> Result<Value> {
+    match code {
+        200 => serde_json::from_slice(body).map_err(|_| "CoreSourceInvalidJson".into()),
+        404 => Err("CoreSourceSpigotVersionMissing".into()),
+        401 | 403 | 429 => Err("CoreSourceRefused".into()),
+        _ => Err("CoreSourceHttpError".into()),
+    }
+}
+
+fn fetch_source_json(url: &str, user_agent: &str) -> Result<Value> {
+    if url.starts_with(SPIGOT_VERSIONS) {
+        fetch_spigot_json(url, user_agent)
+    } else {
+        fetch_json(url, user_agent)
+    }
 }
 
 /// One public JSON lookup that reports the HTTP status instead of failing on
@@ -349,16 +389,8 @@ fn purpur_url(version: &str, build: u64) -> String {
 fn spigot_release(value: Value) -> Result<Release> {
     let build = value["name"]
         .as_str()
+        .filter(|name| spigot_revision::build_name(name))
         .ok_or("CoreSourceInvalidSpigotRefs")?;
-    let number = build
-        .strip_suffix(|character: char| character.is_ascii_alphabetic())
-        .unwrap_or(build);
-    if number.is_empty()
-        || !number.bytes().all(|byte| byte.is_ascii_digit())
-        || number.parse::<u64>().is_err()
-    {
-        return Err("CoreSourceInvalidSpigotRefs".into());
-    }
     let reference = |key: &str| -> Result<&str> {
         value["refs"][key]
             .as_str()
@@ -374,27 +406,6 @@ fn spigot_release(value: Value) -> Result<Release> {
         spigot_ref: spigot,
         craftbukkit_ref: craft,
     })
-}
-
-fn native_spigot(fetch: &impl Fn(&str, &str) -> Result<Value>) -> Result<u64> {
-    let count = |project, reference: &str| -> Result<u64> {
-        let url = format!(
-            "{SPIGOT_COMMITS}/{project}/commits?since={}&withCounts=true",
-            &reference[..7]
-        );
-        let result = fetch(&url, "InstanceHarbor/2.0")?;
-        result["totalCount"]
-            .as_u64()
-            .filter(|count| *count <= i32::MAX as u64)
-            .ok_or_else(|| "CoreSourceInvalidSpigotDistance".into())
-    };
-    let craft = count("craftbukkit", CRAFTBUKKIT_REF);
-    let spigot = count("spigot", SPIGOT_REF);
-    let sum = craft? + spigot?;
-    if sum > i32::MAX as u64 {
-        return Err("CoreSourceInvalidSpigotDistance".into());
-    }
-    Ok(sum)
 }
 
 fn group_url(key: &SourceKey) -> String {
@@ -420,17 +431,12 @@ fn fetch_group(
             return Metadata {
                 url,
                 release: Err(error),
-                native_distance: None,
             }
         }
     };
     if key.family == "SPIGOT" {
-        let release = fetch(&url, "InstanceHarbor/2.0").and_then(spigot_release);
-        return Metadata {
-            url,
-            release,
-            native_distance: (key.version == "1.8.8").then(|| native_spigot(fetch)),
-        };
+        let release = fetch(&url, SPIGOT_AGENT).and_then(spigot_release);
+        return Metadata { url, release };
     }
     let release = match paper_agent {
         Ok(agent) if key.family == "PURPUR" => fetch(&url, agent)
@@ -443,11 +449,12 @@ fn fetch_group(
         }
         Err(error) => Err(error.into()),
     };
-    Metadata {
-        url,
-        release,
-        native_distance: None,
-    }
+    Metadata { url, release }
+}
+
+fn spigot_latest(fetch: &impl Fn(&str, &str) -> Result<Value>) -> Result<Release> {
+    let _slot = SourceSlot::acquire()?;
+    fetch(&format!("{SPIGOT_VERSIONS}/latest.json"), SPIGOT_AGENT).and_then(spigot_release)
 }
 
 fn creation_project(family: &str) -> Result<&'static str> {
@@ -606,8 +613,22 @@ fn unknown(name: &str, reason: &str) -> Value {
     json!({"name":name,"status":"Unknown","reason":reason})
 }
 
-/// `local_md5` is the MD5 of the local JAR, read only for Purpur.
-fn result(name: &str, profile: &CoreProfile, metadata: &Metadata, local_md5: Option<&str>) -> Value {
+/// Whether Spigot's newest version line is this one. `latest.json` names only a
+/// Jenkins build, so a newer line is reported by its build, not a version name.
+fn latest_minecraft(latest: &Result<Release>, spigot: &str, craftbukkit: &str) -> Value {
+    match latest {
+        Ok(Release::Spigot { build, spigot_ref, craftbukkit_ref }) => {
+            let same = spigot_ref == spigot && craftbukkit_ref == craftbukkit;
+            json!({"status": if same { "Same" } else { "Newer" }, "build": build})
+        }
+        Ok(Release::Paper(_) | Release::Purpur(_)) => json!({"status":"Unknown","reason":"CoreSourceInvalidSpigotRefs"}),
+        Err(error) => json!({"status":"Unknown","reason":error}),
+    }
+}
+
+fn result(name: &str, profile: &CoreProfile, metadata: &Metadata, local: Option<&Local>) -> Value {
+    let local_md5 = match local { Some(Local::Md5(md5)) => Some(*md5), _ => None };
+    let spigot = match local { Some(Local::Spigot(spigot)) => Some(spigot), _ => None };
     let mut row = json!({"name":name,"family":profile.family,"minecraft":profile.minecraft,
         "build":profile.build,"sha256":profile.sha256,"source":metadata.url,"status":"Unknown","reason":null});
     match &metadata.release {
@@ -642,23 +663,22 @@ fn result(name: &str, profile: &CoreProfile, metadata: &Metadata, local_md5: Opt
         }
         Ok(Release::Spigot { build, spigot_ref, craftbukkit_ref }) => {
             row["remoteBuild"] = json!(build);
-            // A BuildTools version name alone does not attest to the contents of
-            // a locally built Spigot JAR. Only this exact pinned JAR has verified
-            // source revisions. Other pinned builds remain unknown until their
-            // own source references can be independently established.
-            if profile.minecraft == "1.8.8" && profile.sha256 == SPIGOT_188_HASH {
-                let release_match = profile.build == *build
-                    && spigot_ref == SPIGOT_REF
-                    && craftbukkit_ref == CRAFTBUKKIT_REF;
-                row["releaseMatch"] = json!(release_match);
-                match &metadata.native_distance {
-                    Some(Ok(0)) if release_match => row["status"] = json!("Current"),
-                    Some(Ok(0)) => row["reason"] = json!("CoreSourceSpigotRevisionsDiffer"),
-                    Some(Ok(_)) => row["status"] = json!("NativeBehind"),
-                    Some(Err(_)) | None => row["reason"] = json!("CoreSourceSpigotNativeCheckFailed"),
+            if let Some(latest) = spigot.and_then(|local| local.latest) {
+                row["latestMinecraft"] = latest_minecraft(latest, spigot_ref, craftbukkit_ref);
+            }
+            // The JAR states the first seven digits of the commits it was built
+            // from; both must match this version line's newest build (#75).
+            match spigot.map(|local| local.revision) {
+                Some(Ok(local)) => {
+                    row["localBuild"] = json!(local.build);
+                    row["localRevision"] =
+                        json!({"spigot":local.spigot,"craftBukkit":local.craftbukkit});
+                    let current = spigot_ref.get(..7) == Some(local.spigot.as_str())
+                        && craftbukkit_ref.get(..7) == Some(local.craftbukkit.as_str());
+                    row["status"] = json!(if current { "Current" } else { "BuildAvailable" });
                 }
-            } else {
-                row["reason"] = json!("CoreSourceSpigotLocalRefsUnverified");
+                Some(Err(error)) => row["reason"] = json!(error),
+                None => row["reason"] = json!(spigot_revision::UNREADABLE),
             }
         }
         Ok(Release::Paper(builds)) => {
@@ -702,13 +722,6 @@ fn result(name: &str, profile: &CoreProfile, metadata: &Metadata, local_md5: Opt
             }
         }
     }
-    if let Some(distance) = &metadata.native_distance {
-        row["nativeVersion"] = match distance {
-            Ok(0) => json!({"status":"Current","behind":0}),
-            Ok(count) => json!({"status":"Behind","behind":count}),
-            Err(error) => json!({"status":"Unknown","behind":null,"reason":error}),
-        };
-    }
     row
 }
 
@@ -737,10 +750,23 @@ fn groups(
         metadata.entry(key.clone()).or_insert_with(|| Metadata {
             url: group_url(&key),
             release: Err("CoreSourceWorkerFailed".into()),
-            native_distance: None,
         });
     }
     metadata
+}
+
+/// Spigot has no official binary to match by hash, so an unlisted Spigot core is
+/// compared by what its JAR states (#75). It never becomes an install target.
+fn spigot_profile(jar: &Path, sha256: String) -> Option<CoreProfile> {
+    let identity = core_identity::read_identity(jar).ok().flatten()?;
+    (identity.family == "Spigot").then(|| CoreProfile {
+        family: "SPIGOT".into(),
+        minecraft: identity.minecraft_version,
+        build: identity.build,
+        sha256,
+        unverified: true,
+        java: None,
+    })
 }
 
 pub(super) fn check(root: &Path, names: &[String]) -> Result<Value> {
@@ -768,22 +794,28 @@ fn check_with_agent(
             let jar = core_artifact::jar(&instance_path(root, name)?, &config);
             no_redirect(&jar)?;
             let hash = content_revision::file_revision(&jar)?;
-            // An unverified Purpur is checked by the official MD5 of its JAR (#41).
+            // An unverified Purpur is checked by the official MD5 of its JAR (#41),
+            // an unlisted Spigot by the revisions its JAR states (#75).
             let profile = core_maintenance::trusted_profile(&config, hash.clone())
                 .or_else(|| core_maintenance::purpur_identity(&config, &jar, &hash))
+                .or_else(|| spigot_profile(&jar, hash.clone()))
                 .ok_or("CoreIdentityUnverified")?;
             let key = source_key(&profile).ok_or("CoreSourceUnsupported")?;
             let md5 = (profile.family == "PURPUR").then(|| content_revision::file_md5(&jar)).transpose()?;
+            let revision = (profile.family == "SPIGOT").then(|| spigot_revision::read(&jar));
             keys.insert(key.clone());
-            Ok((jar, profile, key, registration, md5))
+            Ok((jar, profile, key, registration, md5, revision))
         })();
         observed.push((name, identity));
     }
-    let metadata = groups(keys, paper_agent, &fetch_json);
+    let spigot = keys.iter().any(|key| key.family == "SPIGOT");
+    let metadata = groups(keys, paper_agent, &fetch_source_json);
+    // One `latest.json` read serves every Spigot row of this check.
+    let latest = spigot.then(|| spigot_latest(&fetch_source_json));
     let rows: Vec<_> = observed
         .into_iter()
         .map(|(name, identity)| {
-            let (jar, profile, key, registration, md5) = match identity {
+            let (jar, profile, key, registration, md5, revision) = match identity {
                 Ok(identity) => identity,
                 Err(error) => {
                     return unknown(
@@ -809,7 +841,12 @@ fn check_with_agent(
             if !same {
                 return unknown(name, "CoreIdentityChanged");
             }
-            let mut row = result(name, &profile, &metadata[&key], md5.as_deref());
+            let local = match (&md5, &revision) {
+                (Some(md5), _) => Some(Local::Md5(md5)),
+                (_, Some(revision)) => Some(Local::Spigot(SpigotLocal { revision, latest: latest.as_ref() })),
+                _ => None,
+            };
+            let mut row = result(name, &profile, &metadata[&key], local.as_ref());
             row["registrationRevision"] = json!(registration);
             row
         })
@@ -1692,94 +1729,124 @@ mod tests {
         assert!(refused.get("candidate").is_none());
     }
 
-    #[test]
-    fn spigot_distance_is_independent_of_same_version_release() {
-        let profile = profile("SPIGOT", "1.8.8", "582b", SPIGOT_188_HASH);
+    /// `<Minecraft version>.json` as BuildTools reads it, trimmed to the fields used.
+    fn spigot_version(name: &str, spigot: &str, craftbukkit: &str) -> Value {
+        json!({"name":name,"description":format!("Jenkins build {name}"),
+            "refs":{"BuildData":"39e62795554dcf6b62e922bc061705b3dc228f88","Bukkit":"29025a7ed5789807e11158a2263316b13ed50c3b",
+                "CraftBukkit":craftbukkit,"Spigot":spigot},"toolsVersion":197,"javaVersions":[69,70]})
+    }
+
+    const SPIGOT_112: &str = "79a30d7aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CRAFT_112: &str = "f4830a1bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const SPIGOT_263: &str = "bed90fca391bc35f0dbbcdc7ce5d7bb28e533681";
+    const CRAFT_263: &str = "227878d5186a258bc57909ced9a19cd2db25acf1";
+
+    /// Compare a JAR fixture with a version file through the same path a check takes.
+    fn spigot_row(jar: &[u8], version: Result<Value>, latest: Result<Value>) -> Value {
+        let path = spigot_revision::tests::temporary(jar);
+        let profile = spigot_profile(&path, LOCAL.into()).expect("the fixture is a Spigot core");
+        let revision = spigot_revision::read(&path);
+        fs::remove_file(&path).unwrap();
         let key = source_key(&profile).unwrap();
-        let metadata = fetch_group(&key, Err("CoreSourceInvalidContact"), &|url, _| match url {
-            "https://hub.spigotmc.org/versions/1.8.8.json" => Ok(
-                json!({"name":"582b","refs":{"Spigot":SPIGOT_REF,"CraftBukkit":CRAFTBUKKIT_REF}}),
-            ),
-            url if url.ends_with("/craftbukkit/commits?since=741a1bd&withCounts=true") => {
-                Ok(json!({"totalCount":19}))
-            }
-            url if url.ends_with("/spigot/commits?since=3c60ece&withCounts=true") => {
-                Ok(json!({"totalCount":33}))
-            }
-            _ => panic!("unexpected request {url}"),
+        let expected = format!("https://hub.spigotmc.org/versions/{}.json", profile.minecraft);
+        let metadata = fetch_group(&key, Err("CoreSourceInvalidContact"), &|url, agent| {
+            assert_eq!((url, agent), (expected.as_str(), SPIGOT_AGENT));
+            version.clone()
         });
-        let row = result("old", &profile, &metadata, None);
-        assert_eq!(row["status"], "NativeBehind");
-        assert_eq!(row["releaseMatch"], true);
-        assert_eq!(row["nativeVersion"], json!({"status":"Behind","behind":52}));
-        assert!(row.get("candidate").is_none());
+        let latest = spigot_latest(&|url, _| {
+            assert_eq!(url, "https://hub.spigotmc.org/versions/latest.json");
+            latest.clone()
+        });
+        let row = result("spigot", &profile, &metadata, Some(&Local::Spigot(SpigotLocal { revision: &revision, latest: Some(&latest) })));
+        assert!(row.get("candidate").is_none(), "Spigot is never an install target");
+        row
     }
 
     #[test]
-    fn spigot_current_requires_matching_local_refs_and_zero_native_distance() {
-        let profile = profile("SPIGOT", "1.8.8", "582b", SPIGOT_188_HASH);
-        let key = source_key(&profile).unwrap();
-        let fetch = |url: &str, _: &str| {
-            if url.ends_with("/1.8.8.json") {
-                Ok(json!({"name":"582b","refs":{"Spigot":SPIGOT_REF,"CraftBukkit":CRAFTBUKKIT_REF}}))
-            } else {
-                Ok(json!({"totalCount":0}))
-            }
-        };
-        let metadata = fetch_group(&key, Err("CoreSourceInvalidContact"), &fetch);
-        assert_eq!(result("old", &profile, &metadata, None)["status"], "Current");
-        let mismatched = fetch_group(&key, Err("CoreSourceInvalidContact"), &|url, _| {
-            if url.ends_with("/1.8.8.json") {
-                Ok(json!({"name":"582b","refs":{"Spigot":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","CraftBukkit":CRAFTBUKKIT_REF}}))
-            } else {
-                Ok(json!({"totalCount":0}))
-            }
-        });
-        let row = result("old", &profile, &mismatched, None);
-        assert_eq!(row["status"], "Unknown");
-        assert_eq!(row["reason"], "CoreSourceSpigotRevisionsDiffer");
-        assert!(row.get("candidate").is_none());
-        let failed_distance = fetch_group(&key, Err("CoreSourceInvalidContact"), &|url, _: &str| {
-            if url.ends_with("/1.8.8.json") {
-                Ok(json!({"name":"582b","refs":{"Spigot":SPIGOT_REF,"CraftBukkit":CRAFTBUKKIT_REF}}))
-            } else {
-                Err("CoreSourceHttpError".into())
-            }
-        });
-        let row = result("old", &profile, &failed_distance, None);
-        assert_eq!(row["status"], "Unknown");
-        assert_eq!(row["reason"], "CoreSourceSpigotNativeCheckFailed");
-        assert_eq!(row["nativeVersion"]["reason"], "CoreSourceHttpError");
+    fn legacy_spigot_jar_is_current_newer_or_not_comparable() {
+        let jar = spigot_revision::tests::legacy_jar("git-Spigot-79a30d7-f4830a1");
+        let current = spigot_row(&jar, Ok(spigot_version("1573k", SPIGOT_112, CRAFT_112)),
+            Ok(spigot_version("4665", SPIGOT_263, CRAFT_263)));
+        assert_eq!((current["status"].as_str(), current["minecraft"].as_str()), (Some("Current"), Some("1.12.2")));
+        assert_eq!(current["remoteBuild"], "1573k");
+        assert_eq!(current["localBuild"], Value::Null);
+        assert_eq!(current["localRevision"], json!({"spigot":"79a30d7","craftBukkit":"f4830a1"}));
+        assert_eq!(current["latestMinecraft"], json!({"status":"Newer","build":"4665"}));
+
+        let newer = spigot_row(&jar, Ok(spigot_version("1574", SPIGOT_112, "0000000ccccccccccccccccccccccccccccccccc")),
+            Ok(spigot_version("4665", SPIGOT_263, CRAFT_263)));
+        assert_eq!(newer["status"], "BuildAvailable");
+        assert_eq!(newer["remoteBuild"], "1574");
+
+        let unreadable = spigot_row(&spigot_revision::tests::legacy_jar("unknown"),
+            Ok(spigot_version("1573k", SPIGOT_112, CRAFT_112)), Ok(spigot_version("4665", SPIGOT_263, CRAFT_263)));
+        assert_eq!((unreadable["status"].as_str(), unreadable["reason"].as_str()),
+            (Some("Unknown"), Some("CoreSourceSpigotRevisionUnreadable")));
     }
 
     #[test]
-    fn other_pinned_spigot_version_is_queried_but_local_refs_stay_unverified() {
+    fn bundler_spigot_jar_is_current_newer_or_not_comparable() {
+        let jar = spigot_revision::tests::bundler_jar("26.3", "4665-Spigot-bed90fc-227878d");
+        let latest = || Ok(spigot_version("4665", SPIGOT_263, CRAFT_263));
+        let current = spigot_row(&jar, latest(), latest());
+        assert_eq!((current["status"].as_str(), current["minecraft"].as_str()), (Some("Current"), Some("26.3")));
+        assert_eq!(current["localBuild"], "4665");
+        assert_eq!(current["latestMinecraft"], json!({"status":"Same","build":"4665"}));
+
+        let older = spigot_revision::tests::bundler_jar("26.3", "4663-Spigot-bed90fc-c4db4c3");
+        let newer = spigot_row(&older, latest(), latest());
+        assert_eq!(newer["status"], "BuildAvailable");
+        assert_eq!((newer["localBuild"].as_str(), newer["remoteBuild"].as_str()), (Some("4663"), Some("4665")));
+
+        // A version file that is missing or malformed is reported, not guessed.
+        let missing = spigot_row(&jar, Err("CoreSourceSpigotVersionMissing".into()), latest());
+        assert_eq!((missing["status"].as_str(), missing["reason"].as_str()),
+            (Some("Unknown"), Some("CoreSourceSpigotVersionMissing")));
+        let malformed = spigot_row(&jar, Ok(json!({"name":"4665","refs":{"Spigot":"not-a-commit"}})), latest());
+        assert_eq!(malformed["reason"], "CoreSourceInvalidSpigotRefs");
+        let unreadable = spigot_row(&spigot_revision::tests::bundler_jar("26.3", "4665-Paper-bed90fc-227878d"),
+            latest(), latest());
+        assert_eq!(unreadable["reason"], "CoreSourceSpigotRevisionUnreadable");
+    }
+
+    #[test]
+    fn spigot_source_failures_keep_their_reason() {
+        let jar = spigot_revision::tests::bundler_jar("26.3", "4665-Spigot-bed90fc-227878d");
+        for reason in ["CoreSourceRefused", "CoreSourceTimeout", "CoreSourceTransportError", "CoreSourceHttpError"] {
+            let row = spigot_row(&jar, Err(reason.into()), Err(reason.into()));
+            assert_eq!((row["status"].as_str(), row["reason"].as_str()), (Some("Unknown"), Some(reason)));
+            assert_eq!(row["latestMinecraft"], Value::Null, "no hint without the version file");
+        }
+        // `latest.json` failing alone leaves the same-line result in place.
+        let row = spigot_row(&jar, Ok(spigot_version("4665", SPIGOT_263, CRAFT_263)), Err("CoreSourceRefused".into()));
+        assert_eq!(row["status"], "Current");
+        assert_eq!(row["latestMinecraft"], json!({"status":"Unknown","reason":"CoreSourceRefused"}));
+
+        assert_eq!(spigot_response(200, br#"{"name":"1"}"#).unwrap()["name"], "1");
+        for (code, reason) in [(403, "CoreSourceRefused"), (429, "CoreSourceRefused"),
+            (404, "CoreSourceSpigotVersionMissing"), (500, "CoreSourceHttpError")] {
+            assert_eq!(spigot_response(code, b"<html>").unwrap_err(), reason, "{code}");
+        }
+        assert_eq!(spigot_response(200, b"<html>Just a moment...</html>").unwrap_err(), "CoreSourceInvalidJson");
+    }
+
+    #[test]
+    fn a_pinned_spigot_core_is_compared_by_its_jar_too() {
         let pinned = pinned_core_profile("27a348344d42ed2ba76aad6fceebb7a26365f09c9ac6eea4c0918ba83ba7e3dd".into()).unwrap();
         let key = source_key(&pinned).unwrap();
         assert_eq!(group_url(&key), "https://hub.spigotmc.org/versions/26.2.json");
-        let metadata = fetch_group(&key, Err("CoreSourceInvalidContact"), &|url, _| {
-            assert_eq!(url, "https://hub.spigotmc.org/versions/26.2.json");
-            Ok(json!({"name":"4648","refs":{"Spigot":"8db49a2b72ef138a615856934957da2978f72f08","CraftBukkit":"96ae8cd2f4f8bfcee57193455d0714f2bd4fcd1f"}}))
+        let metadata = fetch_group(&key, Err("CoreSourceInvalidContact"), &|_, _| {
+            Ok(spigot_version("4648", "8db49a2b72ef138a615856934957da2978f72f08", "96ae8cd2f4f8bfcee57193455d0714f2bd4fcd1f"))
         });
-        let row = result("new", &pinned, &metadata, None);
-        assert_eq!(row["remoteBuild"], "4648");
-        assert_eq!(row["status"], "Unknown");
-        assert_eq!(row["reason"], "CoreSourceSpigotLocalRefsUnverified");
+        let revision = spigot_revision::parse_version("4648-Spigot-8db49a2-96ae8cd").ok_or_else(|| "unparsed".to_owned());
+        let row = result("pinned", &pinned, &metadata, Some(&Local::Spigot(SpigotLocal { revision: &revision, latest: None })));
+        assert_eq!(row["status"], "Current");
+        assert!(row.get("latestMinecraft").is_none());
         assert!(row.get("candidate").is_none());
-        assert!(row.get("nativeVersion").is_none());
-        // A locally hash-bound but unpinned Spigot core may still look up its
-        // version metadata. It cannot claim source parity or an install target.
-        let unpinned = profile("SPIGOT", "1.14", "2096", LOCAL);
-        let key = source_key(&unpinned).unwrap();
-        assert_eq!(group_url(&key), "https://hub.spigotmc.org/versions/1.14.json");
-        let older_metadata = fetch_group(&key, Err("CoreSourceInvalidContact"), &|url, _: &str| {
-            assert_eq!(url, "https://hub.spigotmc.org/versions/1.14.json");
-            Ok(json!({"name":"2096","refs":{"Spigot":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","CraftBukkit":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}))
-        });
-        let row = result("unpinned", &unpinned, &older_metadata, None);
-        assert_eq!(row["status"], "Unknown");
-        assert_eq!(row["reason"], "CoreSourceSpigotLocalRefsUnverified");
-        assert!(row.get("candidate").is_none());
+        // A plain JAR that is not Spigot is not compared as one.
+        let path = spigot_revision::tests::temporary(&core_identity::zip(&["plugin.yml"]));
+        assert!(spigot_profile(&path, LOCAL.into()).is_none());
+        fs::remove_file(&path).unwrap();
     }
 
     #[test]
@@ -1875,14 +1942,14 @@ mod tests {
             assert_eq!(url, "https://api.purpurmc.org/v2/purpur/26.3?detailed=true");
             Ok(reply.clone())
         });
-        let row = result("purpur", &registered, &source, Some(&old));
+        let row = result("purpur", &registered, &source, Some(&Local::Md5(&old)));
         assert_eq!((row["status"].as_str(), row["build"].as_str(), row["verification"].as_str()),
             (Some("UpdateAvailable"), Some("2634"), Some("purpurMd5")));
         assert_eq!(row["candidate"], json!({"build":"2660","md5":new,
             "url":"https://api.purpurmc.org/v2/purpur/26.3/2660/download"}));
         assert!(row["candidate"].get("sha256").is_none(), "the SHA-256 is known only after download");
-        assert_eq!(result("purpur", &registered, &source, Some(&new))["status"], "Current");
-        let unknown = result("purpur", &registered, &source, Some(&"d".repeat(32)));
+        assert_eq!(result("purpur", &registered, &source, Some(&Local::Md5(&new)))["status"], "Current");
+        let unknown = result("purpur", &registered, &source, Some(&Local::Md5(&"d".repeat(32))));
         assert_eq!((unknown["status"].as_str(), unknown["reason"].as_str()), (Some("Unknown"), Some("CoreSourceUnverifiedLocalHash")));
         // A reply for another version or project is refused.
         assert!(purpur_builds(json!({"project":"purpur","version":"26.2","builds":{"all":[]}}), "26.3").is_err());

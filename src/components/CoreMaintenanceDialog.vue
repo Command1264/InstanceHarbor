@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { invoke } from '@tauri-apps/api/core'
 import { errorText, manage, manageCoreWithProgress, type CoreSource } from '../manager'
 import type { CoreUpdateProgress } from '../core-progress'
 import CoreUpdateProgressBar from './CoreUpdateProgressBar.vue'
 import VelocityVersionDialog from './VelocityVersionDialog.vue'
-import { formatDisplayTime, useAppLanguage, type TimeFormat } from '../i18n'
+import { formatDisplayTime, isMessageId, useAppLanguage, type TimeFormat } from '../i18n'
 import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
 import { coreBuildText, coreVersionText } from '../core-display'
 import OperationButton from './OperationButton.vue'
@@ -91,26 +92,47 @@ async function copyDiagnostics() {
 const sourceTime = computed(() => source.value?.checkedAt
   ? formatDisplayTime(source.value.checkedAt, locale.value, props.timeFormat) : t('components.coreMaintenance.notChecked'))
 function sourceStatus(value: CoreSource | undefined) {
-  if (value?.status === 'NativeBehind' && typeof value.nativeVersion?.behind === 'number') {
-    const count = new Intl.NumberFormat(locale.value).format(value.nativeVersion.behind)
-    return t('core.source.nativeBehind', { count })
+  if (value?.status === 'BuildAvailable') {
+    return value.localBuild && value.remoteBuild
+      ? t('core.source.buildAvailableBuilds', { current: value.localBuild, latest: value.remoteBuild })
+      : t('core.source.buildAvailable')
   }
   if (value?.status === 'UpdateAvailable') return t('core.source.updateAvailable')
   if (value?.status === 'Current') return t('core.source.current')
   if (value?.status === 'NoStableBuild') return t('core.source.noStableBuild')
 }
 const statusText = computed(() => (prepared.value ? t('core.source.prepared') : result.value) || sourceStatus(source.value) || t('components.coreMaintenance.notChecked'))
-const primaryEnabled = computed(() => state.value?.canWrite === true
-  && (!!candidate.value || !source.value || state.value.installed?.family==='SPIGOT'))
+function reasonText(reason: string) {
+  const id = `activity.reason.${reason}`
+  return isMessageId(id) ? t(id) : errorText(reason)
+}
+// Spigot is built locally with BuildTools, so it is only checked, never updated here (#75).
+const spigot = computed(() => (state.value?.installed ?? state.value?.identified)?.family.toUpperCase() === 'SPIGOT')
+const latestMinecraftText = computed(() => {
+  const latest = source.value?.latestMinecraft
+  if (!latest) return ''
+  if (latest.status === 'Same') return t('core.source.spigot.latestSame', { version: source.value?.minecraft ?? '' })
+  if (latest.status === 'Newer') return t('core.source.spigot.latestNewer', { build: latest.build ?? '' })
+  return t('core.source.spigot.latestUnknown', { reason: reasonText(latest.reason ?? '') })
+})
+const linkError = ref('')
+async function openBuildTools() {
+  linkError.value = ''
+  try { await invoke('open_about_link', { link: 'buildtools' }) }
+  catch (failure) { linkError.value = t('core.source.spigot.linkFailed', { reason: errorText(failure) }) }
+}
+const primaryEnabled = computed(() => !spigot.value && state.value?.canWrite === true
+  && (!!candidate.value || !source.value))
 // Why Update core is disabled, shown in the dialog itself and not only as a tooltip.
-const reasonText = computed(() => {
+const blockedReasonText = computed(() => {
   const reason = state.value?.reason
   if (!reason) return ''
   const id = coreBlockedMessage(reason)
   return id ? t(id) : errorText(reason)
 })
-const blockedText = computed(() => primaryEnabled.value || !reasonText.value ? ''
-  : t('components.coreMaintenance.blockedReason', { reason: reasonText.value }))
+const blockedText = computed(() => spigot.value ? t('core.source.spigot.buildTools')
+  : primaryEnabled.value || !blockedReasonText.value ? ''
+  : t('components.coreMaintenance.blockedReason', { reason: blockedReasonText.value }))
 const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean; crossVersion?: boolean }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
@@ -142,9 +164,7 @@ async function check() {
     }
     if (checked && checked.status !== 'Unknown') manualSource.value = {...checked,checkedAt:reply.checkedAt}
     result.value = sourceStatus(checked) ?? t('components.coreMaintenance.sourceUnavailable')
-    if (checked?.reason === 'CoreSourceSpigotLocalRefsUnverified') error.value = t('core.source.spigotRefsUnverified')
-    else if (checked?.reason === 'CoreSourceSpigotNativeCheckFailed') error.value = t('core.source.spigotNativeFailed')
-    else if (checked?.reason) error.value = errorText(checked.reason)
+    if (checked?.reason) error.value = reasonText(checked.reason)
   } catch (failure) {
     if (!dialog.value?.open || name !== props.name) return
     result.value = t('components.coreMaintenance.checkFailed')
@@ -223,13 +243,18 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
       <dt>{{ t('components.coreMaintenance.latestVersion') }}</dt><dd>{{ (source?.remoteBuild ?? candidate?.build) ? coreBuildText(source?.remoteBuild ?? candidate?.build ?? '') : t('components.coreMaintenance.notChecked') }}</dd>
       <dt>{{ t('components.coreMaintenance.checkedAt') }}</dt><dd>{{ sourceTime }}</dd>
       <dt>{{ t('components.coreMaintenance.updateStatus') }}</dt><dd role="status">{{ statusText }}</dd>
+      <template v-if="spigot && latestMinecraftText">
+        <dt>{{ t('core.source.spigot.latestMinecraft') }}</dt><dd>{{ latestMinecraftText }}</dd>
+      </template>
       <template v-if="purpurCheck"><dt>{{ t('components.coreMaintenance.verification') }}</dt><dd>{{ t('components.coreMaintenance.purpurMd5') }}</dd></template>
     </dl>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="blockedText" id="core-update-blocked" class="hint" role="status">{{ blockedText }}</p>
+    <p v-if="spigot"><button type="button" @click="openBuildTools">{{ t('core.source.spigot.buildToolsLink') }}</button></p>
+    <p v-if="linkError" class="form-error" role="alert">{{ linkError }}</p>
     <div class="core-dialog-actions">
       <button class="primary" :disabled="!primaryEnabled" :title="blockedText || undefined" :aria-describedby="blockedText ? 'core-update-blocked' : undefined"
-        @click="primaryAction">{{ candidate ? t('components.coreMaintenance.update') : t('components.coreMaintenance.chooseLocal') }}</button>
+        @click="primaryAction">{{ candidate || spigot ? t('components.coreMaintenance.update') : t('components.coreMaintenance.chooseLocal') }}</button>
       <OperationButton :label="t('components.coreMaintenance.check')" :busy-label="t('action.checkingUpdates')" :busy="checking" :disabled="busy" @click="check" />
       <button @click="diagnostics?.showModal()">{{ t('components.coreMaintenance.diagnostics') }}</button>
       <button autofocus @click="close">{{ t('action.close') }}</button>
@@ -239,7 +264,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
   <VelocityVersionDialog ref="velocityVersion" :name="name" @changed="versionChanged" />
   <dialog ref="diagnostics" aria-labelledby="core-diagnostics-title">
       <h2 id="core-diagnostics-title">{{ t('components.coreMaintenance.diagnostics') }}</h2>
-      <p v-if="reasonText" class="hint">{{ reasonText }}</p>
+      <p v-if="blockedReasonText" class="hint">{{ blockedReasonText }}</p>
       <p v-if="result" role="status">{{ result }}</p>
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
       <div class="field">
