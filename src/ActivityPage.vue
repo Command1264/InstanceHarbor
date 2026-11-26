@@ -72,7 +72,7 @@ function timeName(value?: number | null) {
     <button :disabled="!visible.length" @click="exportJobs">{{ t('activity.export') }}</button>
     <span v-if="exportRequested" role="status" class="hint">{{ t('activity.exportRequested') }}</span>
   </div>
-  <OverlayScroll class="activity-scroll" :label="t('activity.heading')"><section class="sheet activity"><p v-if="error" role="alert" class="form-error">{{ error }}</p><InitialQueryProgress v-else-if="initialLoading && !jobs.length" :label="t('activity.loading')" /><p v-else-if="loaded && !visible.length" class="empty">{{ t('activity.empty') }}</p>
+  <OverlayScroll class="activity-scroll" :label="t('activity.heading')"><section class="sheet activity" :class="{ loading: !error && initialLoading && !jobs.length }"><p v-if="error" role="alert" class="form-error">{{ error }}</p><InitialQueryProgress v-else-if="initialLoading && !jobs.length" centered :label="t('activity.loading')" /><p v-else-if="loaded && !visible.length" class="empty">{{ t('activity.empty') }}</p>
     <p v-if="batchError" role="status" class="form-error">{{ batchError }}</p>
     <article v-for="job in visible" :key="job.action+':'+job.id" class="operation-row selectable">
       <div><strong>{{ actionName(job.action) }}</strong><p v-if="!job.items" class="hint" translate="no">{{ job.instance }}</p><p class="hint">{{ timeName(job.createdAt) }}</p></div>
@@ -97,5 +97,9 @@ function timeName(value?: number | null) {
 <style scoped>
 .activity-filter { margin-block-end: .75rem; }
 .activity-scroll { flex:1; min-height:0; }
+/* While the first read runs, the sheet fills the visible scroll area so the centered
+   progress sits in the middle of the card. */
+.activity-scroll :deep(.overlay-inner) { min-height:100%; display:flex; flex-direction:column; }
+.sheet.loading { flex:1; position:relative; }
 .batch-items { padding-inline-start: 1.25rem; overflow-wrap: anywhere; }
 </style>
