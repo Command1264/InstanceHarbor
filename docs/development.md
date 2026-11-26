@@ -52,7 +52,7 @@ repository 根目錄只放專案設定、Vite 入口（`index.html`、`console.h
 | `verify-core-prefetch.ps1` | 核心檢查更新、安裝最新版與還原 | Java、Paper JAR、Mojang 依賴；`-Contact` 是查詢官方 API 時附上的聯絡資訊，會連線到 PaperMC |
 | `verify-world-live.ps1` | 綁定目前 run 的即時世界變更 | Paper 26.3 或 Folia 26.1.2（`-Profile`）、Mojang 依賴、Java |
 | `verify-batch-import.ps1 -ManagementFolders` | 新增管理資料夾：原生資料夾選擇器、預覽、回條與逐列導覽 | Java、Paper、Mojang、Velocity 與 Paper 依賴；呼叫同資料夾的 `verify-batch-import-window.mjs` 與 `verify-management-folder-picker.ps1`。不加 `-ManagementFolders` 的模式操作已移除的批次匯入對話框，目前無法通過 |
-| `verify-native-console.ps1 -Mode Fixture` | 原生後台視窗（xterm）的顯示與輸入；先核對 `-Runtime` 的 ConPTY 雜湊 | 證據資料夾必須是 `.evidence/native-console-<id>`；呼叫 `verify-resident-manager.ps1 -PrepareOnly` 與 `verify-native-console-window.mjs`。`-Mode Paper` 依賴已不存在的 `verify-resident-paper.ps1`，目前無法使用 |
+| `verify-native-console.ps1 -Mode Fixture` | 原生後台視窗（xterm）的顯示與輸入；先核對 `-Runtime` 的 ConPTY 雜湊 | 證據資料夾必須是 `.evidence/native-console-<id>`；呼叫 `verify-resident-manager.ps1 -PrepareOnly` 與 `verify-native-console-window.mjs`。`-Mode Paper` 依賴已不存在的 `verify-resident-paper.ps1`，目前無法使用。已知問題：fixture 輸出 `Done` 後狀態沒有轉為 Listening，腳本在等待 150 秒後以 `ConPTY server not ready` 失敗 |
 | `verify-resident-manager.ps1` | 常駐 Manager、批次作業與故障注入（`-Fault`、`-MissingReceipt`、`-BatchLifecycle`） | 以 `tests/controlled-server.rs` 編譯測試替身，不需要伺服器 JAR；`-BatchLifecycle` 載入同資料夾的 `verify-batch-lifecycle.ps1` |
 | `verify-resident-batch-window.mjs` | GUI 的全部操作、多選重新啟動與重開後的工作紀錄 | 先執行 `verify-resident-manager.ps1 -PrepareOnly -Evidence <資料夾>`，再執行 `node tests/acceptance/verify-resident-batch-window.mjs <同一資料夾>` |
 | `verify-recovery-pin.ps1` | 復原金鑰 pin 的退場規則（#96 第 1 階段） | 測試替身；`-LegacyBinaryDirectory` 指定 1.1.0 以前的建置以驗證舊 run |
