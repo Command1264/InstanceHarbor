@@ -596,7 +596,13 @@ Velocity 沒有這行輸出：在後台做過 Host 無法讀回的編輯後按 E
 
 核心維護支援同核心與同版本線的單台替換、備份還原及中斷核對。
 Velocity 可在同一個 Velocity 版本內換 build（例如 4.2.1-SNAPSHOT build 38 → 43），Port 以 `velocity.toml` 的 `bind` 核對。
-`-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。核心檔名沿用登記的名稱，不改寫。
+`-SNAPSHOT` 版本只有 BETA 頻道，所以 Velocity 也接受 BETA build；ALPHA 一律不提供，Paper、Folia 仍只接受 STABLE。
+
+核心檔名（#112）：InstanceHarbor 建立的實例一律是 `server.jar`，不改名。原檔名**完全符合**官方下載檔名（`paper-<版本>-<build>.jar`、`folia-…`、`velocity-…`、`purpur-…`；家族小寫、版本以數字開頭、build 為數字）時，同版本換 build 與跨版本更新都改為新版的官方檔名，例如 `velocity-4.2.1-SNAPSHOT-38.jar` → `velocity-4.3.1-SNAPSHOT-52.jar`；`server.jar` 與其他自訂名稱不改。
+- 確認畫面（單台更新、跨版本摘要、批次預覽）寫出「檔名會改為 …」，資料來自 `core-check` 與 `core-velocity-target` 的 `renameTo`。
+- 新名稱已被其他檔案占用時，更新在任何變更前停止（`CoreFileNameTaken`）。
+- 替換時先以新檔名發布新核心，再刪除仍是更新前內容的舊檔；登記的 `core_file` 與核心身分在同一次寫入更新。中途失敗時兩個檔案都在、更新維持待核對；核對（`core-reconcile`）以新檔名判定已套用，再刪除舊檔。
+- 每個請求在 `pending.json` 與結果記錄更新前後的檔名（`beforeFile`、`afterFile`）。還原時檔名回到備份當時的名稱，`core-state` 的備份以 `renameTo` 標示；#112 之前的備份沒有記錄檔名，還原時沿用目前的檔名。
 已核對的 Velocity 也可以換到較新的 Velocity 版本（例如 4.2.1-SNAPSHOT → 4.3.1），入口是核心維護的「更換 Velocity 版本」，分兩步確認：
 
 1. 選擇目標版本（`core-velocity-versions`）。版本清單取自 fill API 的 `projects/velocity`，依 API 回傳順序判斷新舊，只列出比目前新的版本；SNAPSHOT 照常列出並標示。

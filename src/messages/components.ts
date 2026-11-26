@@ -73,6 +73,8 @@ export const componentsMessages = {
   'components.coreMaintenance.restoreTitle': ['還原核心', 'Restore core'],
   'components.coreMaintenance.reconcileTitle': ['核對維護結果', 'Verify maintenance result'],
   'components.coreMaintenance.targetBuild': ['目標版本為 Build {build}。', 'The target is Build {build}.'],
+  'components.coreMaintenance.renameTo': ['檔名會改為 {name}。', 'The file will be renamed to {name}.'],
+  'components.coreMaintenance.restoreName': ['檔名會改回 {name}。', 'The file name will go back to {name}.'],
   'components.velocityVersion.open': ['更換 Velocity 版本', 'Change Velocity version'],
   'components.velocityVersion.title': ['{name} · 更換 Velocity 版本', '{name} · Change Velocity version'],
   'components.velocityVersion.chooseHint': ['選擇要更新到的 Velocity 版本。只列出比目前新的版本，依官方清單排序。', 'Choose the Velocity version to update to. Only versions newer than the current one are listed, in the official order.'],

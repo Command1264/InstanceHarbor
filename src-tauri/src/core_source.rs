@@ -849,6 +849,12 @@ fn check_with_agent(
             };
             let mut row = result(name, &profile, &metadata[&key], local.as_ref());
             row["registrationRevision"] = json!(registration);
+            // The file name after this update, when it follows the build (#112).
+            if let Some(build) = row["candidate"]["build"].as_str() {
+                let after = CoreProfile { build: build.to_owned(), ..profile.clone() };
+                let file = jar.file_name().and_then(|file| file.to_str()).unwrap_or_default();
+                row["renameTo"] = json!(core_maintenance::renamed_file(file, &profile, &after));
+            }
             row
         })
         .collect();
@@ -1285,7 +1291,9 @@ fn velocity_target_with(
 pub(super) fn velocity_target(root: &Path, name: &str, version: &str) -> Result<Value> {
     let current = velocity_current(root, name)?;
     let (target, _, size, stable) = velocity_target_with(&current, version, &configured_paper_user_agent()?, &fetch_bytes, &fetch_json)?;
-    Ok(json!({"current":current,"target":target,"size":size,"channel":if stable {"STABLE"} else {"BETA"}}))
+    let file = core_artifact::recorded(&instance(root, name)?).to_owned();
+    let rename = core_maintenance::renamed_file(&file, &current, &target);
+    Ok(json!({"current":current,"target":target,"size":size,"channel":if stable {"STABLE"} else {"BETA"},"renameTo":rename}))
 }
 
 /// `core-install-version NAME REQUEST CURRENT VERSION CANDIDATE`: moves a stopped
