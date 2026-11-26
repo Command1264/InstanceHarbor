@@ -726,6 +726,7 @@ fn finish(root: &Path, target: &Target, intent: Intent, replayed: bool) -> Resul
     Ok(report(&result, replayed))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_action(
     root: &Path,
     target: Target,
@@ -870,6 +871,7 @@ pub(super) fn install_verified(
     install_verified_guarded(root, name, request, expected_current_sha256, candidate_path, profile, &no_progress, || Ok(()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn install_verified_guarded(
     root: &Path,
     name: &str,
