@@ -19,9 +19,15 @@ test('commit text shows the label and explains dirty and unknown builds', () => 
 
 test('the About panel opens only the link names the backend accepts', () => {
   const panel = read('./components/AboutPanel.vue')
-  const opened = [...panel.matchAll(/@click="open\('([a-z]+)'\)"/g)].map(match => match[1]).sort()
-  assert.deepEqual(opened, ['issues', 'license', 'notices', 'repository'])
+  const fromPanel = [...panel.matchAll(/@click="open\('([a-z]+)'\)"/g)].map(match => match[1])
+  assert.deepEqual(fromPanel.sort(), ['issues', 'license', 'notices', 'repository'])
   assert.doesNotMatch(panel, /https?:\/\//, 'the page must not hold or send URLs')
+  // "Core maintenance" opens the BuildTools guide for Spigot (#75) by name too.
+  const core = read('./components/CoreMaintenanceDialog.vue')
+  const fromCore = [...core.matchAll(/invoke\('open_about_link', \{ link: '([a-z]+)' \}\)/g)].map(match => match[1])
+  assert.deepEqual(fromCore, ['buildtools'])
+  assert.doesNotMatch(core, /https?:\/\//, 'the dialog must not hold or send URLs')
+  const opened = [...fromPanel, ...fromCore].sort()
   const backend = read('../src-tauri/src/about.rs')
   const accepted = [...backend.matchAll(/^\s+"([a-z]+)" => Some\(Self::/gm)].map(match => match[1]).sort()
   assert.deepEqual(accepted, opened)

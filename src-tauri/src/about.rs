@@ -8,6 +8,9 @@ pub const COMMIT: &str = env!("IH_BUILD_COMMIT");
 pub const AUTHOR: &str = "Command1264";
 pub const REPOSITORY: &str = "https://github.com/Command1264/InstanceHarbor";
 pub const ISSUES: &str = "https://github.com/Command1264/InstanceHarbor/issues";
+/// SpigotMC's official BuildTools guide. Spigot has no official download, so
+/// "Core maintenance" points here instead of offering an update (#75).
+pub const BUILDTOOLS: &str = "https://www.spigotmc.org/wiki/buildtools/";
 /// The notice files that the ZIP and Setup place beside the executables.
 pub const LICENSE_FILE: &str = "LICENSE";
 pub const NOTICES_FILE: &str = "THIRD-PARTY-NOTICES.txt";
@@ -17,12 +20,14 @@ pub fn cli_version(title: &str) -> String {
     format!("{title} CLI {VERSION} ({COMMIT})")
 }
 
-/// A fixed place the About section may open. The GUI accepts only these names,
-/// never a URL or path from the page.
+/// A fixed place the GUI may open: the About section's links and the BuildTools
+/// guide in "Core maintenance". The GUI accepts only these names, never a URL or
+/// path from the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Link {
     Repository,
     Issues,
+    BuildTools,
     License,
     Notices,
 }
@@ -32,6 +37,7 @@ impl Link {
         match name {
             "repository" => Some(Self::Repository),
             "issues" => Some(Self::Issues),
+            "buildtools" => Some(Self::BuildTools),
             "license" => Some(Self::License),
             "notices" => Some(Self::Notices),
             _ => None,
@@ -43,6 +49,7 @@ impl Link {
         match self {
             Self::Repository => Some(REPOSITORY),
             Self::Issues => Some(ISSUES),
+            Self::BuildTools => Some(BUILDTOOLS),
             Self::License | Self::Notices => None,
         }
     }
@@ -52,7 +59,7 @@ impl Link {
         match self {
             Self::License => Some(LICENSE_FILE),
             Self::Notices => Some(NOTICES_FILE),
-            Self::Repository | Self::Issues => None,
+            Self::Repository | Self::Issues | Self::BuildTools => None,
         }
     }
 }
@@ -105,15 +112,17 @@ mod tests {
     fn links_are_fixed_to_the_public_repository() {
         assert_eq!(Link::parse("repository").and_then(Link::url), Some("https://github.com/Command1264/InstanceHarbor"));
         assert_eq!(Link::parse("issues").and_then(Link::url), Some("https://github.com/Command1264/InstanceHarbor/issues"));
+        assert_eq!(Link::parse("buildtools").and_then(Link::url), Some("https://www.spigotmc.org/wiki/buildtools/"));
         assert_eq!(Link::parse("license").and_then(Link::file), Some("LICENSE"));
         assert_eq!(Link::parse("notices").and_then(Link::file), Some("THIRD-PARTY-NOTICES.txt"));
         for name in ["", "https://example.com", "Repository", "../LICENSE", "file:///C:/Windows"] {
             assert_eq!(Link::parse(name), None, "{name}");
         }
-        for link in [Link::Repository, Link::Issues, Link::License, Link::Notices] {
+        for link in [Link::Repository, Link::Issues, Link::BuildTools, Link::License, Link::Notices] {
             assert!(link.url().is_some() != link.file().is_some());
             if let Some(url) = link.url() {
-                assert!(url.starts_with("https://github.com/Command1264/InstanceHarbor"));
+                assert!(url.starts_with("https://github.com/Command1264/InstanceHarbor")
+                    || url == "https://www.spigotmc.org/wiki/buildtools/");
             }
         }
     }

@@ -269,6 +269,29 @@ ZIP 目錄記錄每個項目的 CRC，任一項目內容改變都會使目錄改
 離線辨識與網路無關：清單刷新時不連線核對，所以網路正常時也可能出現。
 「核心維護」在核心未核對時以 `identified` 回傳離線辨識的版本，「目前版本」只加註「（離線辨識）」；核心更新是否可用仍依 `trusted_profile`，不因離線辨識而改變。
 
+#### Spigot 更新檢查（只檢查）
+
+Spigot 沒有官方下載，要用 BuildTools 在本機建置，所以 InstanceHarbor 只檢查是否有新建置，不下載也不更新。
+「更新核心」與批次更新對 Spigot 一律停用，「核心維護」改顯示 BuildTools 官方說明連結。
+檢查沿用其他核心的時機（清單載入時與按「檢查更新」），結果只存在前端的核心檢查快取，沒有另外的排程。
+
+- **來源**：BuildTools 讀的公開目錄 `https://hub.spigotmc.org/versions/`，每個 Minecraft 版本一個 `<版本>.json`，另有 `latest.json`。
+  檔案的 `name` 是 Jenkins 建置編號（舊版本可能帶字尾，例如 `1573k`），`refs.Spigot` 與 `refs.CraftBukkit` 是完整 commit。
+  一次檢查每個 Minecraft 版本讀一個版本檔，`latest.json` 只讀一次。User-Agent 是 `InstanceHarbor/2.0`。
+- **JAR 內的版本**（`core_source/spigot_revision.rs`）：讀 `Implementation-Version`，取 Spigot 與 CraftBukkit commit 的前 7 碼。
+  - 舊格式在外層 `META-INF/MANIFEST.MF`：`git-Spigot-<Spigot>-<CraftBukkit>`；1.17 起前面是建置編號，例如 `3284a-Spigot-…`。
+  - 1.18 起的 bundler JAR 外層沒有這個欄位，版本在 `META-INF/versions.list` 指向的內層 `META-INF/versions/spigot-*.jar` 的 MANIFEST，
+    例如 `4664-Spigot-bed90fc-e89124d`。內層 JAR 約 20 MB，程式只解壓開頭幾個項目（上限 8 個，每個 64 KiB），並核對 CRC 與大小。
+- **比對**：兩個 commit 都與版本檔 `refs` 的前 7 碼相同 →「已是最新」（`Current`）；不同 →「有新建置」（`BuildAvailable`），
+  JAR 有建置編號時顯示「目前 N、最新 M」。內建清單以外的 Spigot 也會檢查：Minecraft 版本取自離線辨識，結果不會變成可安裝的候選核心。
+- **新的 Minecraft 版本**：`latest.json` 與這個版本檔的 `refs` 相同時，提示此版本就是 Spigot 最新版本；不同時提示已有更新的
+  Minecraft 版本與其 Jenkins 建置編號（`latest.json` 沒有寫版本名稱）。這只是提示，主要狀態只看同一個 Minecraft 版本線。
+- **無法比對或失敗**只顯示原因，不猜測：`CoreSourceSpigotRevisionUnreadable`（JAR 讀不出 commit）、`CoreSourceSpigotVersionMissing`（HTTP 404）、
+  `CoreSourceInvalidSpigotRefs`（版本檔格式不符）、`CoreSourceRefused`（HTTP 401、403、429）、`CoreSourceTimeout`、
+  `CoreSourceTransportError`（沒有網路）、`CoreSourceHttpError`、`CoreSourceInvalidJson`。不重試，也不影響其他操作。
+- 舊版曾用 SpigotMC Stash 的 commit 計數檢查 1.8.8（「原生版本落後 N 個提交」）。Stash 現在對自動化用戶端回傳 Cloudflare 挑戰頁，
+  所以這項檢查已移除。
+
 都無法辨識時顯示「尚未核對」，不沿用登記中的舊版本。原因以代碼回傳（`CorePathUnverified`、`CoreUnreadable`、`CoreProfileUnverified`），
 由前端 `src/core-display.ts` 翻譯，顯示在清單儲存格的滑鼠提示與詳細面板。新增代碼時 `src/core-display.test.mjs` 會要求補上翻譯。
 
