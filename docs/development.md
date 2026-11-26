@@ -125,8 +125,16 @@ PDB 含本機建置路徑，**只留在建置的電腦**：不 commit、不上�
   以 `-SymbolDirectory` 或環境變數 `IH_SYMBOL_DIRECTORY` 改用其他資料夾；位置在 repository 或任何 worktree 內時腳本拒絕執行。
 - 發行設定的 PDB 帶有函式名稱與行號（`Cargo.toml` 的 `[profile.release] debug = "line-tables-only"`）。
   MSVC 把除錯資訊放在 PDB，執行檔大小不變。
-- 執行檔只記錄 PDB 的檔名（rustc 預設傳給 MSVC 連結器 `/PDBALTPATH:%_PDB%`），不含建置電腦的路徑；
+- 執行檔只記錄 PDB 的檔名：`build.rs` 對 MSVC 執行檔明確傳 `/PDBALTPATH:%_PDB%`（rustc 預設也會傳），
   `save-release-symbols.ps1` 發現執行檔記錄了絕對路徑時會失敗。
+- 執行檔不得含建置電腦的資料夾路徑。標準程式庫與依賴套件的 panic 位置原本帶著
+  `<使用者資料夾>\.rustup\...` 與 `<使用者資料夾>\.cargo\registry\...`（1.1.0 及更早的版本都有）。
+  `build-product.ps1 -Release` 與 `-Development` 以 `--remap-path-prefix` 把 rustc sysroot、`CARGO_HOME` 與 checkout
+  改寫成 `/rust`、`/cargo`、`/instanceharbor`（經 `CARGO_ENCODED_RUSTFLAGS`，路徑含空白也可以；它取代 `.cargo/config.toml`
+  的 rustflags，所以同時帶上 `+crt-static`）。PDB 內的原始檔路徑也因此改寫，`cdb` 的 `.lines` 仍顯示檔名與行號。
+- `verify-no-local-paths.ps1 -Binary <exe>...` 以 ASCII 與 UTF-16LE 搜尋執行檔，找到含磁碟代號的 `.pdb` 路徑、checkout
+  （repository、主 checkout 或任何 worktree）、使用者資料夾、`CARGO_HOME`、`RUSTUP_HOME` 或 rustc sysroot 時失敗。
+  `build-product.ps1 -Release`／`-Development` 建置後與 `pack-windows.ps1` 封裝前都會執行；`pack-windows.ps1` 也拒絕任何 `.pdb`。
 - 已發布的舊版（1.1.0 及更早）沒有保存 PDB，只能讀到 Windows 模組的函式名稱。
 
 ### 稽核結果
