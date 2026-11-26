@@ -18,7 +18,7 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ close: []; changed: [] }>()
 type Profile = { family: string; minecraft: string; build: string }
-type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile; crossVersion?: boolean }[]; canWrite: boolean; reason?: string | null }
+type State = { installed: Profile | null; identified?: Profile | null; currentSha256: string; prepared?: (Profile & { sha256: string }) | null; pending: { request: string } | null; backups: { id: string; profile: Profile; crossVersion?: boolean; renameTo?: string | null }[]; coreFile?: string; canWrite: boolean; reason?: string | null }
 type Action = 'core-install-latest' | 'core-install' | 'core-restore' | 'core-reconcile'
 const dialog = ref<HTMLDialogElement>()
 const confirm = ref<HTMLDialogElement>()
@@ -133,7 +133,7 @@ const blockedReasonText = computed(() => {
 const blockedText = computed(() => spigot.value ? t('core.source.spigot.buildTools')
   : primaryEnabled.value || !blockedReasonText.value ? ''
   : t('components.coreMaintenance.blockedReason', { reason: blockedReasonText.value }))
-const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean; crossVersion?: boolean }>()
+const choice = ref<{ action: Action; backup?: string; current?: string; candidateHash?: string; candidateBuild?: string; md5?: boolean; crossVersion?: boolean; renameTo?: string | null }>()
 async function read(quiet = false) {
   try { state.value = await manage<State>(['core-state', props.name], 'background') }
   catch (failure) { if (!quiet && !error.value) error.value = errorText(failure) }
@@ -173,8 +173,11 @@ async function check() {
 }
 function ask(action: Action, backup?: string) {
   if (busy.value) return
+  const saved = state.value?.backups.find(item=>item.id===backup)
   choice.value = {action,backup,current:state.value?.currentSha256,
-    crossVersion:state.value?.backups.find(item=>item.id===backup)?.crossVersion===true,
+    crossVersion:saved?.crossVersion===true,
+    // The new file name of an official name (#112).
+    renameTo:action==='core-restore' ? saved?.renameTo : action==='core-install-latest' ? source.value?.renameTo : undefined,
     candidateHash:candidate.value?.sha256 ?? candidateMd5.value,candidateBuild:candidate.value?.build,
     md5:!candidate.value?.sha256 && !!candidateMd5.value}
   confirm.value?.showModal()
@@ -294,6 +297,7 @@ defineExpose({ open: () => { dialog.value?.showModal(); void read() } })
     <h2 id="core-confirm-title">{{ choice?.action==='core-restore'?t('components.coreMaintenance.restoreTitle'):choice?.action==='core-reconcile'?t('components.coreMaintenance.reconcileTitle'):t('components.coreMaintenance.update') }}</h2>
     <p v-if="choice?.action==='core-install-latest' && choice.candidateBuild">{{ t('components.coreMaintenance.targetBuild', { build: choice.candidateBuild }) }}</p>
     <p v-if="choice?.action==='core-install-latest' && choice.md5">{{ t('components.coreMaintenance.purpurMd5Note') }}</p>
+    <p v-if="choice?.renameTo">{{ t(choice.action==='core-restore' ? 'components.coreMaintenance.restoreName' : 'components.coreMaintenance.renameTo', { name: choice.renameTo }) }}</p>
     <p v-if="choice?.action==='core-restore' && choice.crossVersion">{{ t('components.velocityVersion.restoreNote') }}</p>
     <p>{{ t('components.coreMaintenance.backupNote') }}</p>
     <div class="dialog-actions">

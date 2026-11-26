@@ -214,7 +214,10 @@ defineExpose({ open })
     <dl v-else-if="report.length" class="import-preview" :aria-label="t('core.batch.results')">
       <template v-for="row in report" :key="row.name">
         <dt><bdi translate="no">{{ row.name }}</bdi></dt>
-        <dd>{{ t(row.result, { build: row.source?.candidate?.build ?? '' }) }}</dd>
+        <dd>
+          {{ t(row.result, { build: row.source?.candidate?.build ?? '' }) }}
+          <span v-if="row.source?.renameTo" class="hint">{{ t('components.coreMaintenance.renameTo', { name: row.source.renameTo }) }}</span>
+        </dd>
       </template>
     </dl>
     <p v-if="requestId && cancelFailure === requestId" class="form-error" role="alert">{{ t('core.batch.cancelFailed') }}</p>

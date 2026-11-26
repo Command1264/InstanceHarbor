@@ -294,6 +294,8 @@ export type CoreSource = {
   remoteBuild?: string
   /** A Purpur candidate has only the official MD5 until it is downloaded (#41). */
   candidate?: { build: string; sha256?: string; md5?: string }
+  /** The core file name after this update, when it follows the build (#112). */
+  renameTo?: string | null
   /** `purpurMd5` when the source publishes MD5 only. */
   verification?: string
   reason?: string
