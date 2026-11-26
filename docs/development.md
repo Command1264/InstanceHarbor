@@ -120,6 +120,10 @@ GUI 不常駐：每次從系統匣或捷徑開啟都是冷啟動（新程序、�
 - 焦點框的寬度與外擴距離由 `src/app.css` 的 `--focus-ring-width`、`--focus-ring-offset` 定義，合計為 `--focus-ring-extent`。
 - 對話框裡的 `OverlayScroll` 捲動區在上緣與左緣保留 `--focus-ring-extent` 的內距，並以相同的負外距抵銷，內容位置與寬度不變；右緣與下緣原本的內距已大於焦點框外擴量。
 - 覆寫 `.overlay-viewport` 內距時，每一邊都不得小於 `--focus-ring-extent`，否則靠邊輸入框的焦點框會被裁切。`src/focus-ring.test.mjs` 會檢查這項規則。
+- 首次讀取的進度條 `InitialQueryProgress` 有兩種版面。實例清單與操作紀錄這類整頁清單加 `centered`：進度條以絕對定位
+  對齊最近的定位祖先，在它前一個元素（例如表格標題列）以下的區域水平與垂直置中。在 `OverlayScroll` 裡，這個祖先是不會捲動的
+  外框，所以表格比可見區域寬、出現橫向捲軸時，進度條仍停在可見區域中間。操作紀錄頁讀取時讓卡片填滿可見高度，進度條在卡片中間。
+  對話框內維持預設的靠左版面。`src/initial-query-progress.test.mjs` 會檢查這項規則。
 - `OverlayScroll` 的捲動區只在內容需要捲動時才能用 Tab 選到，讓鍵盤可以捲動；不需要捲動時，Tab 直接跳到裡面的控制項，不會停在整個容器上。
 
 ## 用 DevTools 檢查 GUI 畫面
