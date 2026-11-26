@@ -71,6 +71,19 @@ fn open_about_link(link: String) -> Result<(), String> {
         Err("AboutUnavailable".into())
     }
 }
+/// Opens the GitHub page of one release; `tag` is checked against the version format (#65).
+#[tauri::command]
+fn open_update_release(tag: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        about_links::open_release(&tag)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = tag;
+        Err("AboutUnavailable".into())
+    }
+}
 #[tauri::command]
 fn system_accent_color() -> Result<String, String> {
     #[cfg(windows)]
@@ -712,6 +725,7 @@ fn main() {
             report_gui_event,
             about_info,
             open_about_link,
+            open_update_release,
             report_startup_timing
         ])
         .setup(move |app| {

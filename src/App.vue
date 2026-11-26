@@ -31,6 +31,7 @@ import { refreshSelectionColor, refreshSelectionTheme, resolveSelectionOpacity, 
 import { canOpenConsole, canStop, confirmCreation, consoleFallbackReason, type ConsolePlan, coreBatchJob, errorText, manage, nativeBridge, rawError, type CoreBatch, type CoreSource, type CreationProgress, type Instance, type JavaCandidate, type Job, type Logs, type Preferences, type PreferencesSnapshot, type InstanceSnapshot, type RegistryIssue, type Presentation } from './manager'
 import { startupListRendered, startupMark, startupWindowPresented } from './startup-timing'
 import { registryDiagnosticText, registryIssueMessage } from './registry-issues'
+import { startupUpdateCheck, updateStatus, updateTabRequested } from './app-update-store'
 import './app.css'
 
 type Route='instances'|'activity'|'settings'
@@ -1151,6 +1152,13 @@ let catalogTimer:ReturnType<typeof setInterval> | undefined
 // The development channel names its workspace under the channel name, so a narrow rail
 // wraps between words and never inside "InstanceHarbor".
 const channelInfo=ref<Pick<AboutInfo,'channel'|'workspace'>>()
+// Checks for a newer InstanceHarbor at most once a day; a failure only shows in settings (#65).
+onMounted(()=>{void startupUpdateCheck()})
+function openUpdateSettings(){
+  updateTabRequested.value=true
+  navigate('settings')
+  if(route.value!=='settings')updateTabRequested.value=false
+}
 onMounted(async()=>{
   if(!nativeBridge)return
   try{channelInfo.value=await invoke<AboutInfo>('about_info')}
@@ -1178,7 +1186,7 @@ onUnmounted(()=>{clearRefreshFeedback();document.removeEventListener('contextmen
 </script>
 <template>
   <a class="skip" href="#view">{{ t('skip.main') }}</a>
-  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span class="brand-name" :title="productTitle(channelInfo)">{{ channelInfo?.channel ?? 'InstanceHarbor' }}<span v-if="channelInfo?.workspace" class="brand-workspace"><span class="sr-only"> — </span>{{ channelInfo.workspace }}</span></span></div><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
+  <div class="app"><aside class="rail"><div class="brand"><img :src="brandLogo" width="16" height="16" alt=""><span class="brand-name" :title="productTitle(channelInfo)">{{ channelInfo?.channel ?? 'InstanceHarbor' }}<span v-if="channelInfo?.workspace" class="brand-workspace"><span class="sr-only"> — </span>{{ channelInfo.workspace }}</span></span></div><button v-if="updateStatus?.update" type="button" class="update-hint" :aria-label="t('components.update.hintLabel',{version:updateStatus.update.version})" @click="openUpdateSettings">{{ t('components.update.hint',{version:updateStatus.update.version}) }}</button><nav :aria-label="t('nav.main')"><button :aria-current="route==='instances'?'page':undefined" @click="navigate('instances')">{{ t('nav.instances') }}</button><button :aria-current="route==='activity'?'page':undefined" @click="navigate('activity')">{{ t('nav.activity') }}</button><button :aria-current="route==='settings'&&!settingsName?'page':undefined" @click="navigate('settings')">{{ t('nav.settings') }}</button></nav></aside>
     <main id="view" :class="{'route-settings':route==='settings'}"><div v-if="!nativeBridge" class="notice error" role="alert">{{ t('app.bridgeNotice') }}</div>
       <aside v-if="route==='instances' && (registryIssues.length || listUnavailable)" class="registry-notice" role="status">
         <p v-if="listUnavailable">{{ listUnavailable }}</p>

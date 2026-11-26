@@ -208,7 +208,7 @@ pub(super) fn fetch_profile(url: &str) -> Result<(u16, Vec<u8>)> {
     fetch_status(url, &configured_paper_user_agent()?, false)
 }
 
-fn fetch_status(url: &str, user_agent: &str, fail_on_http: bool) -> Result<(u16, Vec<u8>)> {
+pub(super) fn fetch_status(url: &str, user_agent: &str, fail_on_http: bool) -> Result<(u16, Vec<u8>)> {
     let mut command = Command::new(system_curl()?);
     // --disable has to be first to prevent loading a user's curl config.
     command.arg("--disable");

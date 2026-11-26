@@ -4,6 +4,10 @@ import { onMounted, ref } from 'vue'
 import { useAppLanguage } from '../i18n'
 import { errorText, nativeBridge } from '../manager'
 import { aboutCommitText, type AboutInfo, type AboutLink } from '../about'
+import type { TimeFormat } from '../i18n'
+import AppUpdatePanel from './AppUpdatePanel.vue'
+
+defineProps<{ timeFormat?: TimeFormat }>()
 
 const { t } = useAppLanguage()
 const info = ref<AboutInfo>()
@@ -33,6 +37,7 @@ async function open(link: AboutLink) {
   <section aria-labelledby="about-heading">
     <h2 id="about-heading">{{ t('components.about.heading') }}</h2>
     <div class="field"><span class="about-label">{{ t('components.about.version') }}</span><span class="about-value">{{ info?.version ?? '--' }}</span></div>
+    <AppUpdatePanel :time-format="timeFormat" :show-version="false" />
     <div class="field"><span class="about-label">{{ t('components.about.commit') }}</span><span class="about-value mono">{{ info ? aboutCommitText(info.commit) : '--' }}</span></div>
     <div v-if="info?.workspace" class="field"><span class="about-label">{{ t('components.about.workspace') }}</span><span class="about-value mono">{{ info.workspace }}</span></div>
     <div class="field"><span class="about-label">{{ t('components.about.author') }}</span><span class="about-value">{{ info?.author ?? '--' }}</span></div>
