@@ -23,7 +23,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 static IPC_ID: AtomicU64 = AtomicU64::new(1);
 static WINDOW_REVEALED: AtomicBool = AtomicBool::new(false);
 static PREFETCH: startup_prefetch::Prefetch = startup_prefetch::Prefetch::new();
-static STARTUP_THEME: startup_theme::Slot = startup_theme::Slot::new();
 fn background_color(dark: bool) -> tauri::window::Color {
     let (red, green, blue) = startup_theme::background(dark);
     tauri::window::Color(red, green, blue, 255)
@@ -676,11 +675,7 @@ fn main() {
     #[cfg(windows)]
     for verb in startup_prefetch::VERBS {
         PREFETCH.start(verb, move || {
-            let reply = tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None));
-            if verb == "preferences-snapshot" {
-                STARTUP_THEME.publish(startup_theme::preference_of(&reply));
-            }
-            reply
+            tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None))
         });
     }
     let mut context = tauri::generate_context!();
@@ -723,10 +718,14 @@ fn main() {
             startup_timing::mark("setup");
             #[cfg(windows)]
             for config in &main_window {
-                // WebView2 shows this color until it draws the page (see startup_theme).
-                let dark = startup_theme::dark(STARTUP_THEME.current(), startup_theme::windows_dark);
+                // The page's first frame follows the window's theme, and WebView2 shows this
+                // color until it draws (see startup_theme).
+                let saved = std::env::var_os("IH_WORKSPACE")
+                    .and_then(|workspace| startup_theme::saved(std::path::Path::new(&workspace)));
+                let dark = startup_theme::dark(saved, startup_theme::windows_dark);
                 startup_timing::mark("window-theme");
                 let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?
+                    .theme(Some(if dark { tauri::Theme::Dark } else { tauri::Theme::Light }))
                     .background_color(background_color(dark));
                 let window = match workspace_binding::webview_data_directory() {
                     Some(folder) => window.data_directory(folder),
