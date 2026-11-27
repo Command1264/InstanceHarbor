@@ -121,5 +121,19 @@ try {
     if ($actual -ne $expected) { throw "Setup found WebView2 '$actual'; expected '$expected'." }
     "Setup WebView2 detection: $(if ($actual) { $actual } else { 'missing' })"
 } finally {
-    Remove-Item -LiteralPath $work -Recurse -Force
+    # Start-Process -Wait has already waited for each test installer to exit. A just-written
+    # .exe can still be open in another process, such as an antivirus scan (seen on the
+    # windows-11-arm runner), so removal retries for up to 15 seconds. If the folder still
+    # cannot be removed, it is reported, and the checks above keep their result.
+    for ($attempt = 1; Test-Path -LiteralPath $work; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop
+        } catch [System.IO.IOException], [System.UnauthorizedAccessException] {
+            if ($attempt -ge 30) {
+                Write-Warning "Could not remove the test folder $work after $attempt attempts: $($_.Exception.Message)"
+                break
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 }
