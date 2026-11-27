@@ -374,10 +374,17 @@ unsafe extern "system" {
     fn WriteConsoleInputW(input: Handle, records: *const KeyRecord, count: u32, written: *mut u32) -> i32;
 }
 
-/// Pinned identities of the bundled runtime. `packaging/console-runtime.json` must match.
+/// Pinned identities of the bundled runtime for the architecture of this build (#66).
+/// `packaging/console-runtime.json` must match.
+#[cfg(not(target_arch = "aarch64"))]
 pub(super) const RUNTIME_FILES: [(&str, &str); 2] = [
     ("conpty.dll", "feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a"),
     ("OpenConsole.exe", "3d66b23d0a71bb8eed2b77edc8b9df9bf54ce6c8fb74c863a30e760997f80586"),
+];
+#[cfg(target_arch = "aarch64")]
+pub(super) const RUNTIME_FILES: [(&str, &str); 2] = [
+    ("conpty.dll", "151a02355227710c20c9f8f1eaf68ac4668aa09cdc921adc7ec661804d8eb1bf"),
+    ("OpenConsole.exe", "4313825a3ba634d113cc6ed3bc8ce735e3c19d360cecd985794787479469f91f"),
 ];
 
 type RuntimeKey = Vec<(u64, Option<std::time::SystemTime>)>;
@@ -1412,10 +1419,16 @@ mod tier_tests {
     #[test]
     fn runtime_pins_match_the_distribution_manifest() {
         let manifest: Value = serde_json::from_str(include_str!("../../packaging/console-runtime.json")).unwrap();
+        let architecture = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+        let pins = &manifest["architectures"][architecture];
         for (name, hash) in RUNTIME_FILES {
-            assert_eq!(manifest["files"][name]["sha256"], hash, "{name}");
+            assert_eq!(pins["files"][name]["sha256"], hash, "{name}");
         }
-        assert_eq!(manifest["files"].as_object().unwrap().len(), RUNTIME_FILES.len());
+        assert_eq!(pins["files"].as_object().unwrap().len(), RUNTIME_FILES.len());
+        // The PE machine type of this build's own executable is the one the runtime must have.
+        let exe = fs::read(std::env::current_exe().unwrap()).unwrap();
+        let pe = u32::from_le_bytes(exe[0x3C..0x40].try_into().unwrap()) as usize;
+        assert_eq!(pins["machine"], u16::from_le_bytes([exe[pe + 4], exe[pe + 5]]));
     }
 
     #[test]

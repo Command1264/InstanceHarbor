@@ -1,6 +1,6 @@
 # Windows distribution licenses
 
-The original InstanceHarbor source is under MIT. In both the Windows x64 ZIP and the Setup installation folder, `LICENSE` contains the project license and `THIRD-PARTY-NOTICES.txt` preserves the applicable upstream notices. **Application settings** → **About** opens both files in Notepad from the folder of `InstanceHarbor.exe`; builds without them disable those buttons. The ZIP manifest covers the three license and source files and the Windows startup guide. Setup installs the same files beside the executables. Use a separately authenticated ZIP SHA-256 when staging a package that contains these files. The executables’ Authenticode signatures, if present, do not cover separate documents.
+The original InstanceHarbor source is under MIT. In both the Windows ZIP (x64 or ARM64) and the Setup installation folder, `LICENSE` contains the project license and `THIRD-PARTY-NOTICES.txt` preserves the applicable upstream notices. **Application settings** → **About** opens both files in Notepad from the folder of `InstanceHarbor.exe`; builds without them disable those buttons. The ZIP manifest covers the three license and source files and the Windows startup guide. Setup installs the same files beside the executables. Use a separately authenticated ZIP SHA-256 when staging a package that contains these files. The executables’ Authenticode signatures, if present, do not cover separate documents.
 
 ## MPL source
 
@@ -8,9 +8,9 @@ Open `MPL-SOURCES.zip` without a network connection. `SOURCE-INDEX.txt` lists ea
 
 ## Microsoft runtime
 
-- `conpty.dll` and `OpenConsole.exe` are the original x64 files from Microsoft's signed ConPTY NuGet release `1.25.260930003`. Include the Windows Terminal MIT license and upstream notice. [Windows Terminal v1.25.2733.0](https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0)
+- `conpty.dll` and `OpenConsole.exe` are the original files of the package's architecture (x64 or ARM64) from Microsoft's signed ConPTY NuGet release `1.25.260930003`. Include the Windows Terminal MIT license and upstream notice. [Windows Terminal v1.25.2733.0](https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0)
 - From 1.0.0, `InstanceHarbor.exe` and `ihctl.exe` link the Microsoft C runtime (the Visual C++ runtime and the Universal C Runtime) statically (`.cargo/config.toml`), so users need no Visual C++ Redistributable. `packaging/pack-windows.ps1` refuses a stable version whose executables import `VCRUNTIME` or `MSVCP` DLLs. 1.0.0-rc2 used the system Visual C++ v14 x64 Runtime.
-- WebView2 is obtained separately from Windows or Microsoft. Setup checks for it on every run and InstanceHarbor checks for it on every start; both name Microsoft's Evergreen Standalone Installer for x64 and offer its download. The release packages contain no WebView2 runtime, Java runtime, Paper or Minecraft server JAR.
+- WebView2 is obtained separately from Windows or Microsoft. Setup checks for it on every run and InstanceHarbor checks for it on every start; both name Microsoft's Evergreen Standalone Installer for their own architecture (x64 or ARM64) and offer its download. The release packages contain no WebView2 runtime, Java runtime, Paper or Minecraft server JAR.
 
 ## Console runtime source
 
@@ -22,10 +22,12 @@ Open `MPL-SOURCES.zip` without a network connection. `SOURCE-INDEX.txt` lists ea
 | Download | [nuget.org flat container](https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/1.25.260930003/microsoft.windows.console.conpty.1.25.260930003.nupkg) |
 | Package size | 1,763,391 bytes |
 | Package SHA-256 | `02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee` |
-| `conpty.dll` | entry `runtimes/win-x64/native/conpty.dll`, SHA-256 `feeef341…ae805a` |
-| `OpenConsole.exe` | entry `build/native/runtimes/x64/OpenConsole.exe`, SHA-256 `3d66b23d…f80586` |
+| x64 `conpty.dll` | entry `runtimes/win-x64/native/conpty.dll`, SHA-256 `feeef341…ae805a`, PE machine `0x8664` |
+| x64 `OpenConsole.exe` | entry `build/native/runtimes/x64/OpenConsole.exe`, SHA-256 `3d66b23d…f80586`, PE machine `0x8664` |
+| ARM64 `conpty.dll` | entry `runtimes/win-arm64/native/conpty.dll`, SHA-256 `151a0235…8eb1bf`, PE machine `0xAA64` |
+| ARM64 `OpenConsole.exe` | entry `build/native/runtimes/arm64/OpenConsole.exe`, SHA-256 `4313825a…69f91f`, PE machine `0xAA64` |
 
-`packaging/provision-console-runtime.ps1` never downloads. Given the package, it checks the package size and SHA-256, reads the two x64 entries, and checks each file's SHA-256, x64 header and Microsoft Authenticode signature before it copies them. It refuses to replace a different file at the destination. `native_console.rs`, `packaging/pack-windows.ps1` and `packaging/install-windows.ps1` pin the same file hashes; `src/console-runtime.test.mjs` and a Rust test keep them equal.
+`packaging/provision-console-runtime.ps1` never downloads. Given the package and `-Architecture x64|arm64` (default x64), it checks the package size and SHA-256, reads that architecture's two entries, and checks each file's SHA-256, PE machine type and Microsoft Authenticode signature before it copies them. It refuses to replace a different file at the destination. `native_console.rs`, `packaging/pack-windows.ps1` and `packaging/install-windows.ps1` pin the same file hashes; `src/console-runtime.test.mjs` and a Rust test keep them equal.
 
 ## Build a distribution
 
@@ -43,34 +45,39 @@ A distribution is `1.0.0-rc2` or a stable version such as `1.0.0`. It must conta
 2. Build the release binaries. The build copies the verified runtime beside them and fails without it.
 
    ```powershell
-   ./packaging/build-product.ps1 -Release -ConsoleRuntimeSource $package
-   $binaries = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+   $architecture = 'x64'   # or 'arm64'
+   ./packaging/build-product.ps1 -Release -Architecture $architecture -ConsoleRuntimeSource $package
+   $binaries = "src-tauri/target/$(@{ x64 = 'x86_64'; arm64 = 'aarch64' }[$architecture])-pc-windows-msvc/release"
    ```
 
-3. Prepare the notices. Provide the official NSIS 3.13 `COPYING`, the Windows Terminal 1.25.2733.0 x64 ZIP from the release above, and the Rust toolchain's `share/doc/rust` directory. The generator reads the Windows x64 Cargo dependency closure (including build dependencies for coverage), the npm runtime tree, and the original MPL crate archives in Cargo's registry cache. It also takes the xterm.js and graphemes add-on licenses from `src/vendor/xterm/` and the stored upstream texts from `packaging/windows-upstream-notices/`.
+3. Prepare the notices. Provide the official NSIS 3.13 `COPYING`, the Windows Terminal 1.25.2733.0 x64 ZIP from the release above, and the Rust toolchain's `share/doc/rust` directory. The generator reads the Cargo dependency closure of the chosen Windows target (`--target`, default `x86_64-pc-windows-msvc`; use `aarch64-pc-windows-msvc` for ARM64, whose closure differs), including build dependencies for coverage, the npm runtime tree, and the original MPL crate archives in Cargo's registry cache. It also takes the xterm.js and graphemes add-on licenses from `src/vendor/xterm/` and the stored upstream texts from `packaging/windows-upstream-notices/`.
 
    ```powershell
-   python packaging/prepare-windows-notices.py --output $notices --nsis-copying $nsisCopying --terminal-zip $terminalZip --rust-docs $rustDocs
+   python packaging/prepare-windows-notices.py --output $notices --nsis-copying $nsisCopying --terminal-zip $terminalZip --rust-docs $rustDocs --target x86_64-pc-windows-msvc
    ```
 
 4. Package the ZIP. The binary folder already holds the verified runtime.
 
    ```powershell
-   $packed = ./packaging/pack-windows.ps1 -BinaryDirectory $binaries -ConsoleRuntimeDirectory $binaries -NoticeDirectory $notices -OutputZip $zip -Version 1.0.0
+   $zip = "InstanceHarbor-1.0.0-windows-$architecture.zip"
+   $packed = ./packaging/pack-windows.ps1 -BinaryDirectory $binaries -ConsoleRuntimeDirectory $binaries -NoticeDirectory $notices -OutputZip $zip -Version 1.0.0 -Architecture $architecture
    ```
 
 5. Build Setup from the ZIP and the SHA-256 that step 4 returned, with the NSIS 3.13 compiler. SourceForge refuses scripted downloads; `winget download --id NSIS.NSIS --version 3.13` fetches the official installer and checks its SHA-256 (`db9a1038bbc0e53fef24f423fd609979bd578e942f1be1198db186d1c42652a3`). Install it to a folder of your choice with `/S /D=<folder>`; it needs administrator rights and does not change `PATH`.
 
    ```powershell
+   $setup = "InstanceHarbor-1.0.0-windows-$architecture-setup.exe"
    ./packaging/pack-windows-setup.ps1 -Package $zip -ExpectedPackageSha256 $packed.sha256 -Compiler $makensis -Output $setup
    ```
 
-6. Check the Setup's version order and WebView2 detection with the same compiler. The test installers write to a temporary folder and install nothing.
+6. Check the Setup's version order, architecture rules and WebView2 detection with the same compiler. The test installers write to a temporary folder and install nothing.
 
    ```powershell
    ./tests/verify-windows-setup-version.ps1 -Compiler $makensis
    ```
 
 7. Before distribution, check that the ZIP manifest lists `conpty.dll` and `OpenConsole.exe` with the pinned hashes, then install the Setup on a test machine, start a Paper instance and confirm that the instance details show **Console: InstanceHarbor console** (tier 1). Run the Setup again to see the repair prompt, and run an older Setup to see the downgrade prompt.
+
+Repeat steps 2–7 for each architecture (#66) and attach all four files to the release under their architecture names: the in-app update picks `InstanceHarbor-<version>-windows-x64(-setup.exe|.zip)` or `...-windows-arm64(...)` by exact name, so a missing or renamed file shows as unavailable for that architecture. Test an ARM64 package on an ARM64 PC: CI builds it and checks its PE machine types and a silent install on the `windows-11-arm` runner, but does not start a server.
 
 The version passed to `-Version` is the package version. Release the matching product version (Cargo, Tauri and npm metadata) separately.

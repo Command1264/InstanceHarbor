@@ -37,8 +37,10 @@ const FILE_SHARE_READ: u32 = 1;
 const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 const REPARSE_POINT: u32 = 0x400;
 
-/// Release asset names carry `<platform>-<architecture>`. #66 adds rows here.
-const PLATFORMS: &[(&str, &str, &str)] = &[("windows", "x86_64", "windows-x64")];
+/// Release asset names carry `<platform>-<architecture>`. The architecture is the one this
+/// executable was built for (#66): an x64 build on an ARM64 computer keeps the x64 files and
+/// never switches architecture by itself; a missing file is reported, not replaced.
+const PLATFORMS: &[(&str, &str, &str)] = &[("windows", "x86_64", "windows-x64"), ("windows", "aarch64", "windows-arm64")];
 
 fn platform_label(os: &str, arch: &str) -> Option<&'static str> {
     PLATFORMS.iter().find(|(o, a, _)| *o == os && *a == arch).map(|(_, _, label)| *label)
@@ -699,7 +701,42 @@ mod tests {
         let found = pick(&releases(&[release("v1.2.0", false)]), Channel::Stable, &other).unwrap();
         assert_eq!(found.problem, Some("NoMatchingAsset"));
         assert_eq!(platform_label("windows", "x86_64"), Some("windows-x64"));
-        assert_eq!(platform_label("windows", "aarch64"), None);
+        assert_eq!(platform_label("windows", "aarch64"), Some("windows-arm64"));
+        assert_eq!(platform_label("windows", "x86"), None);
+        assert_eq!(platform_label("linux", "x86_64"), None);
+    }
+
+    #[test]
+    fn each_architecture_picks_only_its_own_files() {
+        let mut item = release("v1.2.0", false);
+        let asset = |name: String| json!({"name": name, "browser_download_url": format!("{DOWNLOAD_PREFIX}v1.2.0/{name}"),
+            "size": 1, "digest": DIGEST});
+        let mut assets = item["assets"].as_array().unwrap().clone();
+        assets.push(asset("InstanceHarbor-1.2.0-windows-arm64-setup.exe".into()));
+        assets.push(asset("InstanceHarbor-1.2.0-windows-arm64.zip".into()));
+        item["assets"] = Value::Array(assets);
+        let list = releases(&[item]);
+        for (platform, kind, name) in [
+            ("windows-x64", InstallKind::Setup, "InstanceHarbor-1.2.0-windows-x64-setup.exe"),
+            ("windows-x64", InstallKind::Portable, "InstanceHarbor-1.2.0-windows-x64.zip"),
+            ("windows-arm64", InstallKind::Setup, "InstanceHarbor-1.2.0-windows-arm64-setup.exe"),
+            ("windows-arm64", InstallKind::Portable, "InstanceHarbor-1.2.0-windows-arm64.zip"),
+        ] {
+            let mut current = context("1.1.0", kind);
+            current.platform = Some(platform);
+            assert_eq!(pick(&list, Channel::Stable, &current).unwrap().asset.unwrap().name, name);
+        }
+        // An ARM64 build never falls back to the x64 files of a release without ARM64 files.
+        let mut arm = context("1.1.0", InstallKind::Setup);
+        arm.platform = Some("windows-arm64");
+        let found = pick(&releases(&[release("v1.2.0", false)]), Channel::Stable, &arm).unwrap();
+        assert_eq!((found.asset, found.problem), (None, Some("NoMatchingAsset")));
+    }
+
+    #[test]
+    fn the_running_build_names_its_own_platform() {
+        let expected = if cfg!(target_arch = "aarch64") { "windows-arm64" } else { "windows-x64" };
+        assert_eq!(Context::current().unwrap().platform, Some(expected));
     }
 
     #[test]

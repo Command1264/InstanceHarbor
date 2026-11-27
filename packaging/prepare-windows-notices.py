@@ -11,7 +11,8 @@ import tomllib
 from zipfile import ZipFile, ZIP_DEFLATED
 
 ROOT = Path(__file__).resolve().parent.parent
-TARGET = "x86_64-pc-windows-msvc"
+# The Rust targets of the Windows builds (#66); each has its own dependency closure.
+TARGETS = ("x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc")
 TERMINAL_RELEASE = "https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0"
 WEBVIEW2_DOWNLOAD = "https://developer.microsoft.com/microsoft-edge/webview2/#download-section"
 MOZILLA = "https://www.mozilla.org/en-US/MPL/2.0/"
@@ -46,7 +47,7 @@ def notice_files(directory):
     return [f for f in sorted(directory.iterdir()) if f.is_file() and NOTICE_NAME.match(f.name)]
 
 
-def render(output, upstream, nsis_copying, terminal_zip, rust_docs):
+def render(output, upstream, nsis_copying, terminal_zip, rust_docs, target):
     output.mkdir(exist_ok=True)
     inventory = []
     texts = {}
@@ -62,8 +63,8 @@ def render(output, upstream, nsis_copying, terminal_zip, rust_docs):
             raise ValueError(f"Missing license text for {label}")
         inventory.append(f"{label} — {terms}\n  {origin}\n  " + "; ".join(references))
 
-    cargo_data = json.loads(cargo("metadata", "--offline", "--locked", "--filter-platform", TARGET, "--format-version", "1"))
-    tree = cargo("tree", "--offline", "--locked", "--target", TARGET, "-e", "normal,build", "--prefix", "none", "--format", "{p}")
+    cargo_data = json.loads(cargo("metadata", "--offline", "--locked", "--filter-platform", target, "--format-version", "1"))
+    tree = cargo("tree", "--offline", "--locked", "--target", target, "-e", "normal,build", "--prefix", "none", "--format", "{p}")
     packages = set(tuple(match.groups()) for match in re.finditer(r"^([\w-]+) v([^\s]+)", tree, re.M))
     locks = {(p["name"], p["version"]): p for p in tomllib.loads((ROOT / "src-tauri/Cargo.lock").read_text(encoding="utf-8"))["package"]}
     mpl_sources = {}
@@ -184,5 +185,6 @@ if __name__ == "__main__":
     parser.add_argument("--nsis-copying", type=Path, required=True)
     parser.add_argument("--terminal-zip", type=Path, required=True)
     parser.add_argument("--rust-docs", type=Path, required=True)
+    parser.add_argument("--target", choices=TARGETS, default=TARGETS[0])
     args = parser.parse_args()
-    render(args.output, args.upstream_notices, args.nsis_copying, args.terminal_zip, args.rust_docs)
+    render(args.output, args.upstream_notices, args.nsis_copying, args.terminal_zip, args.rust_docs, args.target)

@@ -30,10 +30,18 @@ $installSchema = 'instanceharbor-windows-install/v1'
 $guiNames = @('InstanceHarbor.exe', 'instanceharbor-v2.exe')
 $fileNames = $guiNames + 'ihctl.exe'
 # Match native_console.rs. Microsoft console files do not use the product's publisher certificate.
-$consoleHashes = [ordered]@{
-    'conpty.dll' = 'feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a'
-    'OpenConsole.exe' = '3d66b23d0a71bb8eed2b77edc8b9df9bf54ce6c8fb74c863a30e760997f80586'
+# A manifest without `architecture` predates #66 and is x64.
+$consoleHashesByArchitecture = @{
+    x64 = [ordered]@{
+        'conpty.dll' = 'feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a'
+        'OpenConsole.exe' = '3d66b23d0a71bb8eed2b77edc8b9df9bf54ce6c8fb74c863a30e760997f80586'
+    }
+    arm64 = [ordered]@{
+        'conpty.dll' = '151a02355227710c20c9f8f1eaf68ac4668aa09cdc921adc7ec661804d8eb1bf'
+        'OpenConsole.exe' = '4313825a3ba634d113cc6ed3bc8ce735e3c19d360cecd985794787479469f91f'
+    }
 }
+$consoleHashes = $consoleHashesByArchitecture.x64
 $crtHashes = [ordered]@{
     'vcruntime140.dll' = 'd5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066'
     'vcruntime140_1.dll' = '1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f'
@@ -87,8 +95,15 @@ function Test-Within([string]$Parent, [string]$Path) {
         $Path.StartsWith($Parent.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)
 }
 
+function Get-Architecture($Manifest) {
+    if ($null -eq $Manifest.architecture) { return 'x64' }
+    if ($Manifest.architecture -cnotin @($consoleHashesByArchitecture.Keys)) { throw 'Invalid package architecture.' }
+    $Manifest.architecture
+}
+
 function Assert-Manifest($Manifest) {
     if ($Manifest.schema -cne $packageSchema -or $Manifest.version -cnotmatch $versionPattern) { throw 'Invalid package manifest.' }
+    $consoleHashes = $consoleHashesByArchitecture[(Get-Architecture $Manifest)]
     $names = @($Manifest.files | ForEach-Object name)
     if (@($names | Where-Object { $_ -cnotin $allNames }).Count) { throw 'Invalid package manifest entries.' }
     $gui = @($names | Where-Object { $_ -cin $guiNames })
@@ -147,7 +162,7 @@ function Get-Release([string]$Id) {
             (Get-FileHash -LiteralPath $binary.FullName -Algorithm SHA256).Hash -ine $record.sha256) { throw "Release file changed: $($record.name)" }
         if ($receipt.trust -ne 'PackageDigest' -and $record.name -cin $fileNames) { Assert-Publisher $binary.FullName $receipt.publisherSha256 }
     }
-    [pscustomobject]@{ id = $Id; path = $path; version = $receipt.manifest.version; trust = $receipt.trust; names = $releaseNames; guiName = ($releaseNames | Where-Object { $_ -cin $guiNames }); nativeConsoleRuntime = ('conpty.dll' -cin $releaseNames); visualCppRuntime = ('vcruntime140.dll' -cin $releaseNames) }
+    [pscustomobject]@{ id = $Id; path = $path; version = $receipt.manifest.version; architecture = (Get-Architecture $receipt.manifest); trust = $receipt.trust; names = $releaseNames; guiName = ($releaseNames | Where-Object { $_ -cin $guiNames }); nativeConsoleRuntime = ('conpty.dll' -cin $releaseNames); visualCppRuntime = ('vcruntime140.dll' -cin $releaseNames) }
 }
 
 function Install-Stage {
@@ -304,7 +319,7 @@ try {
                 Assert-Idle
                 Set-Active $next.id $pointer.active
             }
-            [pscustomobject]@{ release = $next.id; version = $next.version; trust = $next.trust; nativeConsoleRuntime = $next.nativeConsoleRuntime; visualCppRuntime = $next.visualCppRuntime; active = ($Action -ne 'Stage' -or $pointer.active -ceq $next.id) }
+            [pscustomobject]@{ release = $next.id; version = $next.version; architecture = $next.architecture; trust = $next.trust; nativeConsoleRuntime = $next.nativeConsoleRuntime; visualCppRuntime = $next.visualCppRuntime; active = ($Action -ne 'Stage' -or $pointer.active -ceq $next.id) }
         }
         'Rollback' {
             if (!$pointer.previous) { throw 'No previous release is recorded.' }

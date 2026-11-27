@@ -28,7 +28,8 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 
 步驟依序為：`npm ci`、`npx vue-tsc --noEmit`、`npx vite build`、`npx vite build --mode development-channel --outDir dist-dev`、
 `node --test src/*.test.mjs`、`node --test scripts/*.test.mjs`、`cargo test --locked`、
-`cargo test --locked --features development-channel`，最後是 `cargo clippy --locked --all-targets` 與基線比較。
+`cargo test --locked --features development-channel`、`cargo clippy --locked --all-targets` 與基線比較，
+最後是兩種架構各自的封裝檢查（#66，見下方「封裝檢查」）。
 任一步失敗就停在該步；兩個平台各自跑完（`fail-fast: false`）。測試不重試，負載下不穩定的測試失敗時保留紀錄，另開 Issue 處理。
 
 CI runner 與一般開發機有兩個差異，測試要能同時通過：
@@ -41,6 +42,23 @@ CI runner 與一般開發機有兩個差異，測試要能同時通過：
 
 版本固定：Rust `1.100.0`、Node.js `24.22.3`（皆已發布滿依賴冷卻期），第三方 Action 以 commit SHA 釘選並在註解寫版本。
 固定 Rust 版本是為了讓新的 stable 不會帶入基線外的新 clippy lint。升級 Rust 時同一個 PR 一併重產基線。
+
+### 封裝檢查（#66）
+
+測試之後，每個架構各自：
+
+1. 下載 NSIS 3.13 官方安裝程式與釘選的 ConPTY NuGet 套件，先比對 SHA-256（與
+   [windows-distribution-licenses.md](windows-distribution-licenses.md) 及 `packaging/console-runtime.json` 相同）才使用。
+   `windows-latest` 沒有 NSIS，`windows-11-arm` 只有舊版，所以兩邊都安裝 3.13 到 `RUNNER_TEMP`。
+2. 執行 `tests/verify-windows-setup-version.ps1`（Setup 的版本、範圍、架構規則與 WebView2 偵測）。
+3. 執行 `packaging/verify-ci-package.ps1 -Architecture <x64|arm64> -Install`：以 `build-product.ps1 -Release -Architecture`
+   建置，用**佔位授權檔**產出 `InstanceHarbor-<版本>-windows-<架構>.zip` 與 `-setup.exe`，檢查 ZIP 的 `manifest.json`
+   架構、ZIP 與 Setup（以 7-Zip 解開）內 `InstanceHarbor.exe`、`ihctl.exe`、`conpty.dll`、`OpenConsole.exe`
+   的 PE Machine（x64 為 `0x8664`，ARM64 為 `0xAA64`），再在 runner 上靜默為目前使用者安裝、核對登錄的
+   `Architecture`、執行 `ihctl --version`，最後靜默解除安裝。
+
+這些檔案只是建置檢查，帶佔位授權檔，不是發行版：不上傳成 artifact，也不放到 Release。
+`-Install` 會安裝與解除安裝，只在 CI runner 或 Windows Sandbox 這類用完即丟的環境使用。
 
 ### clippy 基線
 
@@ -96,7 +114,7 @@ repository 根目錄只放專案設定、Vite 入口（`index.html`、`console.h
 
 | 資料夾 | 內容 |
 | --- | --- |
-| `packaging/` | 建置、核對與封裝：`build-product.ps1` 與它呼叫的 `resolve-npm.ps1`、`verify-no-local-paths.ps1`、`verify-app-icon.ps1`、`provision-console-runtime.ps1`、`save-release-symbols.ps1`；ConPTY 釘選紀錄 `console-runtime.json`；開發版圖示 `generate-development-icons.py`；發行封裝 `pack-windows.ps1`、`install-windows.ps1`、`pack-windows-setup.ps1`、`prepare-windows-notices.py`；Setup 的 NSIS 腳本 `windows-setup.nsi` 與 `windows-setup-*.nsh`；ZIP 內附的 `WINDOWS-GETTING-STARTED.txt`；上游授權原文 `windows-upstream-notices/`。 |
+| `packaging/` | 建置、核對與封裝：`build-product.ps1` 與它呼叫的 `resolve-npm.ps1`、`verify-no-local-paths.ps1`、`verify-app-icon.ps1`、`provision-console-runtime.ps1`、`save-release-symbols.ps1`；ConPTY 釘選紀錄 `console-runtime.json`；開發版圖示 `generate-development-icons.py`；發行封裝 `pack-windows.ps1`、`install-windows.ps1`、`pack-windows-setup.ps1`、`prepare-windows-notices.py`；CI 的封裝檢查 `verify-ci-package.ps1`；Setup 的 NSIS 腳本 `windows-setup.nsi` 與 `windows-setup-*.nsh`；ZIP 內附的 `WINDOWS-GETTING-STARTED.txt`；上游授權原文 `windows-upstream-notices/`。 |
 | `scripts/` | 啟動與維運：`launch-development.ps1`（`npm run dev`）、`launch-acceptance.ps1`、`launch-product.ps1`、`manage-recovery-backup.ps1`（#96 第 2 階段移除）。 |
 | `tests/` | 自動化測試的輔助檔與量測腳本，例如 `controlled-server.rs`、`verify-windows-setup-version.ps1`、`measure-*.ps1`。 |
 | `tests/acceptance/` | 需要真實程序、原生視窗或伺服器 JAR 的手動驗收腳本，見下一節。 |
@@ -936,16 +954,34 @@ Paper 26.3 的共用插件 JAR 隔離實驗也可使用同一份唯讀 JAR，各
 安裝腳本接受有預先核對 SHA-256 的便攜包，可驗證版本切換、
 還原與解除安裝，安裝或解除安裝時須先退出該安裝位置的程序。
 RC2 使用系統提供的 Microsoft Visual C++ v14 x64 Runtime。1.0.0 起執行檔靜態連結 Visual C++ 執行階段（`.cargo/config.toml`），不再需要 Visual C++ 可轉散發套件。rc2 Setup 曾把 `vcruntime140.dll` 與 `vcruntime140_1.dll` 放在安裝資料夾；1.0 Setup 更新與解除安裝時會刪除這兩個檔案。GUI 另使用 Windows WebView2。
-### Windows x64 發行版封裝（1.0.0-rc2 與正式版）
+### Windows 發行版封裝（x64 與 ARM64；1.0.0-rc2 與正式版）
 
 完整步驟（取得 ConPTY 套件、建置、授權通知、ZIP 與 Setup）見 [docs/windows-distribution-licenses.md](windows-distribution-licenses.md) 的「Build a distribution」。
-從 repository 根目錄以 PowerShell 7 執行 `./packaging/build-product.ps1 -Release -ConsoleRuntimeSource <ConPTY .nupkg>`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
-用 `packaging/pack-windows.ps1` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
+從 repository 根目錄以 PowerShell 7 執行 `./packaging/build-product.ps1 -Release -Architecture <x64|arm64> -ConsoleRuntimeSource <ConPTY .nupkg>`，使用已安裝的 MSVC、Windows SDK 與鎖定的前端依賴。
+`-Architecture` 預設 `x64`；`arm64` 建置 `aarch64-pc-windows-msvc`，並從同一個 ConPTY 套件取出 `win-arm64` 的 `conpty.dll` 與 `arm64` 的 `OpenConsole.exe`。
+x64 電腦交叉建置 ARM64 需要 Rust 的 `aarch64-pc-windows-msvc` target 與 MSVC 的 ARM64 建置工具；沒有時改在 ARM64 電腦或 CI 建置。
+用 `packaging/pack-windows.ps1 -Architecture <x64|arm64>` 將 release 執行檔、已核對的 ConPTY 與授權文件封裝成 ZIP。不要傳入 `-VCRuntimeDirectory`。
+腳本核對執行檔的 PE Machine 與 ConPTY 雜湊都屬於該架構，並把架構寫進 ZIP 的 `manifest.json`（沒有這個欄位的舊 ZIP 視為 x64）。
+發行檔名一律是 `InstanceHarbor-<版本>-windows-<x64|arm64>.zip` 與 `InstanceHarbor-<版本>-windows-<x64|arm64>-setup.exe`；
+輸出檔名以 `InstanceHarbor-` 開頭卻與架構或版本不符時，兩個封裝腳本都拒絕。
 `1.0.0-rc2` 與正式版號（例如 `1.0.0`）是發行版：必須附授權通知與啟動說明；正式版另必須包含 `conpty.dll` 與 `OpenConsole.exe`，缺少時拒絕封裝。
 `packaging/build-product.ps1 -Release` 沒有 `-ConsoleRuntimeSource`（或環境變數 `IH_CONSOLE_RUNTIME_SOURCE`）時會失敗，詳見「伺服器後台」。
 接著用 `packaging/pack-windows-setup.ps1` 傳入 ZIP、預期 SHA-256 和既有 NSIS 編譯器。
-Setup 從通過雜湊核對的 ZIP 取得同一套執行檔。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
-Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本的 `msedgewebview2.exe` 都要存在，與程式啟動時找到的相同）；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」的 x64 版，
+Setup 從通過雜湊核對的 ZIP 取得同一套執行檔，架構取自 ZIP 的 `manifest.json`，以 `/DARCH=x64|arm64` 傳給 NSIS（沒有 `ARCH` 時拒絕編譯）。ZIP 使用者請先讀 `WINDOWS-GETTING-STARTED.txt`。
+
+Setup 本身在每台電腦上都是 32 位元 x86 程式，依原生 CPU 架構（`IsWow64Process2`）決定（規則在 `packaging/windows-setup-arch.nsh`，#66）：
+
+| Setup 架構 | x64 電腦 | ARM64 電腦（Windows 11） | ARM64 電腦（Windows 10）或 x86 電腦 |
+| --- | --- | --- | --- |
+| x64 | 安裝 | 警告後詢問是否仍要安裝；靜默安裝直接繼續 | 拒絕（退出碼 2） |
+| arm64 | 拒絕（退出碼 2） | 安裝 | 拒絕（退出碼 2） |
+
+x64 版在 ARM64 電腦上的警告說明：Windows 以模擬執行 x64 程式，InstanceHarbor 與伺服器後台可能變慢、較耗電，部分 Windows 底層元件（例如載入的 DLL）在模擬下可能無法使用，並建議改用 `windows-arm64` 的 Setup。選「否」時退出碼為 4。
+Setup 把架構寫在解除安裝登錄的 `Architecture` 值（`x64` 或 `arm64`）；#66 之前的安裝沒有這個值，視為 x64。
+已安裝另一個架構時，Setup 先說明「目前是 X 版，會換成 Y 版，工作區、伺服器與設定都會保留」（取消時退出碼為 4，靜默安裝直接繼續），
+再照一般更新流程在原範圍與資料夾替換檔案。
+
+Setup 每次執行都先檢查 WebView2 Runtime（登錄的版本號與該版本的 `msedgewebview2.exe` 都要存在，與程式啟動時找到的相同）；缺少時說明要安裝 Microsoft「Evergreen 獨立安裝程式」中與 Setup 相同架構的版本（x64：`linkid=2124701`，ARM64：`linkid=2099616`），
 可直接開啟 Microsoft 下載，並在寫入前停止（靜默安裝回傳退出碼 3）。InstanceHarbor 每次啟動也做同樣檢查，
 缺少時提示後結束，不會留下沒有視窗的背景程序。
 這個提示不需 GUI 啟動即可決定語言：先唯讀讀取將使用的工作區 `preferences.json` 的語言設定；
@@ -970,7 +1006,7 @@ Setup 的對話框用同一條系統語言規則。
   等待頁只提供「開啟 InstanceHarbor」與「取消」；取消時退出碼為 4，不改動已安裝的檔案。標記檔釋放後自動進入安裝頁。
 - 靜默安裝（`/S`）不等待伺服器：有伺服器沒有停止或狀態讀不到時立即失敗，退出碼為 5，不改動已安裝的檔案。
   伺服器都已停止時自動關閉 GUI 與 Manager，最多等 30 秒標記檔釋放，仍被占用時退出碼為 2。
-- 等待頁各狀態的文字對應（`packaging/windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
+- 等待頁各狀態的文字對應（`packaging/windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序、架構規則（`tests/windows-setup-arch.nsi`）與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
 Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
 #### 安裝範圍與位置（#38）
@@ -1025,7 +1061,7 @@ Windows WebView2 與伺服器所需的 Java 由電腦提供。
   並在登入時先執行它。`-OnlyUac` 只跑下面的第二階段；`-OnlyExtra` 只跑英文介面、UAC 按「否」與一般使用者這幾組案例
   （與 `-OnlyUac` 一起使用時只跑後兩組）。
 
-  `-FakeServer` 是 `tests/controlled-server.rs` 編譯出的測試替身（見 `tests/acceptance/verify-resident-manager.ps1`）。
+  `-FakeServer` 是 `tests/controlled-server.rs` 編譯出的測試替身（見 `tests/acceptance/verify-resident-manager.ps1`）。Sandbox 沒有 Visual C++ 執行階段，必須以 `rustc --edition 2021 -C target-feature=+crt-static tests/controlled-server.rs -o <資料夾>\java.exe` 靜態連結編譯；動態連結的替身在 Sandbox 內無法啟動，伺服器相關案例會以 `JavaProbeFailed` 失敗。
   Sandbox 帳號預設是已提升權限的系統管理員，UAC 關閉；第一階段在這個狀態驗證兩種範圍的安裝、修復、更新、降級、執行中等待、
   其他使用者占用、資料夾規則、互動頁面與解除安裝；最後以**只有英文**的測試用 Setup 核對範圍頁、資料夾頁、等待頁與錯誤訊息的英文文字。
   這份 Setup 由腳本在 `-Evidence` 內複製 `windows-setup.nsi`、移除繁中字串後編譯，只供測試、不會發布。
@@ -1205,12 +1241,13 @@ GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
   側欄的產品名稱下方顯示「新版本 X」，按下後開啟「應用程式更新」，不擋任何操作。
   「開啟發行頁面」只把 tag 傳給 `open_update_release`，由後端核對版號格式後組成
   `https://github.com/Command1264/InstanceHarbor/releases/tag/<tag>`，頁面不傳送網址。
-- **選擇檔案**：依「平台 × 架構 × 安裝方式」選 Release asset。平台與架構目前只有 `windows-x64`
-  （`app_update.rs` 的 `PLATFORMS` 對照表，#66 增加其他平台時只擴充這張表）。執行檔旁有安裝標記檔
-  `instanceharbor.install` 時是安裝版，選 `InstanceHarbor-<版本>-windows-x64-setup.exe`；沒有時是便攜版，選
-  `InstanceHarbor-<版本>-windows-x64.zip`。檔名必須完全相同，下載網址必須是
+- **選擇檔案**：依「平台 × 架構 × 安裝方式」選 Release asset。平台與架構有 `windows-x64` 與 `windows-arm64`
+  （`app_update.rs` 的 `PLATFORMS` 對照表，以執行檔**建置時**的架構決定，#66）。x64 版在 ARM64 電腦上模擬執行時仍選 x64 檔案，
+  不會自行換架構；要換成 ARM64 版請手動執行 ARM64 的 Setup。執行檔旁有安裝標記檔
+  `instanceharbor.install` 時是安裝版，選 `InstanceHarbor-<版本>-windows-<架構>-setup.exe`；沒有時是便攜版，選
+  `InstanceHarbor-<版本>-windows-<架構>.zip`。檔名必須完全相同，下載網址必須是
   `https://github.com/Command1264/InstanceHarbor/releases/download/<tag>/<檔名>`，並且有 `sha256:` 開頭的 `digest`。
-  沒有這個檔案時顯示「此版本尚未提供適用於 windows-x64 的檔案」，不改用其他架構的檔案；檔案在但網址或 SHA-256 不符時顯示不提供。
+  沒有這個檔案時顯示「此版本尚未提供適用於 windows-arm64 的檔案」（依目前架構），不改用其他架構的檔案；檔案在但網址或 SHA-256 不符時顯示不提供。
 - **儲存**：設定與上次結果寫在工作區的 `app-update.json`（以 `app-update.lock` 序列化讀改寫），不放進 `preferences.json`，
   所以回退到不認識這些欄位的舊版仍能讀取外觀設定。檔案讀不到或不是 JSON 時視為預設值。
   上次讀到的 Release 清單也存在這裡，所以重開 GUI 或切換通道不必重新查詢。
@@ -1409,9 +1446,9 @@ Host 在啟動時依序選擇，並把結果與跳過原因寫入 `runs/<實例>
 - 世界時間不在此範圍，維持下次啟動套用。
 方向鍵、Tab 補全等無法讀回的編輯會讓該行維持「非空」直到按 Enter。
 
-**tier 1 runtime 來源**：`packaging/console-runtime.json` 固定 Microsoft ConPTY NuGet `1.25.260930003` 的 x64 檔案雜湊與簽署者，
-`native_console.rs`、`packaging/pack-windows.ps1`、`packaging/install-windows.ps1` 的雜湊由測試核對一致。
-`packaging/provision-console-runtime.ps1 -Source <資料夾或本機 .nupkg> -Destination <執行檔資料夾>` 核對 SHA-256、x64 與 Microsoft Authenticode 簽章後複製，不下載任何檔案；
+**tier 1 runtime 來源**：`packaging/console-runtime.json` 固定 Microsoft ConPTY NuGet `1.25.260930003` 的簽署者，以及 `architectures.x64` 與 `architectures.arm64` 各自的檔案雜湊、套件內路徑與 PE Machine（#66），
+`native_console.rs`（依建置架構選用其中一組）、`packaging/pack-windows.ps1`、`packaging/install-windows.ps1` 的雜湊由測試核對一致。
+`packaging/provision-console-runtime.ps1 -Source <資料夾或本機 .nupkg> -Destination <執行檔資料夾> [-Architecture x64|arm64]` 核對 SHA-256、該架構的 PE Machine 與 Microsoft Authenticode 簽章後複製，不下載任何檔案；
 目的地已有不同內容的同名檔時拒絕覆寫。`packaging/build-product.ps1` 以 `-ConsoleRuntimeSource` 呼叫它；開發版缺少來源時只警告（改用 tier 2），`-Release` 會失敗。
 
 **測試各層**：開發版 Host 讀取環境變數 `IH_CONSOLE_TIER_LIMIT=system|window|plain`，跳過較高的層（原因 `ConsoleTierLimited`）。正式版忽略此變數。

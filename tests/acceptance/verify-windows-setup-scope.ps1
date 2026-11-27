@@ -54,7 +54,7 @@ if (!$InSandbox) {
     $payload = Join-Path (Join-Path $packed.verifiedInput 'releases') $packed.packageSha256
     Push-Location (Join-Path $repo 'packaging')
     try {
-        & $Compiler /NOCONFIG /V2 "/DVERSION=$newer" "/DFILE_VERSION=$newer.0" "/DOUTPUT=$(Join-Path $inputs 'setup-b.exe')" "/DPAYLOAD=$payload" windows-setup.nsi | Out-Host
+        & $Compiler /NOCONFIG /V2 "/DVERSION=$newer" "/DFILE_VERSION=$newer.0" "/DARCH=$($packed.architecture)" "/DOUTPUT=$(Join-Path $inputs 'setup-b.exe')" "/DPAYLOAD=$payload" windows-setup.nsi | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE." }
         # A test-only copy that has only English, because the Sandbox display language is
         # Traditional Chinese. NSIS picks the language of the messages in .onInit itself, before
@@ -67,7 +67,7 @@ if (!$InSandbox) {
             Where-Object { $_ -notmatch '^\s*!insertmacro MUI_LANGUAGE "TradChinese"' -and $_ -notmatch '^\s*LangString \S+ \$\{LANG_TRADCHINESE\}' }
         $english = Join-Path $evidencePath 'windows-setup-english.nsi'
         [IO.File]::WriteAllText($english, ($lines -join "`r`n"), (New-Object Text.UTF8Encoding $true))
-        & $Compiler /NOCONFIG /NOCD /V2 "/DVERSION=$newer" "/DFILE_VERSION=$newer.0" "/DOUTPUT=$(Join-Path $inputs 'setup-en.exe')" "/DPAYLOAD=$payload" $english | Out-Host
+        & $Compiler /NOCONFIG /NOCD /V2 "/DVERSION=$newer" "/DFILE_VERSION=$newer.0" "/DARCH=$($packed.architecture)" "/DOUTPUT=$(Join-Path $inputs 'setup-en.exe')" "/DPAYLOAD=$payload" $english | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "makensis (English candidate) failed with exit code $LASTEXITCODE." }
     } finally { Pop-Location }
     Copy-Item -LiteralPath $FakeServer -Destination (Join-Path $inputs 'java.exe')

@@ -1,4 +1,5 @@
-# Checks the Setup's version order (update, repair, downgrade) with the NSIS 3.13 compiler.
+# Checks the Setup's version order (update, repair, downgrade), architecture rules and other
+# decisions with the NSIS 3.13 compiler.
 # The test installer writes its results to a temporary folder and installs nothing.
 [CmdletBinding()]
 param([Parameter(Mandatory)][string]$Compiler)
@@ -80,6 +81,23 @@ try {
     if (Test-Path -LiteralPath (Split-Path -Parent $outside)) { throw "The check for all users created $outside." }
     "Setup install scope: $(@(Get-Content -LiteralPath $decisions).Count) cases passed."
 
+    # Architecture rules (#66): which computers run the files, and switching an installation.
+    $arch = Join-Path $work 'architecture.exe'
+    $archResults = Join-Path $work 'architecture.txt'
+    Push-Location $PSScriptRoot
+    try {
+        & $Compiler /NOCONFIG /V2 "/DOUTPUT=$arch" "/DRESULTS=$archResults" windows-setup-arch.nsi
+        if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE." }
+    } finally { Pop-Location }
+    $run = Start-Process -FilePath $arch -ArgumentList '/S' -Wait -PassThru
+    if ($run.ExitCode -ne 0) { throw "The architecture test installer exited with $($run.ExitCode)." }
+    $failures = @(Get-Content -LiteralPath $archResults | Where-Object {
+        $parts = $_ -split ' '
+        $parts.Count -ne 3 -or $parts[1] -cne $parts[2]
+    })
+    if ($failures.Count) { throw "Architecture rule mismatch (case expected actual):`n$($failures -join "`n")" }
+    "Setup architecture rules: $(@(Get-Content -LiteralPath $archResults).Count) cases passed."
+
     # Setup must find the same runtime that InstanceHarbor uses on this computer.
     $detect = Join-Path $work 'webview2.exe'
     $found = Join-Path $work 'webview2.txt'
@@ -103,5 +121,19 @@ try {
     if ($actual -ne $expected) { throw "Setup found WebView2 '$actual'; expected '$expected'." }
     "Setup WebView2 detection: $(if ($actual) { $actual } else { 'missing' })"
 } finally {
-    Remove-Item -LiteralPath $work -Recurse -Force
+    # Start-Process -Wait has already waited for each test installer to exit. A just-written
+    # .exe can still be open in another process, such as an antivirus scan (seen on the
+    # windows-11-arm runner), so removal retries for up to 15 seconds. If the folder still
+    # cannot be removed, it is reported, and the checks above keep their result.
+    for ($attempt = 1; Test-Path -LiteralPath $work; $attempt++) {
+        try {
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction Stop
+        } catch [System.IO.IOException], [System.UnauthorizedAccessException] {
+            if ($attempt -ge 30) {
+                Write-Warning "Could not remove the test folder $work after $attempt attempts: $($_.Exception.Message)"
+                break
+            }
+            Start-Sleep -Milliseconds 500
+        }
+    }
 }

@@ -28,8 +28,10 @@ InstanceHarbor 是在自己電腦上執行 Minecraft 伺服器的 Windows 桌面
 
 從 [GitHub Releases](https://github.com/Command1264/InstanceHarbor/releases) 下載最新版本。
 
-- **Setup**（`InstanceHarbor-<版本>-windows-x64-setup.exe`）：預設為目前使用者安裝，不需要系統管理員權限，並在「開始」選單建立捷徑。也可以改選其他資料夾，或為這台電腦的所有使用者安裝（放在 Program Files，需要系統管理員確認）。要更新時，執行較新的 Setup 即可，會沿用原本的範圍與資料夾。解除安裝會保留伺服器與設定。
-- **便攜版 ZIP**（`InstanceHarbor-<版本>-windows-x64.zip`）：把 ZIP 完整解壓到同一個資料夾，再開啟 `InstanceHarbor.exe`。說明請見 ZIP 內的 `WINDOWS-GETTING-STARTED.txt`。
+每個檔案只適用一種處理器架構：大多數電腦用 `windows-x64`，ARM64 電腦（例如搭載 Snapdragon 處理器的電腦）用 `windows-arm64`。請選與電腦相符的檔案；程式內的更新會沿用已安裝的架構。
+
+- **Setup**（`InstanceHarbor-<版本>-windows-<x64|arm64>-setup.exe`）：預設為目前使用者安裝，不需要系統管理員權限，並在「開始」選單建立捷徑。也可以改選其他資料夾，或為這台電腦的所有使用者安裝（放在 Program Files，需要系統管理員確認）。要更新時，執行較新的 Setup 即可，會沿用原本的範圍與資料夾。解除安裝會保留伺服器與設定。ARM64 版 Setup 在 x64 電腦上會拒絕執行。x64 版 Setup 在 ARM64 電腦上會先警告：Windows 會以模擬方式執行，可能變慢，部分 Windows 底層元件也可能無法使用；確認後才安裝。在已安裝的電腦上執行另一種架構的 Setup，會換成該架構並保留資料。
+- **便攜版 ZIP**（`InstanceHarbor-<版本>-windows-<x64|arm64>.zip`）：把 ZIP 完整解壓到同一個資料夾，再開啟 `InstanceHarbor.exe`。說明請見 ZIP 內的 `WINDOWS-GETTING-STARTED.txt`。
 
 Setup 目前尚未簽章，Windows SmartScreen 可能會顯示警告。請選「其他資訊」，再選「仍要執行」。
 
@@ -61,7 +63,7 @@ $workspace = "$env:LOCALAPPDATA\InstanceHarbor\workspaces\default"
 
 ## 從原始碼建置
 
-需要：64 位元 Windows、PowerShell 7、Node.js 24 與 npm、`x86_64-pc-windows-msvc` 的 Rust stable 工具鏈，以及含 Windows SDK 的 Visual Studio Build Tools。
+需要：64 位元 Windows、PowerShell 7、Node.js 24 與 npm、`x86_64-pc-windows-msvc`（ARM64 電腦為 `aarch64-pc-windows-msvc`）的 Rust stable 工具鏈，以及含 Windows SDK 的 Visual Studio Build Tools。發行建置以 `-Architecture x64|arm64` 選擇架構，見開發指南。
 
 ```powershell
 npm ci
