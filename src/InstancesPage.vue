@@ -7,6 +7,8 @@ import ActionMenu from './components/ActionMenu.vue'
 import PinIcon from './components/PinIcon.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import InstanceDiagnosticsPanel from './components/InstanceDiagnosticsPanel.vue'
+import ServerGroupDialog from './components/ServerGroupDialog.vue'
+import { emptyServerGroups, groupOf, listEntries, matchesGroup, shownRows, validFilter, type GroupFilter, type ListSection, type ServerGroupEdit, type ServerGroups } from './server-groups'
 import {usePinnedDrag} from './usePinnedDrag'
 import {keepEditingContext} from './context-menu'
 import { displayPath } from './path-display'
@@ -14,7 +16,7 @@ import { presentedState } from './instance-state'
 import { coreBuildText, coreReasonId, coreVersionText } from './core-display'
 import { registryIssueMessage, stateIssueMessage } from './registry-issues'
 import { useAppLanguage, type MessageId } from './i18n'
-import { actionName, batchItemState, canOpenConsole, canRestart, canStop, consoleSummary, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
+import { actionName, batchItemState, canOpenConsole, canRestart, canStop, consoleSummary, errorText, manage, nativeBridge, stateName, type CoreSource, type Instance, type InstanceMeta, type Job, type Preferences } from './manager'
 
 const props = defineProps<{coreCheckRows?:Record<string,CoreSource>;
   rows: Instance[]; initialLoading?: boolean; loaded?: boolean; meta: InstanceMeta[]; preferences: Preferences; busyNames: Set<string>; feedback:string; refreshPending?: boolean; refreshDone?: boolean;
@@ -42,6 +44,33 @@ const emit = defineEmits<{
 const { t } = useAppLanguage()
 const query = ref('')
 const filter = ref('all')
+// Server groups (#37) live in the workspace; this page reads and edits them directly.
+const groupData = ref<ServerGroups>(emptyServerGroups)
+const groupFilter = ref<GroupFilter>('all')
+const groupError = ref('')
+const groupBusy = ref(false)
+const groupDialog = ref<InstanceType<typeof ServerGroupDialog>>()
+function applyGroups(data: ServerGroups) {
+  if (JSON.stringify(data) !== JSON.stringify(groupData.value)) groupData.value = data
+  groupFilter.value = validFilter(data, groupFilter.value)
+  groupError.value = ''
+}
+async function loadGroups() {
+  if (!nativeBridge || !props.connected) return
+  try { applyGroups(await manage<ServerGroups>(['server-groups'], 'background')) }
+  catch (failure) { groupError.value = t('instances.group.readError', { error: errorText(failure) }) }
+}
+async function editGroups(edit: ServerGroupEdit) {
+  if (groupBusy.value || !props.connected) return
+  groupBusy.value = true
+  try { applyGroups(await manage<ServerGroups>(['edit-server-groups', JSON.stringify(edit)])) }
+  catch (failure) { groupError.value = t('instances.group.error', { error: errorText(failure) }); void loadGroups() }
+  finally { groupBusy.value = false }
+}
+onMounted(() => { void loadGroups() })
+watch(() => props.connected, connected => { if (connected) void loadGroups() })
+watch(() => props.refreshDone, done => { if (done) void loadGroups() })
+const groupName = (name: string) => { const id = groupOf(groupData.value, name); return groupData.value.groups.find(group => group.id === id)?.name }
 const selected = ref<string[]>([])
 const anchor = ref<string | null>(null)
 const sort = ref<'name'|'core'|'port'|'state'|'recent'|null>('name')
@@ -72,7 +101,7 @@ const recentByName = computed(() => {
 })
 const visible = computed(() => props.rows.filter(row => {
   const text = (row.name + ' ' + (metaByName.value.get(row.name)?.path ?? '')).toLocaleLowerCase()
-  return text.includes(query.value.toLocaleLowerCase()) && (filter.value === 'all' ||
+  return text.includes(query.value.toLocaleLowerCase()) && matchesGroup(groupData.value, row.name, groupFilter.value) && (filter.value === 'all' ||
     // A server that is stopping is no longer listed as listening.
     (filter.value === 'running' && stateClass(row) === 'Listening') ||
     (filter.value === 'stopped' && row.state === 'Stopped') ||
@@ -101,12 +130,47 @@ const displayed=computed(()=>{
  const lookup=new Map(visible.value.map(row=>[row.name,row]))
  return [...pins.map(name=>lookup.get(name)).filter((row):row is Instance=>!!row),...visible.value.filter(row=>!pins.includes(row.name))]
 })
+const filtering=computed(()=>!!query.value || filter.value!=='all' || groupFilter.value!=='all')
+const entries=computed(()=>listEntries({visible:displayed.value,all:props.rows,pins:props.preferences.pins,data:groupData.value,running:row=>stateClass(row)==='Listening',showEmpty:!filtering.value}))
+const shown=computed(()=>shownRows(entries.value))
+// The current rows of a group, read when the menu opens or acts, not when it was drawn.
+const groupMembers=(id:string|null)=>props.rows.filter(row=>groupOf(groupData.value,row.name)===id)
+const groupMenu=ref<{section:ListSection<Instance>;x:number;y:number;trigger:HTMLElement}>()
+const groupMenuItems=computed(()=>{
+ const section=groupMenu.value?.section;if(!section)return []
+ const rows=groupMembers(section.id),named=section.id!==null,blocked=!props.connected
+ return [
+  {id:'start',label:t('instances.group.start',{count:batchCount('start',rows)}),disabled:!canSubmitBatch('start',rows)},
+  {id:'stop',label:t('instances.group.stop',{count:batchCount('stop',rows)}),disabled:!canSubmitBatch('stop',rows)},
+  {id:'restart',label:t('instances.group.restart',{count:batchCount('restart',rows)}),disabled:!canSubmitBatch('restart',rows)},
+  {id:'core',label:t('instances.group.core'),disabled:blocked||!rows.length},
+  ...(named?[{id:'rename',label:t('instances.group.rename'),disabled:blocked||groupBusy.value},{id:'delete',label:t('instances.group.delete'),danger:true,disabled:blocked||groupBusy.value}]:[]),
+ ]
+})
+function showGroupMenu(event:MouseEvent,section:ListSection<Instance>){
+ event.preventDefault();event.stopPropagation();pinDrag.cancel()
+ const trigger=event.currentTarget as HTMLElement,rect=trigger.getBoundingClientRect(),button=event.type==='click'
+ groupMenu.value={section,x:button?rect.left:event.clientX,y:button?rect.bottom:event.clientY,trigger}
+}
+function closeGroupMenu(restore:boolean){const trigger=groupMenu.value?.trigger;groupMenu.value=undefined;if(restore&&trigger?.isConnected)trigger.focus({preventScroll:true})}
+function groupMenuAction(id:string){
+ const section=groupMenu.value?.section;if(!section)return
+ const allowed=groupMenuItems.value.some(item=>item.id===id&&!item.disabled)
+ closeGroupMenu(true);if(!allowed)return
+ const rows=groupMembers(section.id)
+ if(id==='start'||id==='stop'||id==='restart')emit('batch-action',id,batchRows(id,rows))
+ else if(id==='core')emit('batch-core',rows.map(row=>row.name))
+ else if(id==='rename')groupDialog.value?.open('rename',{id:section.id})
+ else if(id==='delete')groupDialog.value?.open('delete',{id:section.id})
+}
+function toggleGroup(section:ListSection<Instance>){void editGroups({op:'collapse',id:section.id,collapsed:!section.collapsed})}
+function moveToGroup(names:string[]){if(names.length)groupDialog.value?.open('assign',{names})}
 const menu=ref<{name:string;x:number;y:number;trigger:HTMLElement}>()
 const menuItems=computed(()=>{
  const name=menu.value?.name??'',row=props.rows.find(row=>row.name===name)
  const index=props.preferences.pins.indexOf(name),blocked=!!props.pinBusy||!props.connected
  const pins=index<0?[{id:'pin',label:t('instances.pin'),disabled:blocked}]:[{id:'up',label:t('instances.pinUp'),disabled:blocked||index===0},{id:'down',label:t('instances.pinDown'),disabled:blocked||index===props.preferences.pins.length-1},{id:'pin',label:t('instances.unpin'),disabled:blocked}]
- return [...pins,{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!removable(row)}]
+ return [...pins,{id:'group',label:t('instances.group.moveTo'),disabled:!props.connected||groupBusy.value},{id:'remove',label:t('instances.removeManagement'),danger:true,disabled:!removable(row)}]
 })
 function removable(row?:Instance){return !!row&&props.connected&&row.state==='Stopped'&&!props.busyNames.has(row.name)&&!props.queuedNames?.has(row.name)}
 function showMenu(event:MouseEvent,name:string){
@@ -126,6 +190,7 @@ function menuAction(id:string){
  const allowed=menuItems.value.some(item=>item.id===id&&!item.disabled)
  closeMenu(true);if(!allowed)return
  if(id==='remove')emit('remove',name)
+ else if(id==='group')moveToGroup([name])
  else if(id==='pin')emit('pin',name)
  else emit('pin-move',name,id==='up'?-1:1)
 }
@@ -174,7 +239,7 @@ watch(() => props.rows.map(row => row.name).join('\u0000'), () => {
 })
 function choose(event: MouseEvent | KeyboardEvent, name: string) {
   if(event.type==='click' && pinDrag.consumeClick(name))return
-  const names = visible.value.map(row => row.name)
+  const names = shown.value.map(row => row.name)
   if (event.shiftKey && anchor.value && names.includes(anchor.value)) {
     const a = names.indexOf(anchor.value), b = names.indexOf(name)
     selected.value = names.slice(Math.min(a,b), Math.max(a,b)+1)
@@ -233,20 +298,25 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
   </header>
   <div class="toolbar"><label class="search-label">{{ t('instances.searchLabel') }}<input v-model="query" type="search" name="instance-search" autocomplete="off"></label>
     <label>{{ t('instances.statusLabel') }}<select v-model="filter" name="status-filter"><option value="all">{{ t('activity.allResults') }}</option><option value="running">{{ t('instance.state.listening') }}</option><option value="stopped">{{ t('instance.state.stopped') }}</option><option value="attention">{{ t('instances.filterAttention') }}</option></select></label>
+    <label v-if="groupData.groups.length">{{ t('instances.group.filterLabel') }}<select v-model="groupFilter" name="group-filter"><option value="all">{{ t('instances.group.allGroups') }}</option><option v-for="group in groupData.groups" :key="group.id" :value="'group:'+group.id">{{ group.name }}</option><option value="ungrouped">{{ t('instances.group.ungrouped') }}</option></select></label>
     <div class="actions toolbar-controls"><OperationButton class="refresh-control" :label="refreshLabel" :busy-label="t('action.checking')" :busy="refreshBusy" @click="emit('refresh')" />
     <ActionMenu :label="t('instances.allActions')">
       <button :disabled="!canSubmitBatch('start',rows)" @click="emit('batch-action','start',batchRows('start',rows))">{{ t('instances.startAll') }}</button>
       <button :disabled="!canSubmitBatch('stop',rows)" @click="emit('batch-action','stop',batchRows('stop',rows))">{{ t('instances.stopAll') }}</button>
       <button :disabled="!canSubmitBatch('restart',rows)" @click="emit('batch-action','restart',batchRows('restart',rows))">{{ t('instances.restartAll') }}</button>
       <button type="button" :disabled="!connected" @click="emit('batch-core')">{{ t('core.batch.all') }}</button>
+      <button type="button" :disabled="!connected || groupBusy" @click="groupDialog?.open('create')">{{ t('instances.group.create') }}</button>
       <button type="button" :disabled="!connected" @click="emit('removed')">{{ t('instances.removedInstances') }}</button>
     </ActionMenu></div>
   </div>
   <p class="operation-status selectable" role="status">{{ feedback }}</p>
+  <p v-if="groupError" class="form-error group-error" role="alert">{{ groupError }}</p>
   <div class="workspace">
     <section class="list-panel" :aria-label="t('instances.listLabel')" @click="blankClickClears"><div v-if="!loaded" class="selection-line"><span>{{ t('instances.listNotLoaded') }}</span></div>
       <OverlayScroll v-if="initialLoading || visible.length" class="table-wrap" :label="t('instances.listLabel')"><table ref="instanceTable" class="instances"><thead><tr><th :aria-sort="sort==='name' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('name')">{{ t('nav.instances') }} {{ sort==='name' ? (direction===1?'↑':'↓') : '' }}</button></th><th class="core-column" :aria-sort="sort==='core' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('core')">{{ t('instances.colCore') }} {{ sort==='core' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='port' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('port')">Port {{ sort==='port' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='state' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('state')">{{ t('instances.observedState') }} {{ sort==='state' ? (direction===1?'↑':'↓') : '' }}</button></th><th :aria-sort="sort==='recent' ? (direction===1?'ascending':'descending') : 'none'"><button type="button" @click="setSort('recent')">{{ t('instances.recentAction') }} {{ sort==='recent' ? (direction===1?'↑':'↓') : '' }}</button></th></tr></thead>
-        <tbody><tr v-for="row in displayed" :key="row.name" :class="{selected:selected.includes(row.name),'pin-drag-source':pinDrag.dragging.value===row.name,'pinned-draggable':preferences.pins.includes(row.name)&&canDragPins}" :data-instance="row.name" tabindex="0" :aria-selected="selected.includes(row.name)" @pointerdown.capture="pinDrag.nextPointerDown" @pointerdown="pinDrag.begin($event,row.name)" :title="preferences.pins.includes(row.name)?(canDragPins?t('instances.pinDragHint'):t('instances.pinDragBlocked')):undefined" @click="choose($event,row.name)" @keydown="keySelect($event,row.name)" @contextmenu="showMenu($event,row.name)">
+        <tbody><template v-for="entry in entries" :key="entry.kind==='row'?'row:'+entry.row.name:'group:'+(entry.section.id??'')"><tr v-if="entry.kind==='group'" class="group-row" :data-group="entry.section.id ?? ''" @contextmenu="showGroupMenu($event,entry.section)">
+          <td colspan="5"><div class="group-head"><button type="button" class="quiet group-toggle" :aria-expanded="!entry.section.collapsed" :disabled="!connected || groupBusy" @click="toggleGroup(entry.section)"><span class="group-caret" aria-hidden="true">{{ entry.section.collapsed ? '▸' : '▾' }}</span><span class="group-name">{{ entry.section.name ?? t('instances.group.ungrouped') }}</span></button><span class="group-count">{{ t('instances.group.count', { count: entry.section.members.length, running: entry.section.running }) }}</span><button type="button" class="quiet group-actions" :aria-label="t('instances.group.actionsNamed', { name: entry.section.name ?? t('instances.group.ungrouped') })" @click="showGroupMenu($event,entry.section)">{{ t('instances.group.actions') }}</button></div></td>
+        </tr><template v-else><tr v-for="row in [entry.row]" :key="row.name" :class="{selected:selected.includes(row.name),'pin-drag-source':pinDrag.dragging.value===row.name,'pinned-draggable':preferences.pins.includes(row.name)&&canDragPins}" :data-instance="row.name" tabindex="0" :aria-selected="selected.includes(row.name)" @pointerdown.capture="pinDrag.nextPointerDown" @pointerdown="pinDrag.begin($event,row.name)" :title="preferences.pins.includes(row.name)?(canDragPins?t('instances.pinDragHint'):t('instances.pinDragBlocked')):undefined" @click="choose($event,row.name)" @keydown="keySelect($event,row.name)" @contextmenu="showMenu($event,row.name)">
           <td class="instance-name-cell"><button class="pin-toggle" type="button" :class="{pinned:preferences.pins.includes(row.name)}" :aria-pressed="preferences.pins.includes(row.name)" :aria-label="preferences.pins.includes(row.name)?t('instances.unpinNamed',{name:row.name}):t('instances.pinNamed',{name:row.name})" :title="preferences.pins.includes(row.name)?t('instances.unpinInstance'):t('instances.pinInstance')" :aria-disabled="pinBusy || !connected" @click.stop="!pinBusy && connected && emit('pin',row.name)" @dblclick.stop @keydown.stop="showKeyboardMenu($event,row.name)"><PinIcon :filled="preferences.pins.includes(row.name)" /></button><span class="instance-name">{{ row.name }}</span></td>
           <td class="core-column">
             <div class="core-version">
@@ -260,7 +330,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
               </small>
             </div>
           </td><td class="number">{{ row.port }}</td><td><span class="badge" :class="stateClass(row)">{{ displayState(row) }}</span><span v-if="row.stateIssue" class="sub">{{ stateIssueText(row) }}</span></td><td>{{ recentByName.get(row.name) ? `${actionName(recentByName.get(row.name)!.action)} · ${jobStateName(recentByName.get(row.name)!.state)}` : t('instances.noActions') }}</td>
-        </tr></tbody></table><InitialQueryProgress v-if="initialLoading" centered :label="t('instances.loadingList')" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? t('instances.emptyNotLoaded') : rows.length ? t('instances.emptyNoMatch') : t('instances.emptyNone') }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">{{ t('instances.createInstance') }}</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
+        </tr></template></template></tbody></table><InitialQueryProgress v-if="initialLoading" centered :label="t('instances.loadingList')" /></OverlayScroll><div v-else class="empty list-empty"><p>{{ !loaded ? t('instances.emptyNotLoaded') : rows.length ? t('instances.emptyNoMatch') : t('instances.emptyNone') }}</p><div v-if="loaded && !rows.length" class="actions"><button class="primary" type="button" :disabled="!connected" @click="emit('create')">{{ t('instances.createInstance') }}</button><button type="button" :disabled="!connected" @click="emit('add-management-folder')">{{ t('management.add') }}</button></div></div>
     </section>
     <aside class="detail-panel" :aria-label="t('instances.detailLabel')"><OverlayScroll class="detail-scroll" :label="t('instances.detailContentLabel')"><div class="detail-content">
       <template v-if="chosen.length > 1"><h2>{{ t('instances.selectedHeading', { count: chosen.length }) }}</h2>
@@ -273,11 +343,11 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button :disabled="!canSubmitBatch('stop',chosen)" @click="emit('batch-action','stop',batchRows('stop',chosen))">{{ t('instances.stopSelected',{count:batchCount('stop',chosen)}) }}</button>
           <button :disabled="!canSubmitBatch('restart',chosen)" @click="emit('batch-action','restart',batchRows('restart',chosen))">{{ t('instances.restartSelected',{count:batchCount('restart',chosen)}) }}</button>
         </div>
-        <button type="button" :disabled="!connected" @click="emit('batch-core',chosen.map(row=>row.name))">{{ t('core.batch.selected') }}</button>
+        <div class="detail-actions"><button type="button" :disabled="!connected" @click="emit('batch-core',chosen.map(row=>row.name))">{{ t('core.batch.selected') }}</button><button type="button" :disabled="!connected || groupBusy" @click="moveToGroup(chosen.map(row=>row.name))">{{ t('instances.group.moveTo') }}</button></div>
         <details><summary>{{ t('instances.viewTargets') }}</summary><p v-for="row in chosen" :key="row.name" class="small">{{ row.name }} · {{ displayState(row) }}</p></details>
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
-        <p class="hint">{{ coreLabel(single.name) }}<template v-if="coreReason(single.name)"> · {{ coreReason(single.name) }}</template><br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><p v-if="single.listenAddress==='0.0.0.0'" class="form-error" role="note">{{ t('velocity.allInterfaces') }}</p><p v-if="metaByName.get(single.name)?.core?.sharedUsers" class="hint">{{ t('instances.sharedCore', { count: metaByName.get(single.name)?.core?.sharedUsers ?? 0 }) }}</p><p v-if="metaByName.get(single.name)?.core?.unverified" class="form-error" role="note">{{ t('core.warning.unverifiedInstance') }}</p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
+        <p class="hint">{{ coreLabel(single.name) }}<template v-if="coreReason(single.name)"> · {{ coreReason(single.name) }}</template><br>Port {{ single.port }}<span v-if="single.listenAddress"> · <bdi class="selectable" :title="t('velocity.listenAddress')" translate="no">{{ single.listenAddress }}</bdi></span></p><p v-if="groupData.groups.length" class="hint">{{ t('instances.group.member', { name: groupName(single.name) ?? t('instances.group.ungrouped') }) }}</p><p v-if="single.listenAddress==='0.0.0.0'" class="form-error" role="note">{{ t('velocity.allInterfaces') }}</p><p v-if="metaByName.get(single.name)?.core?.sharedUsers" class="hint">{{ t('instances.sharedCore', { count: metaByName.get(single.name)?.core?.sharedUsers ?? 0 }) }}</p><p v-if="metaByName.get(single.name)?.core?.unverified" class="form-error" role="note">{{ t('core.warning.unverifiedInstance') }}</p><button type="button" :disabled="!connected" @click="emit('core',single.name)">{{ t('settings.core') }}</button>
         <dl><dt>{{ t('instances.observedState') }}</dt><dd><span class="badge" :class="stateClass(single)">{{ displayState(single) }}</span></dd><dt v-if="single.stateIssue">{{ t('instances.stateProblem') }}</dt><dd v-if="single.stateIssue">{{ stateIssueText(single, true) }}</dd><dt v-if="single.outsideManagement">{{ t('instances.managementScope') }}</dt><dd v-if="single.outsideManagement">{{ t('instances.excludedCanStop') }}</dd><dt>{{ t('instances.listener') }}</dt><dd>{{ single.ownerPid ? t('instances.listenerOwner', { name: single.ownerName ?? t('instances.nameUnconfirmed'), pid: single.ownerPid }) : t('instances.unconfirmed') }}</dd><dt>{{ t('console.tier.label') }}</dt><dd>{{ consoleText(single) }}<template v-if="single.console?.tier==='window' && canStop(single)"><br><span class="form-error">{{ t('console.windowWarning') }}</span></template></dd></dl>
         <div class="detail-actions">
           <button v-if="emergency" class="danger" :disabled="forceBusy" @click="emit('force',single)">{{ t('instances.forceStop') }}</button>
@@ -289,6 +359,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
         </div>
         <div class="detail-actions">
           <button type="button" :disabled="!connected" @click="emit('open-folder',single.name)">{{ t('instances.openServerFolder') }}</button>
+          <button type="button" :disabled="!connected || groupBusy" @click="moveToGroup([single.name])">{{ t('instances.group.moveTo') }}</button>
           <button type="button" class="danger" :disabled="!removable(single)" @click="emit('remove',single.name)">{{ t('instances.removeManagement') }}</button>
         </div>
 
@@ -300,6 +371,8 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       <template v-else><h2>{{ t('instances.selectInstance') }}</h2><p class="hint">{{ t('instances.selectHint') }}</p></template>
     </div></OverlayScroll></aside>
   </div>
+  <ContextMenu v-if="groupMenu" :key="'group:'+(groupMenu.section.id??'')+':'+groupMenu.x+':'+groupMenu.y" :x="groupMenu.x" :y="groupMenu.y" :label="groupMenu.section.name ?? t('instances.group.ungrouped')" :items="groupMenuItems" @action="groupMenuAction" @close="closeGroupMenu" />
+  <ServerGroupDialog ref="groupDialog" :data="groupData" @saved="applyGroups" />
   <ContextMenu v-if="menu" :key="menu.name+':'+menu.x+':'+menu.y" :x="menu.x" :y="menu.y" :label="menu.name" :items="menuItems" @action="menuAction" @close="closeMenu" />
   <span class="sr-only" role="status">{{ pinDrag.dragging.value?t('instances.reordering',{name:pinDrag.dragging.value}):'' }}</span>
 </template>

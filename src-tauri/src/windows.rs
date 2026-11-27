@@ -24,6 +24,8 @@ pub use cache_cleanup::clear_scheduled_webview;
 mod creation;
 #[path = "creation_defaults.rs"]
 mod creation_defaults;
+#[path = "server_groups.rs"]
+mod server_groups;
 pub use creation::CreationPhase;
 #[path = "prepare_diagnostics.rs"]
 mod prepare_diagnostics;
@@ -2621,6 +2623,9 @@ fn dispatch_with_progress(
         return result;
     }
     if let Some(result) = creation_defaults::dispatch(&root, verb, args) {
+        return result;
+    }
+    if let Some(result) = server_groups::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = app_update::dispatch(&root, verb, args) {
