@@ -20,6 +20,69 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 
 驗證器建立一台實例，驗證重試，移除管理登記，再重新匯入原目錄。它模擬其他程序占用埠，啟動 Paper 至 Done，關閉與重開原生 Tauri，從 GUI 發出重啟，最後經 CLI 正常停止並確認埠釋放。已驗證的工作區可直接用 scripts/launch-acceptance.ps1 開啟。啟動 GUI 本身只讀取清單。
 
+## CI（GitHub Actions）
+
+`.github/workflows/ci.yml` 在 PR 到 `develop` 與 push 到 `develop` 時執行，矩陣為 Windows x64（`windows-latest`，
+`x86_64-pc-windows-msvc`）與 Windows ARM64（`windows-11-arm`，`aarch64-pc-windows-msvc`），兩者都在原生主機上建置與測試。
+權限只有 `contents: read`，不使用 secret，不發行、不簽章、不合併。
+
+步驟依序為：`npm ci`、`npx vue-tsc --noEmit`、`npx vite build`、`npx vite build --mode development-channel --outDir dist-dev`、
+`node --test src/*.test.mjs`、`node --test scripts/*.test.mjs`、`cargo test --locked`、
+`cargo test --locked --features development-channel`，最後是 `cargo clippy --locked --all-targets` 與基線比較。
+任一步失敗就停在該步；兩個平台各自跑完（`fail-fast: false`）。測試不重試，負載下不穩定的測試失敗時保留紀錄，另開 Issue 處理。
+
+CI runner 與一般開發機有兩個差異，測試要能同時通過：
+
+- 系統語言是英文。依系統語言顯示的文字（前端 `tr()`、Rust 的 `DisplayLanguage::System`），
+  測試要自己固定語言或依目前語言判斷，不能假設是繁體中文。
+- `TEMP` 是 8.3 短路徑（`C:\Users\RUNNER~1\...`）。開發版測試只豁免系統暫存資料夾內的測試工作區，
+  而比對用的是長路徑，所以 workflow 先把 `TEMP`／`TMP` 展開成同一位置的長路徑。
+  不要改指到 `RUNNER_TEMP`（`D:`）：x64 上「檔案被其他程序開啟」類測試會失敗。
+
+版本固定：Rust `1.100.0`、Node.js `24.22.3`（皆已發布滿依賴冷卻期），第三方 Action 以 commit SHA 釘選並在註解寫版本。
+固定 Rust 版本是為了讓新的 stable 不會帶入基線外的新 clippy lint。升級 Rust 時同一個 PR 一併重產基線。
+
+### clippy 基線
+
+`develop` 仍有既有的 clippy 警告，CI 不用 `-D warnings`，改為比較 `src-tauri/clippy-baseline.json`：
+`scripts/clippy-baseline.mjs` 讀取 `cargo clippy --message-format=json` 的輸出，以「lint 與檔案」計算警告數，
+同一位置在 lib 與測試目標重複回報只算一次。某組 lint 與檔案的數量超過基線就失敗；計數不看行號，
+所以改動造成既有警告換行不會失敗。數量比基線少時只提示，修掉警告後請重產基線讓它跟著降低：
+
+```powershell
+cd src-tauri
+cargo clippy --locked --all-targets --message-format=json > ../clippy.json
+cd ..
+node scripts/clippy-baseline.mjs check clippy.json
+node scripts/clippy-baseline.mjs write clippy.json
+Remove-Item clippy.json
+```
+
+`check` 只比較，`write` 以目前輸出覆寫基線檔；只在警告減少或升級 Rust 時執行 `write`，並在 PR 說明原因。
+
+### 在本機重現
+
+在 repository 根目錄依序執行（離線環境另加 `--offline`，Cargo 需能讀到已下載的 crate）：
+
+```powershell
+npm ci
+npx vue-tsc --noEmit
+npx vite build
+npx vite build --mode development-channel --outDir dist-dev
+node --test src/*.test.mjs
+node --test scripts/*.test.mjs
+cd src-tauri
+cargo +1.100.0 test --locked
+cargo +1.100.0 test --locked --features development-channel
+cargo +1.100.0 clippy --locked --all-targets --message-format=json > ../clippy.json
+cd ..
+node scripts/clippy-baseline.mjs check clippy.json
+```
+
+`cargo test` 與 `clippy` 需要先建好 `dist/` 與 `dist-dev/`，因為 Tauri 會在編譯時嵌入前端資產。
+本機沒有 `1.100.0` 工具鏈時可省略 `+1.100.0`，但較新的 clippy 可能多出基線外的 lint，結果以 CI 為準。
+ARM64 只在 CI 驗證，本機不需安裝 `aarch64-pc-windows-msvc` 目標。
+
 ## 驗收步驟
 
 1. 關閉可能仍開著的 2.0 驗收視窗，執行 scripts/launch-acceptance.ps1。選取 paper-agent，應顯示已停止。
@@ -1053,12 +1116,28 @@ cargo test --offline --locked --manifest-path src-tauri/Cargo.toml --features de
 
 | 正式版（藍） | 開發版（紅） | 使用位置 |
 |---|---|---|
-| `src-tauri/icons/icon.ico` | `src-tauri/icons/icon-dev.ico` | 執行檔資源 32512：檔案總管、工作列、Alt+Tab、標題列、系統匣 |
+| `src-tauri/icons/icon.ico` | `src-tauri/icons/icon-dev.ico` | 執行檔資源 32512（檔案總管、捷徑、解除安裝清單、系統匣）與 Tauri 預設視窗圖示（標題列、工作列、Alt+Tab） |
 | `src/assets/instanceharbor-brand.png` | `src/assets/instanceharbor-brand-dev.png` | 側欄品牌圖 |
 
-建置時自動選用，不需要手動切換：`build.rs` 依 `development-channel` feature 選 ICO（`src-tauri/src/app_icon.rs`），
+每個通道用哪些圖檔只記在 `src-tauri/icons/channels.json`（#116），其他地方一律讀它，不各自寫圖檔路徑：
+
+| 使用處 | 如何取得 |
+|---|---|
+| 執行檔資源（`InstanceHarbor.exe`、`InstanceHarborDev.exe`、`ihctl.exe`） | `build.rs` 經 `src-tauri/src/app_icon.rs` 的 `for_channel` 取得 ICO，交給 tauri-build 嵌入 |
+| 主視窗與原生 Console 檢視器視窗的標題列、工作列、Alt+Tab | `build.rs` 把同一個 ICO 寫進 `TAURI_CONFIG` 的 `bundle.icon`；`main.rs` 的 `tauri_context()` 是唯一的 `generate_context!`，兩種視窗都用它的預設視窗圖示 |
+| Manager 系統匣 | `manager_tray.rs` 以 `app_icon::resource_id()` 讀執行檔資源 |
+| 捷徑、解除安裝清單 | 指向執行檔，顯示執行檔資源 |
+| 側欄品牌圖（GUI 與 `preview/`） | `vite.config.ts` 的 `brandLogoAlias` 依 Vite mode 讀 manifest，元件只匯入 `@brand-logo` |
+| 建置檢查與紅色圖產生 | `packaging/verify-app-icon.ps1 -Channel`、`packaging/build-product.ps1`、`packaging/generate-development-icons.py` 讀 manifest |
+| Setup 安裝程式圖示 | 例外：Setup 只建置正式版，`packaging/windows-setup.nsi` 仍直接寫藍色 ICO |
+
+Windows 主控台後援（`Window` 層級，真正的 console 視窗）由 Windows 繪製，顯示主控台主機的圖示，不在本表範圍。
+
+建置時自動選用，不需要手動切換：`build.rs` 依 `development-channel` feature 選 ICO，
 `packaging/build-product.ps1 -Development` 以 Vite mode `development-channel` 建置前端，`vite.config.ts` 據此選側欄圖。
-系統匣圖示讀取執行檔資源，所以跟著執行檔切換。
+
+`tauri.conf.json` 沒有 `bundle.icon` 時，tauri-codegen 2.6 一律把 `icons/icon.ico` 編進執行檔當預設視窗圖示，
+與嵌入的執行檔資源無關；所以 #116 之前開發版的系統匣與執行檔是紅色，標題列、工作列與 Alt+Tab 卻是藍色。
 
 更換藍色圖示後，在 repository 根目錄重新產生紅色版並一起提交（只用 Python 標準函式庫）：
 
@@ -1072,8 +1151,11 @@ python packaging/generate-development-icons.py --check
 
 防止正式版誤用紅色圖示的檢查：
 
-- `cargo test` 的 `app_icon` 測試：正式版設定必須嵌入 `icons/icon.ico`，開發版必須嵌入 `icons/icon-dev.ico`，兩檔尺寸相同但內容不同。
-- `packaging/build-product.ps1` 建置後以 `packaging/verify-app-icon.ps1` 讀出 `InstanceHarbor.exe`（或 `InstanceHarborDev.exe`）與 `ihctl.exe` 內嵌的圖示，
+- `cargo test` 的 `app_icon` 測試：嵌入的 ICO 與 `TAURI_CONFIG` 的 `bundle.icon` 都是該通道在 manifest 的 ICO，兩通道的 ICO 尺寸相同但內容不同。
+- `cargo test` 的 `window_icon_tests`：`tauri_context()` 的預設視窗圖示在正式版是藍色、開發版是紅色。
+- `node --test src/channel-icons.test.mjs`：除了 manifest、Markdown 文件與 Setup，任何受版控的檔案寫出圖檔名或資源編號就失敗；
+  Rust 程式只能有一個 `generate_context!`，設定圖示的呼叫只能是系統匣經 `app_icon` 的那一處。新增顯示圖示的地方時，向 `app_icon.rs`（Rust）或 manifest（其他語言）取得。
+- `packaging/build-product.ps1` 建置後以 `packaging/verify-app-icon.ps1 -Channel` 讀出 `InstanceHarbor.exe`（或 `InstanceHarborDev.exe`）與 `ihctl.exe` 內嵌的圖示，
   逐位元組比對該版本應使用的 ICO；並確認前端只含該版本的側欄圖。不符時建置失敗。
 
 讀出執行檔內嵌的圖示並另存為 ICO，再產生紅藍對照圖：

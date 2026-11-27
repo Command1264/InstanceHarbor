@@ -1,0 +1,11 @@
+{
+  "resource": 32512,
+  "product": {
+    "app": "src-tauri/icons/icon.ico",
+    "brand": "src/assets/instanceharbor-brand.png"
+  },
+  "development": {
+    "app": "src-tauri/icons/icon-dev.ico",
+    "brand": "src/assets/instanceharbor-brand-dev.png"
+  }
+}

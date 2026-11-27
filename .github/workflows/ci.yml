@@ -1,0 +1,140 @@
+# Build and test on Windows x64 and Windows ARM64 (#122). No secrets, no releases,
+# no signing. docs/development.md ("CI") explains each step and how to run it locally.
+name: CI
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Released 2026-11-10.
+  NODE_VERSION: 24.22.3
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: Windows ARM64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      # Rust 1.100.0, released 2026-11-12. Pinned so a new stable release cannot add clippy
+      # lints that are not in src-tauri/clippy-baseline.json; change both together.
+      RUSTUP_TOOLCHAIN: 1.100.0-${{ matrix.target }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Set up Rust
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'aarch64' } else { 'x86_64' }
+            $installer = Join-Path $env:RUNNER_TEMP 'rustup-init.exe'
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile $installer
+            & $installer -y --default-toolchain none --profile minimal --no-modify-path
+            if ($LASTEXITCODE -ne 0) { throw "rustup-init failed with exit code $LASTEXITCODE" }
+            $bin = Join-Path $env:USERPROFILE '.cargo\bin'
+            $bin >> $env:GITHUB_PATH
+            $env:PATH = "$bin;$env:PATH"
+          }
+          rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component clippy --no-self-update
+          if ($LASTEXITCODE -ne 0) { throw "rustup toolchain install failed with exit code $LASTEXITCODE" }
+          rustc -vV
+          $hostLine = rustc -vV | Select-String '^host: '
+          if ("$hostLine" -ne "host: ${{ matrix.target }}") { throw "Expected a ${{ matrix.target }} host toolchain, got '$hostLine'." }
+
+      - name: Cache Cargo downloads and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            src-tauri/target
+          key: cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ env.RUSTUP_TOOLCHAIN }}-
+
+      - name: Use a long-form temporary folder
+        # The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\...). Development-channel
+        # tests exempt fixtures only under the temporary folder, and the long form the code
+        # compares does not start with the short one. Expand TEMP to its long form in place;
+        # moving it to RUNNER_TEMP on drive D: breaks the file-in-use tests on x64.
+        run: |
+          Add-Type -Namespace Native -Name Path -MemberDefinition @'
+          [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+          public static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint length);
+          '@
+          $buffer = New-Object System.Text.StringBuilder 1024
+          if ([Native.Path]::GetLongPathName($env:TEMP, $buffer, $buffer.Capacity) -eq 0) { throw "GetLongPathName failed for TEMP." }
+          $long = $buffer.ToString()
+          "TEMP: $env:TEMP -> $long"
+          "TEMP=$long" >> $env:GITHUB_ENV
+          "TMP=$long" >> $env:GITHUB_ENV
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Type check (vue-tsc)
+        run: npx vue-tsc --noEmit
+
+      - name: Vite build (release)
+        run: npx vite build
+
+      - name: Vite build (development channel)
+        run: npx vite build --mode development-channel --outDir dist-dev
+
+      - name: Front-end tests
+        run: node --test src/*.test.mjs
+
+      - name: Script tests
+        run: node --test scripts/*.test.mjs
+
+      - name: cargo test (release channel)
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: cargo test (development channel)
+        working-directory: src-tauri
+        run: cargo test --locked --features development-channel
+
+      - name: cargo clippy compared with the baseline
+        working-directory: src-tauri
+        run: |
+          $json = Join-Path $env:RUNNER_TEMP 'clippy.json'
+          cargo clippy --locked --all-targets --message-format=json-diagnostic-rendered-ansi > $json
+          $clippyExit = $LASTEXITCODE
+          # Show the rendered warnings in the log, then compare them with the baseline.
+          Get-Content $json | ConvertFrom-Json | Where-Object { $_.reason -eq 'compiler-message' } | ForEach-Object { $_.message.rendered }
+          if ($clippyExit -ne 0) { throw "cargo clippy failed with exit code $clippyExit" }
+          node ../scripts/clippy-baseline.mjs check $json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

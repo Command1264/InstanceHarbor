@@ -1,0 +1,21 @@
+{
+  "clippy::bool_assert_comparison src/batch_import.rs": 1,
+  "clippy::bool_assert_comparison src/server_removal.rs": 1,
+  "clippy::chunks_exact_to_as_chunks src/instance_diagnostics.rs": 2,
+  "clippy::chunks_exact_to_as_chunks src/windows.rs": 1,
+  "clippy::cloned_ref_to_slice_refs src/global_java.rs": 1,
+  "clippy::collapsible_if src/legacy_preview.rs": 1,
+  "clippy::items_after_test_module src/batch_import.rs": 1,
+  "clippy::manual_is_multiple_of src/prepare.rs": 1,
+  "clippy::manual_pattern_char_comparison src/prepare_diagnostics/nbt.rs": 1,
+  "clippy::needless_borrow src/presentation.rs": 1,
+  "clippy::needless_borrows_for_generic_args src/windows.rs": 3,
+  "clippy::obfuscated_if_else src/diagnostics.rs": 1,
+  "clippy::ptr_arg src/path_format.rs": 1,
+  "clippy::redundant_closure src/resident_manager.rs": 1,
+  "clippy::sliced_string_as_bytes src/policy_settings.rs": 1,
+  "clippy::too_many_arguments src/agent_profiles.rs": 1,
+  "clippy::too_many_arguments src/auto_restart.rs": 1,
+  "clippy::too_many_arguments src/world_live/first_ready.rs": 1,
+  "clippy::type_complexity src/presentation.rs": 1
+}

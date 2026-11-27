@@ -1,4 +1,6 @@
 #[path = "src/app_icon.rs"]
+// The build script needs only the icon of its channel, not the resource number.
+#[allow(dead_code)]
 mod app_icon;
 #[path = "src/build_commit.rs"]
 mod build_commit;
@@ -69,23 +71,26 @@ fn main() {
     }
     let development = std::env::var_os("CARGO_FEATURE_DEVELOPMENT_CHANNEL").is_some();
     // Blue for the product, red for the development channel; see app_icon.rs.
-    let icon = app_icon::for_channel(development);
+    println!("cargo:rerun-if-changed={}", app_icon::MANIFEST);
+    let icon = app_icon::for_channel(development).app_in_crate();
     println!("cargo:rerun-if-changed={icon}");
     println!("cargo:rustc-env={}={icon}", app_icon::VARIABLE);
+    // Without bundle.icon, tauri-codegen takes the default window icon (title bar, taskbar,
+    // Alt+Tab) from the product ICO whatever the channel (#116), so name the channel's ICO.
+    let mut config = serde_json::json!({ "bundle": { "icon": [icon] } });
     // The executable embeds Vite assets, including files whose hashed names change.
     if development {
-        const DEV_CONFIG: &str = r#"{
-            "productName":"InstanceHarbor Dev",
-            "identifier":"local.instanceharbor.dev",
-            "build":{"frontendDist":"../dist-dev"}
-        }"#;
+        config["productName"] = "InstanceHarbor Dev".into();
+        config["identifier"] = "local.instanceharbor.dev".into();
+        config["build"] = serde_json::json!({ "frontendDist": "../dist-dev" });
         println!("cargo:rerun-if-changed=../dist-dev");
-        // The resource compiler and generate_context! must resolve the same assets.
-        std::env::set_var("TAURI_CONFIG", DEV_CONFIG);
-        println!("cargo:rustc-env=TAURI_CONFIG={}", DEV_CONFIG.replace('\n', ""));
     } else {
         println!("cargo:rerun-if-changed=../dist");
     }
+    // The resource compiler and generate_context! must resolve the same config.
+    let config = config.to_string();
+    std::env::set_var("TAURI_CONFIG", &config);
+    println!("cargo:rustc-env=TAURI_CONFIG={config}");
     let windows = tauri_build::WindowsAttributes::new().window_icon_path(icon);
     if let Err(error) = tauri_build::try_build(tauri_build::Attributes::new().windows_attributes(windows)) {
         panic!("error while running the Tauri build helpers: {error:#}");
