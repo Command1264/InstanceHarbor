@@ -22,9 +22,6 @@ const OPEN_ID: &str = "manager-open";
 #[cfg(not(test))]
 const QUIT_ID: &str = "manager-quit";
 #[cfg(not(test))]
-/// The application icon tauri-build embeds in every binary of the package.
-const ICON_RESOURCE: u16 = 32512;
-#[cfg(not(test))]
 const REFRESH: Duration = Duration::from_secs(5);
 
 /// Whether Quit may end the Manager right away.
@@ -226,7 +223,7 @@ fn run(root: &Path, gui: &Path, hooks: &Hooks, stop: &AtomicBool) -> Result<()> 
         .with_id(format!("instanceharbor-manager-{}", std::process::id()))
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false);
-    match Icon::from_resource(ICON_RESOURCE, None) {
+    match Icon::from_resource(crate::app_icon::resource_id(), None) {
         Ok(icon) => builder = builder.with_icon(icon),
         Err(error) => eprintln!("Manager tray icon resource unavailable: {error}"),
     }

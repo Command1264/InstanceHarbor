@@ -483,6 +483,13 @@ const CONSOLE_MIN_SIZE: window_placement::LogicalSize = window_placement::Logica
     height: 280.0,
 };
 
+/// The Tauri context of the GUI and the console viewer. Its default window icon is what
+/// Windows shows in the title bar, the taskbar and Alt+Tab; build.rs points it at the icon of
+/// the channel (app_icon.rs). Every window comes from this one context.
+fn tauri_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
 #[cfg(windows)]
 fn run_console(workspace: &str) -> Result<(), String> {
     desktop_channel::validate_workspace(std::path::Path::new(workspace), false)?;
@@ -491,7 +498,7 @@ fn run_console(workspace: &str) -> Result<(), String> {
     let Some(viewer) = instanceharbor::ConsoleViewer::start(workspace)? else {
         return Ok(());
     };
-    let mut context = tauri::generate_context!();
+    let mut context = tauri_context();
     context.config_mut().identifier = desktop_channel::IDENTIFIER.into();
     context.config_mut().app.windows.clear();
     context.config_mut().app.security.csp = Some(serde_json::from_value(json!(
@@ -745,7 +752,7 @@ fn main() {
             tauri::async_runtime::block_on(manage_recorded(vec![verb.into()], None, None))
         });
     }
-    let mut context = tauri::generate_context!();
+    let mut context = tauri_context();
     // Acceptance uses the debug profile, so set this before Tauri creates windows.
     let enable_devtools = cfg!(any(debug_assertions, feature = "development-channel"))
         && !cfg!(feature = "acceptance-ui");
@@ -979,5 +986,46 @@ mod console_viewer_exit_tests {
         assert!(console.contains("api.prevent_close();") && console.contains("window_handle.hide()"));
         assert!(console.contains("let quit = app.state::<instanceharbor::ConsoleViewer>().quit_requests()?;"));
         assert!(console.contains("if quit.recv().is_ok() {\n                    handle.exit(0);"));
+    }
+}
+
+#[cfg(test)]
+mod window_icon_tests {
+    /// The mean hue in degrees of the saturated, visible pixels, from -180 to 180.
+    fn hue(rgba: &[u8]) -> f64 {
+        let (mut x, mut y) = (0.0, 0.0);
+        for pixel in rgba.as_chunks::<4>().0 {
+            let [r, g, b, a] = pixel.map(|v| f64::from(v) / 255.0);
+            let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+            if a < 0.5 || max - min < 0.2 {
+                continue;
+            }
+            let degrees = if max == r {
+                60.0 * ((g - b) / (max - min))
+            } else if max == g {
+                60.0 * ((b - r) / (max - min) + 2.0)
+            } else {
+                60.0 * ((r - g) / (max - min) + 4.0)
+            };
+            let weight = (max - min) * a;
+            x += weight * degrees.to_radians().cos();
+            y += weight * degrees.to_radians().sin();
+        }
+        assert!(x != 0.0 || y != 0.0, "the icon has colored pixels");
+        y.atan2(x).to_degrees()
+    }
+
+    #[test]
+    fn windows_show_the_icon_of_their_channel() {
+        // #116: tauri-codegen embedded the product ICO as every window's icon, so the
+        // development title bar, taskbar and Alt+Tab stayed blue.
+        let context = super::tauri_context();
+        let icon = context.default_window_icon().expect("windows have a default icon");
+        let hue = hue(icon.rgba());
+        if cfg!(feature = "development-channel") {
+            assert!(hue.abs() < 20.0, "development windows show the red icon, got hue {hue:.0}");
+        } else {
+            assert!((190.0..250.0).contains(&hue.rem_euclid(360.0)), "product windows show the blue icon, got hue {hue:.0}");
+        }
     }
 }
