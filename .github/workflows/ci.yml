@@ -87,10 +87,19 @@ jobs:
       - name: Use a long-form temporary folder
         # The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\...). Development-channel
         # tests exempt fixtures only under the temporary folder, and the long form the code
-        # compares does not start with the short one, so point TEMP at RUNNER_TEMP instead.
+        # compares does not start with the short one. Expand TEMP to its long form in place;
+        # moving it to RUNNER_TEMP on drive D: breaks the file-in-use tests on x64.
         run: |
-          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
-          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          Add-Type -Namespace Native -Name Path -MemberDefinition @'
+          [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+          public static extern uint GetLongPathName(string shortPath, System.Text.StringBuilder longPath, uint length);
+          '@
+          $buffer = New-Object System.Text.StringBuilder 1024
+          if ([Native.Path]::GetLongPathName($env:TEMP, $buffer, $buffer.Capacity) -eq 0) { throw "GetLongPathName failed for TEMP." }
+          $long = $buffer.ToString()
+          "TEMP: $env:TEMP -> $long"
+          "TEMP=$long" >> $env:GITHUB_ENV
+          "TMP=$long" >> $env:GITHUB_ENV
 
       - name: npm ci
         run: npm ci
