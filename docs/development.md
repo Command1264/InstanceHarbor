@@ -1061,7 +1061,7 @@ Windows WebView2 與伺服器所需的 Java 由電腦提供。
   並在登入時先執行它。`-OnlyUac` 只跑下面的第二階段；`-OnlyExtra` 只跑英文介面、UAC 按「否」與一般使用者這幾組案例
   （與 `-OnlyUac` 一起使用時只跑後兩組）。
 
-  `-FakeServer` 是 `tests/controlled-server.rs` 編譯出的測試替身（見 `tests/acceptance/verify-resident-manager.ps1`）。
+  `-FakeServer` 是 `tests/controlled-server.rs` 編譯出的測試替身（見 `tests/acceptance/verify-resident-manager.ps1`）。Sandbox 沒有 Visual C++ 執行階段，必須以 `rustc --edition 2021 -C target-feature=+crt-static tests/controlled-server.rs -o <資料夾>\java.exe` 靜態連結編譯；動態連結的替身在 Sandbox 內無法啟動，伺服器相關案例會以 `JavaProbeFailed` 失敗。
   Sandbox 帳號預設是已提升權限的系統管理員，UAC 關閉；第一階段在這個狀態驗證兩種範圍的安裝、修復、更新、降級、執行中等待、
   其他使用者占用、資料夾規則、互動頁面與解除安裝；最後以**只有英文**的測試用 Setup 核對範圍頁、資料夾頁、等待頁與錯誤訊息的英文文字。
   這份 Setup 由腳本在 `-Evidence` 內複製 `windows-setup.nsi`、移除繁中字串後編譯，只供測試、不會發布。
