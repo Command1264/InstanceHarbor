@@ -28,7 +28,7 @@ InstanceHarbor 是在自己電腦上執行 Minecraft 伺服器的 Windows 桌面
 
 從 [GitHub Releases](https://github.com/Command1264/InstanceHarbor/releases) 下載最新版本。
 
-- **Setup**（`InstanceHarbor-<版本>-windows-x64-setup.exe`）：為目前使用者安裝，不需要系統管理員權限，並在「開始」選單建立捷徑。要更新時，執行較新的 Setup 即可。解除安裝會保留伺服器與設定。
+- **Setup**（`InstanceHarbor-<版本>-windows-x64-setup.exe`）：預設為目前使用者安裝，不需要系統管理員權限，並在「開始」選單建立捷徑。也可以改選其他資料夾，或為這台電腦的所有使用者安裝（放在 Program Files，需要系統管理員確認）。要更新時，執行較新的 Setup 即可，會沿用原本的範圍與資料夾。解除安裝會保留伺服器與設定。
 - **便攜版 ZIP**（`InstanceHarbor-<版本>-windows-x64.zip`）：把 ZIP 完整解壓到同一個資料夾，再開啟 `InstanceHarbor.exe`。說明請見 ZIP 內的 `WINDOWS-GETTING-STARTED.txt`。
 
 Setup 目前尚未簽章，Windows SmartScreen 可能會顯示警告。請選「其他資訊」，再選「仍要執行」。
@@ -46,7 +46,7 @@ Setup 目前尚未簽章，Windows SmartScreen 可能會顯示警告。請選「
 
 ## 命令列
 
-`ihctl.exe` 安裝在 `InstanceHarbor.exe` 旁邊。每個指令的第一個參數都是工作區資料夾：
+`ihctl.exe` 安裝在 `InstanceHarbor.exe` 旁邊（範例使用目前使用者的預設資料夾）。每個指令的第一個參數都是工作區資料夾：
 
 ```powershell
 $ihctl = "$env:LOCALAPPDATA\Programs\InstanceHarbor\ihctl.exe"
