@@ -1645,7 +1645,14 @@ mod tests {
         assert!(!chinese_interface(DisplayLanguage::English));
         let root = std::env::temp_dir().join(format!("ih-console-title-{}-{}", std::process::id(), clock()));
         fs::create_dir(&root).unwrap();
-        assert!(console_window_title(&root, "lobby").contains("關閉此視窗會停止伺服器"));
+        // With no saved preference the title follows the Windows display language, which is
+        // English on the CI runners (#122).
+        let closing = if chinese_interface(DisplayLanguage::default()) {
+            "關閉此視窗會停止伺服器"
+        } else {
+            "closing this window stops the server"
+        };
+        assert!(console_window_title(&root, "lobby").contains(closing));
         fs::remove_dir(&root).unwrap();
     }
 
