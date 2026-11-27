@@ -2,13 +2,16 @@
 #
 # On the host (PowerShell 7) it builds two Setups from one verified ZIP: the package version
 # with packaging/pack-windows-setup.ps1, and the same payload as the next patch version
-# (for update, repair and downgrade). It then writes a .wsb into -Evidence, starts Windows
-# Sandbox and waits for the result. Nothing is installed on the host.
+# (for update, repair and downgrade), plus a test-only English Setup. It then writes a .wsb
+# into -Evidence, starts Windows Sandbox and waits for the result. Nothing is installed on the
+# host.
 #
 # Inside the Sandbox (Windows PowerShell 5.1, -InSandbox) phase "admin" runs with the
 # Sandbox's elevated account (User Account Control is off). It then turns UAC on and restarts
-# the Sandbox; phase "uac" runs the elevation cases from a medium-integrity scheduled task.
-# Evidence: run.log (PASS/FAIL lines), screenshots and the registry exports in -Evidence\out.
+# the Sandbox; phase "uac" runs the elevation cases at medium integrity. A SYSTEM helper
+# answers the UAC prompt with No like a user.
+# Evidence: run.log (PASS/FAIL lines), consent-agent.log, watch-*.log and screenshots in
+# -Evidence\out.
 [CmdletBinding()]
 param(
     [string]$Compiler,
@@ -24,6 +27,9 @@ param(
     [int]$TimeoutMinutes = 45,
     # Skips the cases of the elevated account and runs only the UAC phase.
     [switch]$OnlyUac,
+    # Runs only the English pages (first phase) and the UAC prompt answered with No and the
+    # standard-user elevation (second phase).
+    [switch]$OnlyExtra,
     [switch]$InSandbox,
     [ValidateSet('admin', 'uac', 'medium')][string]$Phase = 'admin'
 )
@@ -50,11 +56,25 @@ if (!$InSandbox) {
     try {
         & $Compiler /NOCONFIG /V2 "/DVERSION=$newer" "/DFILE_VERSION=$newer.0" "/DOUTPUT=$(Join-Path $inputs 'setup-b.exe')" "/DPAYLOAD=$payload" windows-setup.nsi | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "makensis failed with exit code $LASTEXITCODE." }
+        # A test-only copy that has only English, because the Sandbox display language is
+        # Traditional Chinese. NSIS picks the language of the messages in .onInit itself, before
+        # .onInit sets $LANGUAGE, so the Traditional Chinese strings are removed, not only the
+        # display-language check. It is built from a patched copy in -Evidence, never shipped.
+        $source = [IO.File]::ReadAllText((Join-Path $repo 'packaging\windows-setup.nsi'))
+        $probe = "System::Call 'kernel32::GetUserDefaultUILanguage() i.r0'"
+        if (!$source.Contains($probe) -or !$source.Contains('!insertmacro MUI_LANGUAGE "TradChinese"')) { throw 'windows-setup.nsi no longer chooses the language as expected; update the English candidate.' }
+        $lines = $source.Replace($probe, 'StrCpy $0 0x0409').Replace('StrCpy $LANGUAGE ${LANG_TRADCHINESE}', 'StrCpy $LANGUAGE ${LANG_ENGLISH}') -split "`r?`n" |
+            Where-Object { $_ -notmatch '^\s*!insertmacro MUI_LANGUAGE "TradChinese"' -and $_ -notmatch '^\s*LangString \S+ \$\{LANG_TRADCHINESE\}' }
+        $english = Join-Path $evidencePath 'windows-setup-english.nsi'
+        [IO.File]::WriteAllText($english, ($lines -join "`r`n"), (New-Object Text.UTF8Encoding $true))
+        & $Compiler /NOCONFIG /NOCD /V2 "/DVERSION=$newer" "/DFILE_VERSION=$newer.0" "/DOUTPUT=$(Join-Path $inputs 'setup-en.exe')" "/DPAYLOAD=$payload" $english | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "makensis (English candidate) failed with exit code $LASTEXITCODE." }
     } finally { Pop-Location }
     Copy-Item -LiteralPath $FakeServer -Destination (Join-Path $inputs 'java.exe')
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $inputs 'run.ps1')
     Set-Content -LiteralPath (Join-Path $inputs 'versions.txt') -Value @($packed.version, $newer)
     if ($OnlyUac) { Set-Content -LiteralPath (Join-Path $inputs 'only-uac.txt') -Value 'only-uac' }
+    if ($OnlyExtra) { Set-Content -LiteralPath (Join-Path $inputs 'only-extra.txt') -Value 'only-extra' }
     $wsb = Join-Path $evidencePath 'setup-scope.wsb'
     $logon = 'cmd.exe /d /c powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\CjkSetup\Install-CjkFonts.ps1 -LogPath C:\Results\cjk-fonts.log &amp;&amp; powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File C:\Inputs\run.ps1 -InSandbox'
     Set-Content -LiteralPath $wsb -Encoding UTF8 -Value @"
@@ -94,6 +114,9 @@ if (!$InSandbox) {
 # ---------------------------------------------------------------- inside Windows Sandbox
 if ($env:USERNAME -ne 'WDAGUtilityAccount') { throw 'Sandbox only.' }
 Add-Content -LiteralPath 'C:\Results\started.txt' -Value ("{0:HH:mm:ss} phase={1} args={2}" -f (Get-Date), $Phase, ($args -join ' '))
+# An error outside the cases (before run.log can be written) still leaves a trace. A trap
+# covers the whole script, so the host part only stops.
+trap { if ($InSandbox) { Add-Content -LiteralPath 'C:\Results\started.txt' -Value ("{0:HH:mm:ss} error at line {1}: {2}" -f (Get-Date), $_.InvocationInfo.ScriptLineNumber, $_) }; break }
 $in = 'C:\Inputs'
 $out = 'C:\Results'
 $log = Join-Path $out 'run.log'
@@ -103,6 +126,7 @@ $vb = $versions[1]
 $public = 'C:\Users\Public\ih-scope'
 $setupA = Join-Path $public 'setup-a.exe'
 $setupB = Join-Path $public 'setup-b.exe'
+$setupEn = Join-Path $public 'setup-en.exe'
 $key = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\InstanceHarbor-Desktop'
 $userRoot = Join-Path $env:LOCALAPPDATA 'Programs\InstanceHarbor'
 $machineRoot = Join-Path $env:ProgramFiles 'InstanceHarbor'
@@ -111,13 +135,29 @@ $userShortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'InstanceHa
 $machineShortcut = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'InstanceHarbor.lnk'
 $installed = @('InstanceHarbor.exe', 'ihctl.exe', 'conpty.dll', 'OpenConsole.exe', 'WINDOWS-GETTING-STARTED.txt', 'LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip', 'instanceharbor.install', 'Uninstall.exe')
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+# A watchdog writes the processes and window titles every 15 seconds to watch.log, so that
+# a step that never returns can be explained from the host.
+$watch = Join-Path $out "watch-$Phase.log"
+# A new file each time: a medium-integrity phase cannot overwrite the file of an elevated one.
+$watchScript = Join-Path $env:TEMP ("ih-watch-" + [guid]::NewGuid().ToString('N') + '.ps1')
+Set-Content -LiteralPath $watchScript -Encoding UTF8 -Value @"
+while (`$true) {
+    `$p = Get-Process | Where-Object { `$_.MainWindowTitle -or `$_.Name -match 'setup|consent|nsu|Uninstall|ihctl|InstanceHarbor|WerFault|smartscreen|msiexec' } | ForEach-Object { '{0}#{1} s{2} [{3}] {4}' -f `$_.Name, `$_.Id, `$_.SessionId, `$_.MainWindowTitle, `$_.Path }
+    `$m = Get-Process -Id $PID -ErrorAction SilentlyContinue
+    `$p += if (`$m) { 'script#{0} cpu={1:N1}s children={2} threads={3}' -f `$m.Id, `$m.CPU, ((Get-CimInstance Win32_Process -Filter "ParentProcessId=$PID" | ForEach-Object { `$_.Name + '#' + `$_.ProcessId }) -join ','), ((`$m.Threads | ForEach-Object { if ([string]`$_.ThreadState -eq 'Wait') { [string]`$_.WaitReason } else { [string]`$_.ThreadState } } | Group-Object | ForEach-Object { `$_.Name + 'x' + `$_.Count }) -join ',') } else { 'script ended' }
+    Add-Content -LiteralPath '$watch' -Value ("{0:HH:mm:ss} {1}" -f (Get-Date), (`$p -join ' ; ')) -Encoding UTF8
+    Start-Sleep -Seconds 15
+}
+"@
+Start-Process -FilePath powershell.exe -ArgumentList "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$watchScript`"" -WindowStyle Hidden
 
 function Log([string]$m) {
     $line = "{0:HH:mm:ss.fff} [{1}] {2}" -f (Get-Date), $Phase, $m
-    # The host may be reading the mapped log at the same moment.
+    # The host may be reading the mapped log at the same moment (a reader that keeps it open,
+    # such as tail -f, blocks every write; read it with short reads instead).
     for ($try = 1; ; $try++) {
         try { Add-Content -LiteralPath $log -Value $line -Encoding UTF8 -ErrorAction Stop; return }
-        catch { if ($try -ge 20) { throw }; Start-Sleep -Milliseconds 250 }
+        catch { if ($try -ge 120) { throw }; Start-Sleep -Milliseconds 250 }
     }
 }
 function Check([bool]$ok, [string]$label) { if ($ok) { Log "PASS $label" } else { Log "FAIL $label" } }
@@ -174,7 +214,10 @@ function Gui([string]$root) {
     $p
 }
 function Prepare-Fake([string]$root, [string]$workspace, [int]$port) {
-    if (!(Test-Path -LiteralPath $workspace)) { Ih $root $workspace @('init') | Out-Null }
+    if (!(Test-Path -LiteralPath $workspace)) {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $workspace) -Force | Out-Null
+        Ih $root $workspace @('init') | Out-Null
+    }
     New-Item -ItemType Directory -Path (Join-Path $workspace 'instances\fake') -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $workspace 'instances\fake\server.properties') -Value @("server-port=$port", 'server-ip=127.0.0.1')
     New-Item -ItemType File -Path (Join-Path $workspace 'instances\fake\server.jar') -Force | Out-Null
@@ -276,12 +319,24 @@ public static class SetupUi {
 function Ui($p) { $t = [SetupUi]::Texts($p.Id); Log "ui #$($p.Id): $t"; $t }
 function Click($p, [int]$id, [string]$label) { Log "click $label ($id): $([SetupUi]::ClickId($p.Id, $id))"; Start-Sleep -Seconds 2 }
 function ClickText($p, [string]$text) { Log "click '$text': $([SetupUi]::ClickText($p.Id, $text))"; Start-Sleep -Seconds 2 }
+# CreateProcess, without the shell: a new Setup started through the shell sometimes never
+# returned in the Sandbox (SmartScreen without network).
+function Launch([string]$exe, [string]$arguments = '') { [Diagnostics.Process]::Start((New-Object Diagnostics.ProcessStartInfo $exe, $arguments -Property @{ UseShellExecute = $false })) }
 function Finish($p, [int]$seconds = 20) { if (!$p.WaitForExit($seconds * 1000)) { Log "setup #$($p.Id) did not exit"; Stop-Process -Id $p.Id -Force; return -1 }; $p.ExitCode }
 
 # The standard user who runs InstanceHarbor from the installation for all users.
 $stdName = 'ihscope'
 $stdSecret = Join-Path $out 'std.clixml'
 function Std-Credential { Import-Clixml -LiteralPath $stdSecret }
+function Ensure-Std {
+    if (Test-Path -LiteralPath $stdSecret) { return }
+    Log "creating the standard user $stdName"
+    $secret = -join ((1..24) | ForEach-Object { [char](Get-Random -Minimum 65 -Maximum 90) }) + 'a1!'
+    $secure = ConvertTo-SecureString $secret -AsPlainText -Force
+    New-LocalUser -Name $stdName -Password $secure -PasswordNeverExpires -AccountNeverExpires | Out-Null
+    New-Object Management.Automation.PSCredential ".\$stdName", $secure | Export-Clixml -LiteralPath $stdSecret
+    Log 'standard user created'
+}
 function As-Std([string]$script, [int]$seconds = 60) {
     $id = [guid]::NewGuid().ToString('N')
     $file = Join-Path $public "std-$id.ps1"
@@ -308,9 +363,10 @@ function Elevated([string]$command) {
 function Phase-Admin {
     Log "integrity $(Integrity); EnableLUA $((Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System').EnableLUA); versions $va $vb"
     New-Item -ItemType Directory -Path $public -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $in 'setup-a.exe'), (Join-Path $in 'setup-b.exe'), (Join-Path $in 'java.exe') -Destination $public
+    Copy-Item -LiteralPath (Join-Path $in 'setup-a.exe'), (Join-Path $in 'setup-b.exe'), (Join-Path $in 'setup-en.exe'), (Join-Path $in 'java.exe') -Destination $public
     & icacls.exe $public /grant '*S-1-5-32-545:(OI)(CI)M' /Q | Out-Null
-    if (Test-Path -LiteralPath (Join-Path $in 'only-uac.txt')) { Log 'only the UAC phase (-OnlyUac)'; Enable-Uac; return }
+    if (Test-Path -LiteralPath (Join-Path $in 'only-uac.txt')) { Log 'only the UAC phase (-OnlyUac)'; Ensure-Std; Enable-Uac; return }
+    if (Test-Path -LiteralPath (Join-Path $in 'only-extra.txt')) { Log 'only the added cases (-OnlyExtra)'; Phase-English; Enable-Uac; return }
 
     # --- Only for the current user (default) -------------------------------------------
     Check ((Setup $setupA '/S') -eq 0) 'Silent install without arguments ends with 0'
@@ -381,10 +437,7 @@ function Phase-Admin {
     Check ((Setup $setupA "/S /D=$machineRoot") -eq 0 -and (Reg HKLM).InstallLocation -eq $machineRoot) 'Repair with /D= naming the registered folder works'
 
     # Other users: a standard user runs a server from the installation for all users.
-    $secret = -join ((1..24) | ForEach-Object { [char](Get-Random -Minimum 65 -Maximum 90) }) + 'a1!'
-    $secure = ConvertTo-SecureString $secret -AsPlainText -Force
-    New-LocalUser -Name $stdName -Password $secure -PasswordNeverExpires -AccountNeverExpires | Out-Null
-    New-Object Management.Automation.PSCredential ".\$stdName", $secure | Export-Clixml -LiteralPath $stdSecret
+    Ensure-Std
     $stdOut = Join-Path $public 'std-out.txt'
     $code = As-Std @"
 `$ErrorActionPreference = 'Continue'
@@ -504,7 +557,83 @@ Start-Sleep -Seconds 3
     Click $p 2 'OK (a message box with one button uses ID 2)'
     Click $p 2 'Cancel'
     Check ((Finish $p) -eq 4 -and !(Reg HKCU) -and !(Reg HKLM)) 'Cancel on the folder page installs nothing'
+    Phase-English
     Enable-Uac
+}
+
+# The English texts, with the test-only candidate that always shows English.
+function Phase-English {
+    Log 'English candidate: preparing'
+    Ensure-Std
+    New-Item -ItemType Directory -Path 'C:\IH-used' -Force | Out-Null
+    Set-Content -LiteralPath 'C:\IH-used\notes.txt' -Value 'not InstanceHarbor'
+    Log 'English candidate: interactive pages'
+    $p = Launch $setupEn
+    Start-Sleep -Seconds 4
+    Log "setup-en #$($p.Id) exited=$($p.HasExited)"
+    Click $p 1 'Next (welcome)'
+    $t = Ui $p
+    Shot 'en-scope-page'
+    Check ($t -match 'Choose who can use InstanceHarbor' -and $t -match 'Only for me \(recommended\)' -and $t -match 'For all users of this computer' -and $t -match 'asks for administrator approval \(User Account Control\)' -and $t -match 'Each user keeps a separate workspace') 'English scope page'
+    ClickText $p 'For all users'
+    Click $p 1 'Next (scope)'
+    $t = Ui $p
+    Shot 'en-folder-page'
+    Check ($t -match 'Setup installs InstanceHarbor in the following folder. Choose an empty or new folder' -and ([SetupUi]::EditText($p.Id, 1019)) -eq $machineRoot) 'English folder page (for all users: Program Files)'
+    Log "set folder: $([SetupUi]::SetEdit($p.Id, 1019, 'C:\IH-used'))"
+    Click $p 1 'Next (folder)'
+    $m = [SetupUi]::MessageText($p.Id); Log "message: $m"
+    Check ($m -match 'This folder already contains other files:' -and $m -match 'Choose an empty or new folder') 'English: a folder with other files is refused'
+    Click $p 2 'OK'
+    Log "set folder: $([SetupUi]::SetEdit($p.Id, 1019, 'C:\Users\Public\IH-shared'))"
+    Click $p 1 'Next (folder)'
+    $m = [SetupUi]::MessageText($p.Id); Log "message: $m"
+    Check ($m -match 'This folder is inside a user profile, where other users cannot use it') 'English: for all users, a folder in a user profile is refused'
+    Click $p 2 'OK'
+    Click $p 3 'Back'
+    ClickText $p 'Only for me'
+    Click $p 1 'Next (scope)'
+    Log "set folder: $([SetupUi]::SetEdit($p.Id, 1019, "$env:ProgramFiles\IH-scope"))"
+    Click $p 1 'Next (folder)'
+    $m = [SetupUi]::MessageText($p.Id); Log "message: $m"
+    Shot 'en-folder-protected'
+    Check ($m -match 'This folder needs administrator rights:' -and $m -match 'go Back and install for all users') 'English: only for me refuses a folder that needs administrator rights'
+    Click $p 2 'OK'
+    Click $p 2 'Cancel'
+    Check ((Finish $p) -eq 4 -and !(Reg HKCU) -and !(Reg HKLM)) 'English: Cancel installs nothing'
+
+    $p = Launch $setupEn '/AllUsers /CurrentUser'
+    Start-Sleep -Seconds 4
+    $m = [SetupUi]::MessageText($p.Id); Log "message: $m"
+    Click $p 2 'OK'
+    Check ($m -match 'Use only one of /AllUsers and /CurrentUser' -and (Finish $p) -eq 2) 'English: /AllUsers with /CurrentUser is explained (2)'
+
+    Check ((Setup $setupEn '/S /AllUsers') -eq 0 -and (Reg HKLM).InstallLocation -eq $machineRoot) 'English candidate installs for all users'
+    $p = Launch $setupEn '/CurrentUser'
+    Start-Sleep -Seconds 4
+    $m = [SetupUi]::MessageText($p.Id); Log "message: $m"
+    Click $p 2 'OK'
+    Check ($m -match 'InstanceHarbor is already installed for all users of this computer' -and $m -match 'To install it only for you, uninstall it first' -and (Finish $p) -eq 2 -and !(Reg HKCU)) 'English: the other scope is explained (2)'
+
+    Prepare-Fake $machineRoot $ws 25599
+    Start-Fake $machineRoot $ws
+    $p = Launch $setupEn
+    Start-Sleep -Seconds 4
+    $t = Ui $p
+    Click $p 6 'Yes (repair)'
+    Click $p 1 'Next (welcome)'
+    Start-Sleep -Seconds 6
+    $t = Ui $p
+    Shot 'en-wait-page'
+    Check ($t -match 'Closing InstanceHarbor' -and $t -match '1 server\(s\) are not stopped' -and $t -match 'InstanceHarbor is installed for all users of this computer\. If other users have InstanceHarbor or its servers open, their programs keep these files in use too') 'English wait page for all users (own servers and the note for other users)'
+    Stop-Fake $machineRoot $ws
+    $until = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $until -and !$p.HasExited -and ![SetupUi]::Enabled($p.Id, 1)) { Start-Sleep -Milliseconds 500 }
+    Start-Sleep -Seconds 8
+    Click $p 1 'Finish'
+    Check ((Finish $p 30) -eq 0) 'English: the repair continues after the server stopped'
+    Uninstall $machineRoot
+    Check (!(Reg HKLM) -and !(Test-Path -LiteralPath $machineRoot)) 'English candidate uninstalled'
 }
 
 # Turns UAC on for the next phase and restarts the Sandbox.
@@ -545,6 +674,7 @@ function Phase-Medium {
     $level = Integrity
     Log "integrity $level"
     Check ($level -eq 'Medium') 'The UAC phase runs without administrator rights (medium integrity)'
+    if (Test-Path -LiteralPath (Join-Path $in 'only-extra.txt')) { Phase-Consent; return }
     Check ((Setup $setupA '/S') -eq 0 -and (Reg HKCU).InstallLocation -eq $userRoot) 'Per-user install needs no elevation'
     Uninstall $userRoot
     Check (!(Reg HKCU) -and !(Test-Path -LiteralPath $userRoot)) 'Per-user uninstall needs no elevation'
@@ -595,6 +725,8 @@ while ((Get-Date) -lt `$until -and `$ended -lt 2) {
     }
     Start-Sleep -Milliseconds 500
 }
+Set-ItemProperty -LiteralPath '$policy' -Name ConsentPromptBehaviorAdmin -Value 0
+Add-Content -LiteralPath '$helperLog' -Value "prompt off `$(Get-Date -Format HH:mm:ss)"
 "@
     Start-Process -FilePath powershell.exe -ArgumentList "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$helper`"" -Verb RunAs -WindowStyle Hidden
     $until = (Get-Date).AddSeconds(30)
@@ -621,6 +753,275 @@ while ((Get-Date) -lt `$until -and `$ended -lt 2) {
     $code = Setup $setupA '/S /AllUsers'
     Log "helper: $((Get-Content -LiteralPath $helperLog -ErrorAction SilentlyContinue) -join ' || ')"
     Check (($code -eq 4 -or $code -eq 2) -and !(Reg HKLM) -and !(Test-Path -LiteralPath $machineRoot)) "Silent install for all users with a refused prompt changes nothing (exit $code)"
+    $until = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $until -and !((Get-Content -LiteralPath $helperLog -ErrorAction SilentlyContinue) -match 'prompt off')) { Start-Sleep -Milliseconds 500 }
+    Phase-Consent
+}
+
+# ---------------------------------------------------------------- UAC prompt answered with No
+# A Sandbox-only helper answers the UAC prompt like a user. The prompt runs as SYSTEM, and
+# Windows lets only a process of the same level press its buttons, so the elevated launcher
+# starts the helper with the SYSTEM token of this session's winlogon.exe. The prompt is on
+# the normal desktop (PromptOnSecureDesktop 0). The helper also runs the commands that the
+# medium-integrity script cannot (C:\ih-agent\*.ps1) and logs the prompt's texts.
+$agentDir = 'C:\ih-agent'
+$agentCode = @'
+param([string]$Dir)
+$ErrorActionPreference = 'Continue'
+$log = Join-Path $Dir 'agent.log'
+function L([string]$m) { Add-Content -LiteralPath $log -Value ('{0:HH:mm:ss.fff} {1}' -f (Get-Date), $m) -Encoding UTF8 }
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.Forms, System.Drawing
+Add-Type -TypeDefinition @"
+using System;
+using System.Text;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class Prompt {
+    delegate bool EnumProc(IntPtr window, IntPtr context);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr context);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr window, StringBuilder text, int length);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    public static List<IntPtr> Windows(int pid) {
+        var list = new List<IntPtr>();
+        EnumWindows((w, c) => { uint owner; GetWindowThreadProcessId(w, out owner); if (owner == pid) list.Add(w); return true; }, IntPtr.Zero);
+        return list;
+    }
+    public static string Describe(IntPtr w) { var b = new StringBuilder(256); GetClassName(w, b, b.Capacity); return b.ToString() + (IsWindowVisible(w) ? " visible" : " hidden"); }
+    public static bool Visible(IntPtr w) { return IsWindowVisible(w); }
+    public static void Escape() { keybd_event(0x1B, 0, 0, UIntPtr.Zero); keybd_event(0x1B, 0, 2, UIntPtr.Zero); }
+}
+"@
+$A = [Windows.Automation.AutomationElement]
+# The prompt's windows (Win32, so that they are found even when UI Automation does not list
+# them under the desktop), their UI Automation texts, and the No button.
+function Tree([int]$id) {
+    $items = @(); $tops = @()
+    foreach ($h in [Prompt]::Windows($id)) {
+        $items += '<' + [Prompt]::Describe($h) + '>'
+        if (![Prompt]::Visible($h)) { continue }
+        try { $w = $A::FromHandle($h) } catch { $items += "uia: $_"; continue }
+        $tops += $w
+        foreach ($e in $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+            if ($e.Current.Name) { $items += ('{0}={1}' -f $e.Current.ControlType.ProgrammaticName.Replace('ControlType.', ''), $e.Current.Name) }
+        }
+    }
+    @{ tops = $tops; text = ($items -join ' | ') }
+}
+function FindButton($tops, [string]$pattern) {
+    $cond = New-Object Windows.Automation.PropertyCondition($A::ControlTypeProperty, [Windows.Automation.ControlType]::Button)
+    foreach ($w in $tops) { foreach ($b in $w.FindAll([Windows.Automation.TreeScope]::Descendants, $cond)) { if ($b.Current.Name -match $pattern) { return $b } } }
+    $null
+}
+function Shot([string]$name) {
+    try {
+        $s = [Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bmp = New-Object Drawing.Bitmap $s.Width, $s.Height
+        $g = [Drawing.Graphics]::FromImage($bmp)
+        $g.CopyFromScreen($s.Location, [Drawing.Point]::Empty, $s.Size)
+        $bmp.Save((Join-Path $Dir "$name.png"), [Drawing.Imaging.ImageFormat]::Png)
+        $g.Dispose(); $bmp.Dispose()
+    } catch { L "screenshot: $_" }
+}
+L ('agent as {0}, session {1}' -f (whoami), (Get-Process -Id $PID).SessionId)
+$seen = @{}
+$until = (Get-Date).AddMinutes(40)
+while ((Get-Date) -lt $until -and !(Test-Path -LiteralPath (Join-Path $Dir 'stop'))) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter '*.ps1')) {
+        $o = Join-Path $Dir ($f.BaseName + '.out')
+        try { & $f.FullName *>&1 | Out-String -Width 400 | Set-Content -LiteralPath $o -Encoding UTF8 } catch { "ERROR $_" | Set-Content -LiteralPath $o -Encoding UTF8 }
+        Rename-Item -LiteralPath $f.FullName -NewName ($f.BaseName + '.done')
+    }
+    foreach ($c in @(Get-Process -Name consent -ErrorAction SilentlyContinue)) {
+        if ($seen.ContainsKey($c.Id)) { continue }
+        $seen[$c.Id] = $true
+        $action = 'none'
+        $file = Join-Path $Dir 'action.txt'
+        if (Test-Path -LiteralPath $file) { $action = (Get-Content -LiteralPath $file | Select-Object -First 1).Trim() }
+        $start = Get-Date; $t = $null; $b = $null
+        do {
+            Start-Sleep -Milliseconds 500
+            try {
+                $t = Tree $c.Id
+                $b = FindButton $t.tops '^(否|No)($|[\s(（])'
+            } catch { L "uia: $_" }
+            $ready = if ($action -eq 'no') { [bool]$b } else { $t -and $t.text -and ((Get-Date) - $start).TotalSeconds -ge 3 }
+        } until ($ready -or $c.HasExited -or ((Get-Date) - $start).TotalSeconds -ge 20)
+        L ('consent #{0} action={1} ui: {2}' -f $c.Id, $action, $(if ($t) { $t.text }))
+        Shot "consent-$($c.Id)"
+        if ($action -eq 'no') {
+            if ($b) { $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke(); L "invoked '$($b.Current.Name)' in consent #$($c.Id)" }
+            else {
+                # Esc answers the prompt like No. Logged as such, so the check can tell them apart.
+                $h = @([Prompt]::Windows($c.Id) | Where-Object { [Prompt]::Visible($_) }) | Select-Object -First 1
+                if ($h) { [void][Prompt]::SetForegroundWindow($h); Start-Sleep -Milliseconds 300; [Prompt]::Escape(); L "pressed Esc in consent #$($c.Id)" }
+                Start-Sleep -Seconds 5
+                if (!$c.HasExited) { L "consent #$($c.Id) still open; ending it"; Stop-Process -Id $c.Id -Force -ErrorAction SilentlyContinue }
+            }
+        } elseif ($action -eq 'kill') { Stop-Process -Id $c.Id -Force -ErrorAction SilentlyContinue; L "ended consent #$($c.Id)" }
+    }
+    Start-Sleep -Milliseconds 300
+}
+L 'agent stopped'
+'@
+$launcherCode = @'
+param([string]$Agent, [string]$Dir)
+$log = Join-Path $Dir 'agent.log'
+try {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+public static class SystemLaunch {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public struct StartupInfo { public int cb; public string reserved; public string desktop; public string title; public int x, y, width, height, columns, rows, fill, flags; public short show, reserved2; public IntPtr reserved3, input, output, error; }
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ProcessInfo { public IntPtr process, thread; public int pid, tid; }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool OpenProcessToken(IntPtr process, int access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr token, int access, IntPtr attributes, int level, int type, out IntPtr copy);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern bool CreateProcessWithTokenW(IntPtr token, int logon, string app, string command, int flags, IntPtr environment, string folder, ref StartupInfo startup, out ProcessInfo info);
+    public static int Start(int pid, string command) {
+        Process.EnterDebugMode();
+        IntPtr process = OpenProcess(0x1000, false, pid);
+        if (process == IntPtr.Zero) throw new Exception("OpenProcess " + Marshal.GetLastWin32Error());
+        IntPtr token, copy;
+        if (!OpenProcessToken(process, 0x000B, out token)) throw new Exception("OpenProcessToken " + Marshal.GetLastWin32Error());
+        if (!DuplicateTokenEx(token, 0x02000000, IntPtr.Zero, 2, 1, out copy)) throw new Exception("DuplicateTokenEx " + Marshal.GetLastWin32Error());
+        StartupInfo startup = new StartupInfo();
+        startup.cb = Marshal.SizeOf(typeof(StartupInfo));
+        startup.desktop = "winsta0\\default";
+        ProcessInfo info;
+        if (!CreateProcessWithTokenW(copy, 0, null, command, 0x08000000, IntPtr.Zero, "C:\\", ref startup, out info)) throw new Exception("CreateProcessWithTokenW " + Marshal.GetLastWin32Error());
+        return info.pid;
+    }
+}
+"@
+    $session = (Get-Process -Id $PID).SessionId
+    $winlogon = Get-Process -Name winlogon | Where-Object { $_.SessionId -eq $session } | Select-Object -First 1
+    $id = [SystemLaunch]::Start($winlogon.Id, "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$Agent`" -Dir `"$Dir`"")
+    Add-Content -LiteralPath $log -Value "launcher: agent #$id from winlogon #$($winlogon.Id) in session $session"
+} catch { Add-Content -LiteralPath $log -Value "launcher: ERROR $_" }
+'@
+function Agent-Log { @(Get-Content -LiteralPath (Join-Path $agentDir 'agent.log') -Encoding UTF8 -ErrorAction SilentlyContinue) }
+# Runs PowerShell code as the SYSTEM helper and returns its output.
+function Agent([string]$code, [int]$seconds = 90) {
+    $id = [guid]::NewGuid().ToString('N')
+    $tmp = Join-Path $agentDir "$id.txt"
+    Set-Content -LiteralPath $tmp -Value $code -Encoding UTF8
+    Rename-Item -LiteralPath $tmp -NewName "$id.ps1"
+    $done = Join-Path $agentDir "$id.done"
+    $until = (Get-Date).AddSeconds($seconds)
+    while (!(Test-Path -LiteralPath $done) -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 300 }
+    if (!(Test-Path -LiteralPath $done)) { Log 'agent command did not finish' }
+    $o = Get-Content -LiteralPath (Join-Path $agentDir "$id.out") -Raw -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $done, (Join-Path $agentDir "$id.out") -Force -ErrorAction SilentlyContinue
+    if ($o) { $o = $o.Trim() }
+    Log "agent: $o"
+    $o
+}
+function Consent-Action([string]$action) { Set-Content -LiteralPath (Join-Path $agentDir 'action.txt') -Value $action; Log "consent action: $action" }
+# Starts an interactive Setup, chooses all users and waits for its message after the prompt.
+function Scope-AllUsers([string]$exe) {
+    $p = Launch $exe
+    Start-Sleep -Seconds 4
+    Click $p 1 'Next (welcome)'
+    ClickText $p 'For all users|為這台電腦的所有使用者安裝'
+    Click $p 1 'Next (scope)'
+    $until = (Get-Date).AddSeconds(45)
+    while ((Get-Date) -lt $until -and !$p.HasExited -and ![SetupUi]::MessageText($p.Id)) { Start-Sleep -Milliseconds 500 }
+    $m = [SetupUi]::MessageText($p.Id)
+    Log "message: $m"
+    @{ p = $p; m = $m }
+}
+# What a standard user's Setup is doing when it does not end, then ends it.
+function Std-Diag([string]$label) {
+    $d = Agent @"
+Get-CimInstance Win32_Process | Where-Object { `$_.Name -match '^(setup-a|consent|powershell)\.exe$' } | ForEach-Object { '{0} {1} session={2} parent={3} cmd={4}' -f `$_.ProcessId, `$_.Name, `$_.SessionId, `$_.ParentProcessId, `$_.CommandLine }
+foreach (`$p in @(Get-Process -Name setup-a -ErrorAction SilentlyContinue)) { 'threads of {0}: {1}' -f `$p.Id, ((`$p.Threads | ForEach-Object { if ([string]`$_.ThreadState -eq 'Wait') { '{0}:{1}' -f `$_.Id, `$_.WaitReason } else { '{0}:{1}' -f `$_.Id, `$_.ThreadState } }) -join ' ') }
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+foreach (`$w in [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) { 'window pid={0} class={1} name={2}' -f `$w.Current.ProcessId, `$w.Current.ClassName, `$w.Current.Name }
+"@
+    Log "diagnostics ($label): $d"
+    foreach ($s in @(Get-Process -Name setup-a -ErrorAction SilentlyContinue)) { Log "setup #$($s.Id) windows: $([SetupUi]::Texts($s.Id))" }
+    Agent "Get-Process -Name setup-a -ErrorAction SilentlyContinue | Stop-Process -Force; 'ended'" | Out-Null
+}
+# A standard user runs Setup (started with the user's credentials, like As-Std).
+function Std-Setup([string]$label, [string]$arguments, [int]$seconds) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $code = As-Std "`$p = [Diagnostics.Process]::Start('$setupA', '$arguments'); `$p.WaitForExit(); exit `$p.ExitCode" $seconds
+    Log ("standard user ({0}): setup-a {1} -> {2} in {3:N0}s" -f $label, $arguments, $code, $sw.Elapsed.TotalSeconds)
+    if ($code -lt 0) { Std-Diag $label }
+    $code
+}
+
+function Phase-Consent {
+    $policy = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    New-Item -ItemType Directory -Path $agentDir -Force | Out-Null
+    $agent = Join-Path $agentDir 'agent.ps1'
+    $launcher = Join-Path $agentDir 'agent-launch.ps1'
+    Set-Content -LiteralPath $agent -Value $agentCode -Encoding UTF8
+    Set-Content -LiteralPath $launcher -Value $launcherCode -Encoding UTF8
+    Consent-Action 'none'
+    # Administrators are still elevated without a prompt here. Not -Wait: Windows PowerShell
+    # then also waits for the helper, which keeps running.
+    $started = Start-Process -FilePath powershell.exe -ArgumentList "-NoLogo -NoProfile -ExecutionPolicy Bypass -File `"$launcher`" -Agent `"$agent`" -Dir `"$agentDir`"" -Verb RunAs -WindowStyle Hidden -PassThru
+    [void]$started.WaitForExit(60000)
+    $until = (Get-Date).AddSeconds(30)
+    while (!((Agent-Log) -match '^\S+ agent as') -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 500 }
+    Log "agent log: $((Agent-Log) -join ' || ')"
+    Check ([bool]((Agent-Log) -match 'agent as nt authority\\system')) 'A SYSTEM helper runs on the desktop to answer the UAC prompt'
+    if (!((Agent-Log) -match 'agent as')) { return }
+    try {
+        Agent "Set-ItemProperty -LiteralPath '$policy' -Name ConsentPromptBehaviorAdmin -Value 5; Get-ItemProperty -LiteralPath '$policy' | Select-Object ConsentPromptBehaviorAdmin, ConsentPromptBehaviorUser, PromptOnSecureDesktop | Format-List" | Out-Null
+        Consent-Action 'no'
+        $r = Scope-AllUsers $setupA
+        Shot 'uac-no-message'
+        Check ($r.m -match '為所有使用者安裝需要系統管理員確認，但沒有取得確認。沒有做任何變更。') 'No in the UAC prompt: Setup explains that approval was not given'
+        Click $r.p 2 'OK'
+        $t = Ui $r.p
+        Check ($t -match '選擇安裝範圍') 'After No, Setup stays on the scope page'
+        Click $r.p 2 'Cancel'
+        Check ((Finish $r.p) -eq 4 -and !(Reg HKLM) -and !(Test-Path -LiteralPath $machineRoot)) 'After No, Cancel exits 4 and nothing is installed'
+        $code = Setup $setupA '/S /AllUsers'
+        Check ($code -eq 4 -and !(Reg HKLM) -and !(Test-Path -LiteralPath $machineRoot)) "Silent install for all users: No in the UAC prompt exits 4 and changes nothing (exit $code)"
+        $r = Scope-AllUsers $setupEn
+        Check ($r.m -match 'An installation for all users needs administrator approval, which was not given\. Nothing was changed\.') 'English: No in the UAC prompt'
+        Click $r.p 2 'OK'
+        $t = Ui $r.p
+        Check ($t -match 'Choose who can use InstanceHarbor') 'English: after No, Setup stays on the scope page'
+        Click $r.p 2 'Cancel'
+        [void](Finish $r.p)
+        Consent-Action 'kill'
+        $r = Scope-AllUsers $setupEn
+        Check ($r.m -match 'Setup could not start with administrator rights\. Nothing was changed\.') 'English: an ended UAC prompt (Setup could not elevate)'
+        Click $r.p 2 'OK'
+        Click $r.p 2 'Cancel'
+        [void](Finish $r.p)
+        $invoked = @((Agent-Log) | Where-Object { $_ -match "invoked '(否|No)" }).Count
+        $escaped = @((Agent-Log) | Where-Object { $_ -match 'pressed Esc' }).Count
+        Check ($invoked + $escaped -ge 3) "The SYSTEM helper answered the UAC prompt with No ($invoked times the No button, $escaped times Esc)"
+
+        # --- A standard user asks for elevation ----------------------------------------------
+        Ensure-Std
+        Consent-Action 'none'
+        Agent "Set-ItemProperty -LiteralPath '$policy' -Name ConsentPromptBehaviorUser -Value 0; 'standard users: deny automatically'" | Out-Null
+        $code = Std-Setup 'credentials, deny automatically' '/S /AllUsers' 60
+        Check (($code -eq 4 -or $code -eq 2) -and !(Reg HKLM)) "Standard user (started with credentials), automatic deny: Setup ends without changes (exit $code)"
+        # Ask for credentials, then No.
+        Agent "Set-ItemProperty -LiteralPath '$policy' -Name ConsentPromptBehaviorUser -Value 3; 'standard users: ask for credentials'" | Out-Null
+        Consent-Action 'no'
+        $code = Std-Setup 'credentials prompt, No' '/S /AllUsers' 90
+        Check ($code -eq 4 -and !(Reg HKLM)) "Standard user: No in the credentials prompt exits 4 and changes nothing (exit $code)"
+
+    } finally {
+        Set-Content -LiteralPath (Join-Path $agentDir 'stop') -Value 'stop'
+        Start-Sleep -Seconds 2
+        Copy-Item -LiteralPath (Join-Path $agentDir 'agent.log') -Destination (Join-Path $out 'consent-agent.log') -Force -ErrorAction SilentlyContinue
+        Copy-Item -Path (Join-Path $agentDir 'consent-*.png') -Destination $out -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $finished = $false

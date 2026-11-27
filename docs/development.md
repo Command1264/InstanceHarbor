@@ -920,6 +920,10 @@ Windows WebView2 與伺服器所需的 Java 由電腦提供。
 | 為這台電腦的所有使用者安裝 | `%ProgramFiles%\InstanceHarbor` | 安裝、更新、修復與解除安裝都需要 UAC 確認 | `HKLM`、所有使用者的「開始」 |
 
 - 兩種範圍的工作區都在每位使用者自己的 `%LOCALAPPDATA%\InstanceHarbor`。Setup 只計算執行 Setup 的使用者預設工作區裡的伺服器台數。
+  一般使用者以**另一位系統管理員的帳密**核准 UAC（over-the-shoulder）時，提升權限的 Setup 以那位系統管理員的身分執行，
+  讀不到原使用者的工作區：等待頁不會顯示原使用者的伺服器台數，只會等安裝檔案被釋放（依程式邏輯，靜默安裝最多等 30 秒後退出碼 2，不改動檔案），
+  所以請原使用者先停止伺服器並結束 InstanceHarbor。等待頁的「開啟 InstanceHarbor」可能以那位系統管理員的身分開啟。
+  這個情境沒有自動化驗證。
 - Setup 一律以一般權限啟動（`RequestExecutionLevel user`），所以 GUI 的自動更新（#65）可以直接啟動它。
   需要所有使用者範圍時，Setup 以 `runas` 重新啟動自己並等待那份 Setup 結束，再以它的退出碼結束。
   使用者拒絕 UAC 時不做任何變更，退出碼為 4；無法提升權限時退出碼為 2。範圍頁在沒有系統管理員權限時，
@@ -955,18 +959,29 @@ Windows WebView2 與伺服器所需的 Java 由電腦提供。
   ```
 
   `-SandboxFix` 是維護者的 Sandbox 修正資料夾（繁中字型連結與可用的 WebView2），唯讀對映到 Sandbox 的 `C:\CjkSetup`，
-  並在登入時先執行它。`-OnlyUac` 只跑下面的第二階段。
+  並在登入時先執行它。`-OnlyUac` 只跑下面的第二階段；`-OnlyExtra` 只跑英文介面、UAC 按「否」與一般使用者這幾組案例
+  （與 `-OnlyUac` 一起使用時只跑後兩組）。
 
   `-FakeServer` 是 `tests/controlled-server.rs` 編譯出的測試替身（見 `tests/acceptance/verify-resident-manager.ps1`）。
   Sandbox 帳號預設是已提升權限的系統管理員，UAC 關閉；第一階段在這個狀態驗證兩種範圍的安裝、修復、更新、降級、執行中等待、
-  其他使用者占用、資料夾規則、互動頁面與解除安裝。接著腳本開啟 UAC 並重開 Sandbox，第二階段以 medium integrity 的排程工作執行：
+  其他使用者占用、資料夾規則、互動頁面與解除安裝；最後以**只有英文**的測試用 Setup 核對範圍頁、資料夾頁、等待頁與錯誤訊息的英文文字。
+  這份 Setup 由腳本在 `-Evidence` 內複製 `windows-setup.nsi`、移除繁中字串後編譯，只供測試、不會發布。
+  只改語言判斷不夠：`.onInit` 裡的訊息（修復或更新的詢問、範圍衝突）使用 NSIS 啟動時自行選的語言，不是 `.onInit` 設定的 `$LANGUAGE`。
+  接著腳本開啟 UAC 並重開 Sandbox，第二階段以 medium integrity 執行：
   一般權限的目前使用者安裝、經 UAC 的所有使用者安裝（先設為不詢問直接提升）、以 CreateProcess 啟動的更新、解除安裝、
-  範圍頁提升權限後由資料夾頁接續，最後改為需要確認：UAC 確認視窗出現，再由已提升的小幫手結束確認視窗，模擬沒有取得同意（這會走「無法以系統管理員權限啟動」、退出碼 2 的分支；
-  使用者實際按「否」時 Windows 回傳 `ERROR_CANCELLED`、退出碼 4，這條分支沒有自動化驗證）。
-  Sandbox 內一般使用者帳號的提升權限要求在自動拒絕設定下會停住，所以腳本不測一般使用者的提升權限。
-  證據寫在 `-Evidence\out`（`run.log`、截圖、`consent-helper.txt`）。截圖只有在主機上看得到 Sandbox 視窗時才有內容，
-  所以檢查以 `run.log` 記錄的視窗文字為準。字型修正腳本重開 Sandbox 後偶爾不會再執行登入指令，這時 `run.log` 不會出現，
-  關閉 Sandbox 重跑即可。
+  範圍頁提升權限後由資料夾頁接續，再改為需要確認：UAC 確認視窗出現，由已提升的小幫手結束確認視窗（「無法以系統管理員權限啟動」、退出碼 2）。
+  之後腳本以這個工作階段 `winlogon.exe` 的 SYSTEM 權杖啟動 SYSTEM 小幫手（`C:\ih-agent`）：UAC 確認視窗以 SYSTEM 執行，
+  只有同等級的程序能按它的按鈕。小幫手以 UI Automation 按「否」（Windows 回傳 `ERROR_CANCELLED`：中英文都顯示「沒有取得確認」，
+  互動時留在範圍頁，靜默時退出碼 4），也記錄確認視窗的文字。接著以一般使用者帳號（以帳密啟動的程序）執行 Setup：
+  自動拒絕時退出碼 2；要求輸入認證時按「否」退出碼 4。一般使用者的 PowerShell 內不要用 `Start-Process -Wait` 等待 Setup，
+  Windows PowerShell 5.1 的 `-Wait` 會連子程序一起等，曾讓這個案例看起來停住；改用 `Process.Start` 與 `WaitForExit`。
+  以另一位系統管理員帳密核准（over-the-shoulder）沒有自動化：小幫手能把密碼填進確認視窗，但確認視窗仍回報密碼錯誤，
+  所以這個情境依「安裝範圍與位置」的說明手動驗證。
+  證據寫在 `-Evidence\out`（`run.log`、截圖、`consent-helper.txt`、`consent-agent.log`、`watch-*.log`）。截圖只有在主機上看得到 Sandbox 視窗時才有內容，
+  UAC 確認視窗本身也不會出現在截圖裡，所以檢查以 `run.log` 與 `consent-agent.log` 記錄的視窗文字為準。
+  主機上監看 `run.log` 時不要讓檔案一直開著（例如 `tail -f`）：Sandbox 寫不進去，腳本會在重試後停止；改用短暫讀取。
+  字型修正腳本重開 Sandbox 後偶爾不會再執行登入指令，這時 `run.log` 不會出現，關閉 Sandbox 重跑即可；
+  登入指令啟動後又停止時，原因寫在 `started.txt`。
 
 #### 安裝位置與工作區
 
