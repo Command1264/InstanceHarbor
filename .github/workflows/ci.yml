@@ -84,6 +84,14 @@ jobs:
           key: cargo-${{ env.RUSTUP_TOOLCHAIN }}-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: cargo-${{ env.RUSTUP_TOOLCHAIN }}-
 
+      - name: Use a long-form temporary folder
+        # The runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\...). Development-channel
+        # tests exempt fixtures only under the temporary folder, and the long form the code
+        # compares does not start with the short one, so point TEMP at RUNNER_TEMP instead.
+        run: |
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+
       - name: npm ci
         run: npm ci
 
