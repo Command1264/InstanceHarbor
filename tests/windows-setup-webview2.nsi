@@ -1,7 +1,7 @@
 ; Compiled and run by tests/verify-windows-setup-version.ps1. It installs nothing:
 ; it writes the WebView2 runtime that Setup would find on this computer to ${RESULTS}.
 Unicode true
-!addincludedir ".."
+!addincludedir "..\packaging"
 !include "windows-setup-webview2.nsh"
 Name "InstanceHarbor Setup WebView2 detection"
 OutFile "${OUTPUT}"

@@ -18,7 +18,7 @@ fn git(arguments: &[&str]) -> Option<String> {
 /// The commit label of the checkout, or `unknown` without Git or a checkout.
 fn commit_from_git() -> String {
     // Rebuild after a commit, a branch switch or a staging change. Edits that are
-    // not staged do not rerun this script; build-product.ps1 passes the label
+    // not staged do not rerun this script; packaging/build-product.ps1 passes the label
     // explicitly so that its builds always see them.
     for name in ["HEAD", "index", "packed-refs"] {
         if let Some(path) = git(&["rev-parse", "--git-path", name]) {
@@ -63,7 +63,7 @@ fn main() {
     println!("cargo:rustc-env={}={commit}", build_commit::VARIABLE);
     // Record only the PDB file name in the executables, never the build machine's path.
     // rustc passes the same option by default; it is stated here so that a toolchain
-    // change cannot bring the path back. verify-no-local-paths.ps1 checks the result.
+    // change cannot bring the path back. packaging/verify-no-local-paths.ps1 checks the result.
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         println!("cargo:rustc-link-arg-bins=/PDBALTPATH:%_PDB%");
     }

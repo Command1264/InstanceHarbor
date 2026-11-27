@@ -1332,6 +1332,75 @@ fn save_world_settings(root: &Path, name: &str, input: &str) -> Result<Value> {
     Ok(response)
 }
 
+/// Settings profiles (#36): the world fields a profile may carry, in
+/// `section.key` form. Resource-pack fields are left out because they must be
+/// checked as one group.
+pub(super) fn profile_world_field(id: &str) -> bool {
+    field(id).is_ok_and(|field| field.section == "serverProperties" && !is_resource_pack(field.key))
+}
+
+/// Settings profiles (#36): which profile values would change this instance's
+/// world settings, and which are skipped and why. `changes` rows are
+/// `{key, before, after, path}`; `skipped` rows are `{key, reason}` with a
+/// `policy_catalog::REASONS` code or `valueOutOfRange`.
+pub(super) fn profile_world_preview(
+    root: &Path,
+    name: &str,
+    values: &BTreeMap<String, String>,
+) -> Result<(Vec<Value>, Vec<Value>)> {
+    let snapshot = WorldSnapshot::read(root, name)?;
+    let mut changes = Vec::new();
+    let mut skipped = Vec::new();
+    let Some(profile) = snapshot.profile else {
+        skipped.extend(values.keys().map(|key| json!({"key":key,"reason":"profileUnknown"})));
+        return Ok((changes, skipped));
+    };
+    for (id, value) in values {
+        let field = field(id)?;
+        let reason = snapshot.reason(field);
+        if !reason.is_empty() {
+            skipped.push(json!({"key":id,"reason":reason}));
+            continue;
+        }
+        let Some(observed) = snapshot.observe(field) else {
+            skipped.push(json!({"key":id,"reason":"noUniqueValue"}));
+            continue;
+        };
+        let current = logical_value(field, &observed.value, profile)?;
+        let Ok(target) = field.normalize(value, profile) else {
+            skipped.push(json!({"key":id,"reason":"valueOutOfRange"}));
+            continue;
+        };
+        if current != target {
+            changes.push(json!({"key":id,"before":current,"after":target,"path":snapshot.source(field).0}));
+        }
+    }
+    Ok((changes, skipped))
+}
+
+/// Settings profiles (#36): writes the changed world fields one file at a time
+/// through `save-world-settings`, so a running server queues them exactly as
+/// the world settings page does. The caller holds the instance writer lock.
+pub(super) fn profile_world_apply(root: &Path, name: &str, values: &BTreeMap<String, String>) -> Result<Value> {
+    let (changes, _) = profile_world_preview(root, name, values)?;
+    let mut files: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    for change in &changes {
+        let key = change["key"].as_str().ok_or("InvalidWorldSettings")?;
+        let path = change["path"].as_str().ok_or("InvalidWorldSettings")?;
+        files.entry(path.to_owned()).or_default().insert(key.to_owned(), json!(values[key]));
+    }
+    let mut queued = false;
+    for subset in files.into_values() {
+        let snapshot = WorldSnapshot::read(root, name)?;
+        let request = json!({"revision":snapshot.revision,"values":subset});
+        let (_, _, preview) = snapshot.plan(&request.to_string())?;
+        let request = json!({"revision":snapshot.revision,"values":subset,"preview":preview});
+        let saved = save_world_settings(root, name, &request.to_string())?;
+        queued |= saved["queued"] == true;
+    }
+    Ok(json!({"changed":changes.len(),"queued":queued}))
+}
+
 pub(super) fn dispatch(root: &Path, verb: &str, args: &[String]) -> Option<Result<Value>> {
     match (verb, args) {
         ("get-initialization", []) => Some(

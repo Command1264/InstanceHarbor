@@ -1,7 +1,7 @@
 ; Compiled and run by tests/verify-windows-setup-version.ps1. It installs nothing:
 ; it writes one line per case, "servers close expected actual", to ${RESULTS}.
 Unicode true
-!addincludedir ".."
+!addincludedir "..\packaging"
 !include "windows-setup-close.nsh"
 Name "InstanceHarbor Setup wait status"
 OutFile "${OUTPUT}"

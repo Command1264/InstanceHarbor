@@ -10,7 +10,7 @@ import tarfile
 import tomllib
 from zipfile import ZipFile, ZIP_DEFLATED
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 TARGET = "x86_64-pc-windows-msvc"
 TERMINAL_RELEASE = "https://github.com/microsoft/terminal/releases/tag/v1.25.2733.0"
 WEBVIEW2_DOWNLOAD = "https://developer.microsoft.com/microsoft-edge/webview2/#download-section"
@@ -119,7 +119,7 @@ def render(output, upstream, nsis_copying, terminal_zip, rust_docs):
 
     add_file("Lucide icons", "ISC, with Feather MIT attribution", "https://lucide.dev/license",
              front / "public/licenses/lucide.txt")
-    vendor = ROOT / "experiments/conpty-a-prototype/ui/vendor"
+    vendor = ROOT / "src/vendor/xterm"
     add_file("xterm.js", "MIT", "https://github.com/xtermjs/xterm.js", vendor / "xterm-LICENSE")
     add_file("xterm.js Unicode graphemes add-on", "MIT", "https://github.com/xtermjs/xterm.js",
              vendor / "addon-unicode-graphemes-LICENSE")
@@ -180,7 +180,7 @@ Component index
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--upstream-notices", type=Path, default=ROOT / "windows-upstream-notices")
+    parser.add_argument("--upstream-notices", type=Path, default=ROOT / "packaging/windows-upstream-notices")
     parser.add_argument("--nsis-copying", type=Path, required=True)
     parser.add_argument("--terminal-zip", type=Path, required=True)
     parser.add_argument("--rust-docs", type=Path, required=True)

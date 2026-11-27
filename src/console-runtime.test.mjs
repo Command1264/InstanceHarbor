@@ -3,11 +3,11 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 const read = path => readFileSync(new URL(path, import.meta.url), 'utf8')
-const manifest = JSON.parse(read('../console-runtime.json'))
+const manifest = JSON.parse(read('../packaging/console-runtime.json'))
 
 // native_console.rs checks the same pins through a Rust test.
-test('packaging and installation pin the console runtime in console-runtime.json', () => {
-  for (const script of ['../pack-windows.ps1', '../install-windows.ps1']) {
+test('packaging and installation pin the console runtime in packaging/console-runtime.json', () => {
+  for (const script of ['../packaging/pack-windows.ps1', '../packaging/install-windows.ps1']) {
     const source = read(script)
     for (const [name, { sha256 }] of Object.entries(manifest.files)) {
       assert.ok(source.includes(`'${name}' = '${sha256}'`), `${script} does not pin ${name}`)
@@ -27,16 +27,16 @@ test('the runtime record names the official package and its x64 entries', () => 
 })
 
 test('stable versions are distributions for the ZIP and Setup', () => {
-  const pack = read('../pack-windows.ps1')
+  const pack = read('../packaging/pack-windows.ps1')
   assert.ok(pack.includes(String.raw`$distribution = $Version -ceq '1.0.0-rc2' -or $Version -cmatch '^\d+\.\d+\.\d+$'`))
-  const setup = read('../pack-windows-setup.ps1')
+  const setup = read('../packaging/pack-windows-setup.ps1')
   assert.doesNotMatch(setup, /\/DVERSION=1\.0\.0-rc2/)
   assert.match(setup, /!\$prepared\.nativeConsoleRuntime/)
 })
 
 test('a 1.0 package and a release build refuse to ship without the tier-1 console', () => {
-  assert.match(read('../pack-windows.ps1'), /\$consoleNames\.Count -ne 2 -and \$Version -notlike '1\.0\.0-rc\*'/)
-  assert.match(read('../build-product.ps1'), /elseif\(\$Release\)\{\s*throw/)
+  assert.match(read('../packaging/pack-windows.ps1'), /\$consoleNames\.Count -ne 2 -and \$Version -notlike '1\.0\.0-rc\*'/)
+  assert.match(read('../packaging/build-product.ps1'), /elseif\(\$Release\)\{\s*throw/)
 })
 
 test('the retired workspace switch file is gone', () => {
@@ -47,13 +47,13 @@ test('the retired workspace switch file is gone', () => {
 
 test('stable executables need no Visual C++ Redistributable', () => {
   assert.match(read('../.cargo/config.toml'), /\[target\.x86_64-pc-windows-msvc\]\s*rustflags = \["-C", "target-feature=\+crt-static"\]/)
-  const pack = read('../pack-windows.ps1')
+  const pack = read('../packaging/pack-windows.ps1')
   assert.ok(pack.includes(String.raw`Where-Object { $_ -match '^(vcruntime|msvcp)\d' }`))
-  assert.doesNotMatch(read('../windows-setup.nsi'), /VC_RUNTIME|vc_redist/i)
+  assert.doesNotMatch(read('../packaging/windows-setup.nsi'), /VC_RUNTIME|vc_redist/i)
 })
 
 test('Setup checks WebView2 on every run and compares the installed version', () => {
-  const setup = read('../windows-setup.nsi')
+  const setup = read('../packaging/windows-setup.nsi')
   const init = setup.slice(setup.indexOf('Function .onInit'), setup.indexOf('FunctionEnd', setup.indexOf('Function .onInit')))
   // Before any installed-version branch, so an update or repair also checks it.
   assert.ok(init.indexOf('Call RequireWebView2') < init.indexOf('ReadRegStr $0 HKCU "${UNINSTALL_KEY}"'))
@@ -75,7 +75,7 @@ test('the GUI checks WebView2 before it takes the single-instance lock', () => {
 })
 
 test('the WebView2 prompt and Setup default to English unless Traditional Chinese is chosen', () => {
-  const setup = read('../windows-setup.nsi')
+  const setup = read('../packaging/windows-setup.nsi')
   assert.ok(setup.indexOf('MUI_LANGUAGE "English"') < setup.indexOf('MUI_LANGUAGE "TradChinese"'))
   assert.ok(setup.indexOf('StrCpy $LANGUAGE ${LANG_ENGLISH}') < setup.indexOf('${IfNot} ${RunningX64}'))
   for (const id of ['0x0404', '0x0C04', '0x1404']) assert.ok(setup.includes(`$0 = ${id}`), id)

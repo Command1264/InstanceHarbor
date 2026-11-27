@@ -25,6 +25,10 @@ pub use presentation::fast_open_enabled;
 mod creation;
 #[path = "creation_defaults.rs"]
 mod creation_defaults;
+#[path = "server_groups.rs"]
+mod server_groups;
+#[path = "settings_profiles.rs"]
+mod settings_profiles;
 pub use creation::CreationPhase;
 #[path = "prepare_diagnostics.rs"]
 mod prepare_diagnostics;
@@ -2420,6 +2424,7 @@ fn lifecycle(
 
 fn jobs(root: &Path) -> Result<Value> {
     let mut rows = batch_import::activity(root)?;
+    rows.extend(settings_profiles::activity(root)?);
     for entry in fs::read_dir(root.join("jobs")).map_err(fail)? {
         let path = entry.map_err(fail)?.path();
         if path.extension().is_none_or(|extension| extension != "json") {
@@ -2624,6 +2629,9 @@ fn dispatch_with_progress(
     if let Some(result) = creation_defaults::dispatch(&root, verb, args) {
         return result;
     }
+    if let Some(result) = server_groups::dispatch(&root, verb, args) {
+        return result;
+    }
     if let Some(result) = app_update::dispatch(&root, verb, args) {
         return result;
     }
@@ -2722,6 +2730,10 @@ fn dispatch_with_progress(
         return core_source::create_download(&root, args);
     }
     if let Some(result) = test_permissions::dispatch(verb) {
+        return result;
+    }
+    // Settings profiles (#36) take the instance writer lock per server while applying.
+    if let Some(result) = settings_profiles::dispatch(&root, verb, args) {
         return result;
     }
     if let Some(result) = world_live::dispatch(&root, verb, args) {

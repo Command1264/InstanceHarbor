@@ -66,8 +66,8 @@ $workspace = "$env:LOCALAPPDATA\InstanceHarbor\workspaces\default"
 ```powershell
 npm ci
 cargo fetch --manifest-path src-tauri/Cargo.toml
-./build-product.ps1 -Development
-./launch-development.ps1
+./packaging/build-product.ps1 -Development
+./scripts/launch-development.ps1
 ```
 
 開發版使用自己的資料夾 `%LOCALAPPDATA%\InstanceHarbor Dev`，不會動到已安裝版本的伺服器。

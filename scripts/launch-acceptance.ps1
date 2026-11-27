@@ -1,8 +1,8 @@
 [CmdletBinding()]
-param([string]$Workspace, [string]$BinaryDirectory = (Join-Path $PSScriptRoot 'src-tauri/target/debug'))
+param([string]$Workspace, [string]$BinaryDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'src-tauri/target/debug'))
 $ErrorActionPreference='Stop'
 if(!$Workspace){
-    $verified=Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot '.evidence') -Directory -Filter 'acceptance-*' |
+    $verified=Get-ChildItem -LiteralPath (Join-Path (Split-Path -Parent $PSScriptRoot) '.evidence') -Directory -Filter 'acceptance-*' |
         Where-Object {Test-Path -LiteralPath (Join-Path $_.FullName 'acceptance.json')} |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if(!$verified){throw '找不到已通過驗證的隔離工作區。'}
