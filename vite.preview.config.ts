@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { brandLogoAlias } from './vite.config.ts'
 
 const entry = fileURLToPath(new URL('./preview/index.html', import.meta.url))
 const wireframe = new URL('./docs/design/wireframe/', import.meta.url)
@@ -46,5 +47,7 @@ export default defineConfig({
       },
     },
   ],
+  // The preview shows the product sidebar.
+  resolve: { alias: [brandLogoAlias('production')] },
   build: { outDir: 'dist-preview', cssMinify: false, rollupOptions: { input: entry } },
 })

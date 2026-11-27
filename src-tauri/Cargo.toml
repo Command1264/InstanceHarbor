@@ -20,6 +20,8 @@ path = "src/main.rs"
 required-features = ["acceptance-ui"]
 [build-dependencies]
 tauri-build = "=2.6.3"
+# build.rs reads src-tauri/icons/channels.json through app_icon.rs (#116).
+serde_json = "1"
 [dependencies]
 # custom-protocol: without it Tauri treats every build as `tauri dev` and generate_context!
 # writes the absolute src-tauri path into the GUI executable (#118). With no devUrl the

@@ -9,6 +9,7 @@ ICO keeps every size of the original. Uses the Python standard library only.
 """
 import argparse
 import colorsys
+import json
 import math
 from pathlib import Path
 import struct
@@ -16,10 +17,12 @@ import sys
 import zlib
 
 ROOT = Path(__file__).resolve().parent.parent
-# (blue product source, red development output)
-PAIRS = (
-    (ROOT / "src-tauri/icons/icon.ico", ROOT / "src-tauri/icons/icon-dev.ico"),
-    (ROOT / "src/assets/instanceharbor-brand.png", ROOT / "src/assets/instanceharbor-brand-dev.png"),
+# The channel icon files come from the one manifest every consumer reads (#116).
+CHANNEL_ICONS = json.loads((ROOT / "src-tauri/icons/channels.json").read_text(encoding="utf-8"))
+# (blue product source, red development output): the ICO first, then the sidebar image.
+PAIRS = tuple(
+    (ROOT / CHANNEL_ICONS["product"][kind], ROOT / CHANNEL_ICONS["development"][kind])
+    for kind in ("app", "brand")
 )
 # The product blue sits near 220°; turning it by 140° lands on red (0°).
 HUE_SHIFT_DEGREES = 140

@@ -1,24 +1,34 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-Reads the application icon (resource 32512) embedded in a Windows executable.
+Reads the application icon resource embedded in a Windows executable.
 
 .DESCRIPTION
-With -Expected, fails unless every embedded image equals the matching image of that
-ICO file, byte for byte and in the same order. With -Export, writes the embedded
-icon as an ICO file. build-product.ps1 uses -Expected so that a product build can
-only ship the blue icon and a development build only the red one.
+The resource number and each channel's ICO come from src-tauri/icons/channels.json,
+the one place that pairs a channel with its icons (#116).
+With -Channel, fails unless every embedded image equals the matching image of that
+channel's ICO, byte for byte and in the same order; -Expected does the same for any
+ICO file. With -Export, writes the embedded icon as an ICO file. build-product.ps1
+uses -Channel so that a product build can only ship the blue icon and a development
+build only the red one.
 
 .EXAMPLE
-./packaging/verify-app-icon.ps1 -Binary src-tauri/target/x86_64-pc-windows-msvc/release/InstanceHarbor.exe -Expected src-tauri/icons/icon.ico
+./packaging/verify-app-icon.ps1 -Binary src-tauri/target/x86_64-pc-windows-msvc/release/InstanceHarbor.exe -Channel product
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Binary,
+    [ValidateSet('product', 'development')][string]$Channel,
     [string]$Expected,
     [string]$Export
 )
 $ErrorActionPreference = 'Stop'
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+$channelIcons = Get-Content -Raw -LiteralPath (Join-Path $repositoryRoot 'src-tauri/icons/channels.json') | ConvertFrom-Json
+if ($Channel) {
+    if ($Expected) { throw '-Channel 與 -Expected 只能擇一。' }
+    $Expected = Join-Path $repositoryRoot $channelIcons.$Channel.app
+}
 
 if (-not ('InstanceHarbor.IconResource' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -90,7 +100,7 @@ function Read-IcoFile([string]$Path) {
 }
 
 $binaryPath = (Resolve-Path -LiteralPath $Binary).Path
-$embedded = @([InstanceHarbor.IconResource]::Load($binaryPath, 32512) | ForEach-Object {
+$embedded = @([InstanceHarbor.IconResource]::Load($binaryPath, [int]$channelIcons.resource) | ForEach-Object {
     [pscustomobject]@{ Entry = $_.Item1; Image = $_.Item2 }
 })
 
