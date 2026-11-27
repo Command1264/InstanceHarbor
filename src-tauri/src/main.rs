@@ -176,7 +176,7 @@ fn caption_color(window: &tauri::WebviewWindow, dark: bool) -> Result<(), String
     for (attribute, color) in colors {
         let result = unsafe {
             DwmSetWindowAttribute(
-                hwnd.0 as *mut c_void,
+                hwnd.0,
                 attribute,
                 &color as *const u32 as *const c_void,
                 4,

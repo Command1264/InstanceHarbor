@@ -20,6 +20,61 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 
 驗證器建立一台實例，驗證重試，移除管理登記，再重新匯入原目錄。它模擬其他程序占用埠，啟動 Paper 至 Done，關閉與重開原生 Tauri，從 GUI 發出重啟，最後經 CLI 正常停止並確認埠釋放。已驗證的工作區可直接用 scripts/launch-acceptance.ps1 開啟。啟動 GUI 本身只讀取清單。
 
+## CI（GitHub Actions）
+
+`.github/workflows/ci.yml` 在 PR 到 `develop` 與 push 到 `develop` 時執行，矩陣為 Windows x64（`windows-latest`，
+`x86_64-pc-windows-msvc`）與 Windows ARM64（`windows-11-arm`，`aarch64-pc-windows-msvc`），兩者都在原生主機上建置與測試。
+權限只有 `contents: read`，不使用 secret，不發行、不簽章、不合併。
+
+步驟依序為：`npm ci`、`npx vue-tsc --noEmit`、`npx vite build`、`npx vite build --mode development-channel --outDir dist-dev`、
+`node --test src/*.test.mjs`、`node --test scripts/*.test.mjs`、`cargo test --locked`、
+`cargo test --locked --features development-channel`，最後是 `cargo clippy --locked --all-targets` 與基線比較。
+任一步失敗就停在該步；兩個平台各自跑完（`fail-fast: false`）。測試不重試，負載下不穩定的測試失敗時保留紀錄，另開 Issue 處理。
+
+版本固定：Rust `1.100.0`、Node.js `24.22.3`（皆已發布滿依賴冷卻期），第三方 Action 以 commit SHA 釘選並在註解寫版本。
+固定 Rust 版本是為了讓新的 stable 不會帶入基線外的新 clippy lint。升級 Rust 時同一個 PR 一併重產基線。
+
+### clippy 基線
+
+`develop` 仍有既有的 clippy 警告，CI 不用 `-D warnings`，改為比較 `src-tauri/clippy-baseline.json`：
+`scripts/clippy-baseline.mjs` 讀取 `cargo clippy --message-format=json` 的輸出，以「lint 與檔案」計算警告數，
+同一位置在 lib 與測試目標重複回報只算一次。某組 lint 與檔案的數量超過基線就失敗；計數不看行號，
+所以改動造成既有警告換行不會失敗。數量比基線少時只提示，修掉警告後請重產基線讓它跟著降低：
+
+```powershell
+cd src-tauri
+cargo clippy --locked --all-targets --message-format=json > ../clippy.json
+cd ..
+node scripts/clippy-baseline.mjs check clippy.json
+node scripts/clippy-baseline.mjs write clippy.json
+Remove-Item clippy.json
+```
+
+`check` 只比較，`write` 以目前輸出覆寫基線檔；只在警告減少或升級 Rust 時執行 `write`，並在 PR 說明原因。
+
+### 在本機重現
+
+在 repository 根目錄依序執行（離線環境另加 `--offline`，Cargo 需能讀到已下載的 crate）：
+
+```powershell
+npm ci
+npx vue-tsc --noEmit
+npx vite build
+npx vite build --mode development-channel --outDir dist-dev
+node --test src/*.test.mjs
+node --test scripts/*.test.mjs
+cd src-tauri
+cargo +1.100.0 test --locked
+cargo +1.100.0 test --locked --features development-channel
+cargo +1.100.0 clippy --locked --all-targets --message-format=json > ../clippy.json
+cd ..
+node scripts/clippy-baseline.mjs check clippy.json
+```
+
+`cargo test` 與 `clippy` 需要先建好 `dist/` 與 `dist-dev/`，因為 Tauri 會在編譯時嵌入前端資產。
+本機沒有 `1.100.0` 工具鏈時可省略 `+1.100.0`，但較新的 clippy 可能多出基線外的 lint，結果以 CI 為準。
+ARM64 只在 CI 驗證，本機不需安裝 `aarch64-pc-windows-msvc` 目標。
+
 ## 驗收步驟
 
 1. 關閉可能仍開著的 2.0 驗收視窗，執行 scripts/launch-acceptance.ps1。選取 paper-agent，應顯示已停止。
