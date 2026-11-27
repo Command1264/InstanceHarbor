@@ -34,6 +34,8 @@ const ALLOWED_ALWAYS_VISIBLE = [
   // Existing instances are never granted automatically; the manual steps must stay visible.
   "components/TestAdminFields.vue: {{ t('components.testAdmins.existingHelp') }}",
   "components/ManagementFolderDialog.vue: {{ t('management.summary', { selected: selectedCount, excluded: excluded.length, blocked: pendingRows.length, }) }}",
+  // Applying a settings profile copies settings once; the user needs that before choosing (#36).
+  "components/SettingsProfileDialog.vue: {{ t('profiles.applyHint') }}",
   "components/WorldLiveControls.vue: {{ t('components.worldTime.unsupportedHelp') }} {{ t('components.worldTime.notReadyHelp') }} {{ t('components.worldTime.readyHelp') }}",
 ]
 

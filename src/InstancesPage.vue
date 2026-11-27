@@ -8,6 +8,7 @@ import PinIcon from './components/PinIcon.vue'
 import ContextMenu from './components/ContextMenu.vue'
 import InstanceDiagnosticsPanel from './components/InstanceDiagnosticsPanel.vue'
 import ServerGroupDialog from './components/ServerGroupDialog.vue'
+import SettingsProfileDialog from './components/SettingsProfileDialog.vue'
 import { emptyServerGroups, groupOf, listEntries, matchesGroup, shownRows, validFilter, type GroupFilter, type ListSection, type ServerGroupEdit, type ServerGroups } from './server-groups'
 import {usePinnedDrag} from './usePinnedDrag'
 import {keepEditingContext} from './context-menu'
@@ -50,6 +51,8 @@ const groupFilter = ref<GroupFilter>('all')
 const groupError = ref('')
 const groupBusy = ref(false)
 const groupDialog = ref<InstanceType<typeof ServerGroupDialog>>()
+// Settings profiles (#36): applied once, after a per-server preview.
+const profileDialog = ref<InstanceType<typeof SettingsProfileDialog>>()
 function applyGroups(data: ServerGroups) {
   if (JSON.stringify(data) !== JSON.stringify(groupData.value)) groupData.value = data
   groupFilter.value = validFilter(data, groupFilter.value)
@@ -144,6 +147,7 @@ const groupMenuItems=computed(()=>{
   {id:'stop',label:t('instances.group.stop',{count:batchCount('stop',rows)}),disabled:!canSubmitBatch('stop',rows)},
   {id:'restart',label:t('instances.group.restart',{count:batchCount('restart',rows)}),disabled:!canSubmitBatch('restart',rows)},
   {id:'core',label:t('instances.group.core'),disabled:blocked||!rows.length},
+  {id:'profile',label:t('profiles.applyAction'),disabled:blocked||!rows.length},
   ...(named?[{id:'rename',label:t('instances.group.rename'),disabled:blocked||groupBusy.value},{id:'delete',label:t('instances.group.delete'),danger:true,disabled:blocked||groupBusy.value}]:[]),
  ]
 })
@@ -160,6 +164,7 @@ function groupMenuAction(id:string){
  const rows=groupMembers(section.id)
  if(id==='start'||id==='stop'||id==='restart')emit('batch-action',id,batchRows(id,rows))
  else if(id==='core')emit('batch-core',rows.map(row=>row.name))
+ else if(id==='profile')profileDialog.value?.open({names:rows.map(row=>row.name),group:section.id===null?undefined:{id:section.id,name:section.name??''}})
  else if(id==='rename')groupDialog.value?.open('rename',{id:section.id})
  else if(id==='delete')groupDialog.value?.open('delete',{id:section.id})
 }
@@ -306,6 +311,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
       <button :disabled="!canSubmitBatch('restart',rows)" @click="emit('batch-action','restart',batchRows('restart',rows))">{{ t('instances.restartAll') }}</button>
       <button type="button" :disabled="!connected" @click="emit('batch-core')">{{ t('core.batch.all') }}</button>
       <button type="button" :disabled="!connected || groupBusy" @click="groupDialog?.open('create')">{{ t('instances.group.create') }}</button>
+      <button type="button" :disabled="!connected" @click="profileDialog?.open()">{{ t('profiles.open') }}</button>
       <button type="button" :disabled="!connected" @click="emit('removed')">{{ t('instances.removedInstances') }}</button>
     </ActionMenu></div>
   </div>
@@ -343,7 +349,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
           <button :disabled="!canSubmitBatch('stop',chosen)" @click="emit('batch-action','stop',batchRows('stop',chosen))">{{ t('instances.stopSelected',{count:batchCount('stop',chosen)}) }}</button>
           <button :disabled="!canSubmitBatch('restart',chosen)" @click="emit('batch-action','restart',batchRows('restart',chosen))">{{ t('instances.restartSelected',{count:batchCount('restart',chosen)}) }}</button>
         </div>
-        <div class="detail-actions"><button type="button" :disabled="!connected" @click="emit('batch-core',chosen.map(row=>row.name))">{{ t('core.batch.selected') }}</button><button type="button" :disabled="!connected || groupBusy" @click="moveToGroup(chosen.map(row=>row.name))">{{ t('instances.group.moveTo') }}</button></div>
+        <div class="detail-actions"><button type="button" :disabled="!connected" @click="emit('batch-core',chosen.map(row=>row.name))">{{ t('core.batch.selected') }}</button><button type="button" :disabled="!connected || groupBusy" @click="moveToGroup(chosen.map(row=>row.name))">{{ t('instances.group.moveTo') }}</button><button type="button" :disabled="!connected" @click="profileDialog?.open({names:chosen.map(row=>row.name)})">{{ t('profiles.applyAction') }}</button></div>
         <details><summary>{{ t('instances.viewTargets') }}</summary><p v-for="row in chosen" :key="row.name" class="small">{{ row.name }} · {{ displayState(row) }}</p></details>
       </template>
       <template v-else-if="single"><h2>{{ single.name }}</h2>
@@ -360,6 +366,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
         <div class="detail-actions">
           <button type="button" :disabled="!connected" @click="emit('open-folder',single.name)">{{ t('instances.openServerFolder') }}</button>
           <button type="button" :disabled="!connected || groupBusy" @click="moveToGroup([single.name])">{{ t('instances.group.moveTo') }}</button>
+          <button type="button" :disabled="!connected" @click="profileDialog?.open({names:[single.name]})">{{ t('profiles.applyAction') }}</button>
           <button type="button" class="danger" :disabled="!removable(single)" @click="emit('remove',single.name)">{{ t('instances.removeManagement') }}</button>
         </div>
 
@@ -373,6 +380,7 @@ function canSubmitBatch(action:'start'|'stop'|'restart', rows:Instance[]) {
   </div>
   <ContextMenu v-if="groupMenu" :key="'group:'+(groupMenu.section.id??'')+':'+groupMenu.x+':'+groupMenu.y" :x="groupMenu.x" :y="groupMenu.y" :label="groupMenu.section.name ?? t('instances.group.ungrouped')" :items="groupMenuItems" @action="groupMenuAction" @close="closeGroupMenu" />
   <ServerGroupDialog ref="groupDialog" :data="groupData" @saved="applyGroups" />
+  <SettingsProfileDialog ref="profileDialog" @applied="emit('refresh')" />
   <ContextMenu v-if="menu" :key="menu.name+':'+menu.x+':'+menu.y" :x="menu.x" :y="menu.y" :label="menu.name" :items="menuItems" @action="menuAction" @close="closeMenu" />
   <span class="sr-only" role="status">{{ pinDrag.dragging.value?t('instances.reordering',{name:pinDrag.dragging.value}):'' }}</span>
 </template>
