@@ -31,6 +31,14 @@ cargo build --offline --locked --manifest-path src-tauri/Cargo.toml
 `cargo test --locked --features development-channel`，最後是 `cargo clippy --locked --all-targets` 與基線比較。
 任一步失敗就停在該步；兩個平台各自跑完（`fail-fast: false`）。測試不重試，負載下不穩定的測試失敗時保留紀錄，另開 Issue 處理。
 
+CI runner 與一般開發機有兩個差異，測試要能同時通過：
+
+- 系統語言是英文。依系統語言顯示的文字（前端 `tr()`、Rust 的 `DisplayLanguage::System`），
+  測試要自己固定語言或依目前語言判斷，不能假設是繁體中文。
+- `TEMP` 是 8.3 短路徑（`C:\Users\RUNNER~1\...`）。開發版測試只豁免系統暫存資料夾內的測試工作區，
+  而比對用的是長路徑，所以 workflow 先把 `TEMP`／`TMP` 展開成同一位置的長路徑。
+  不要改指到 `RUNNER_TEMP`（`D:`）：x64 上「檔案被其他程序開啟」類測試會失敗。
+
 版本固定：Rust `1.100.0`、Node.js `24.22.3`（皆已發布滿依賴冷卻期），第三方 Action 以 commit SHA 釘選並在註解寫版本。
 固定 Rust 版本是為了讓新的 stable 不會帶入基線外的新 clippy lint。升級 Rust 時同一個 PR 一併重產基線。
 
