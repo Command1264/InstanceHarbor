@@ -57,6 +57,7 @@ repository 根目錄只放專案設定、Vite 入口（`index.html`、`console.h
 | `verify-resident-batch-window.mjs` | GUI 的全部操作、多選重新啟動與重開後的工作紀錄 | 先執行 `verify-resident-manager.ps1 -PrepareOnly -Evidence <資料夾>`，再執行 `node tests/acceptance/verify-resident-batch-window.mjs <同一資料夾>` |
 | `verify-recovery-pin.ps1` | 復原金鑰 pin 的退場規則（#96 第 1 階段） | 測試替身；`-LegacyBinaryDirectory` 指定 1.1.0 以前的建置以驗證舊 run |
 | `verify-windows-package.ps1` | 便攜安裝器以真實執行檔與空工作區安裝、更新與回退 | `-FixtureRoot` 必須是新資料夾；舊版套件需同時提供 `-LegacyPackageSha256` |
+| `verify-windows-setup-scope.ps1` | Setup 的兩種安裝範圍（#38），在 Windows Sandbox 內，含 UAC | 已核對的發行版 ZIP、NSIS 3.13、測試替身 `-FakeServer`；`-Evidence` 必須是新資料夾。見「安裝範圍與位置」 |
 
 ## 系統匣
 
@@ -909,7 +910,67 @@ Setup 的對話框用同一條系統語言規則。
 - 等待頁各狀態的文字對應（`packaging/windows-setup-close.nsh`）由 `tests/verify-windows-setup-version.ps1` 一併驗證。版本順序與 WebView2 偵測由 `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 驗證。
 Windows WebView2 與伺服器所需的 Java 由電腦提供。
 
-Setup 安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`，在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
+#### 安裝範圍與位置（#38）
+
+新安裝時，Setup 在歡迎頁後詢問安裝範圍，再顯示資料夾頁。規則在 `packaging/windows-setup-scope.nsh`。
+
+| 範圍 | 預設資料夾 | 權限 | 解除安裝登錄與「開始」捷徑 |
+|---|---|---|---|
+| 只為目前使用者安裝（預設） | `%LOCALAPPDATA%\Programs\InstanceHarbor` | 不需要系統管理員權限 | `HKCU`、目前使用者的「開始」 |
+| 為這台電腦的所有使用者安裝 | `%ProgramFiles%\InstanceHarbor` | 安裝、更新、修復與解除安裝都需要 UAC 確認 | `HKLM`、所有使用者的「開始」 |
+
+- 兩種範圍的工作區都在每位使用者自己的 `%LOCALAPPDATA%\InstanceHarbor`。Setup 只計算執行 Setup 的使用者預設工作區裡的伺服器台數。
+- Setup 一律以一般權限啟動（`RequestExecutionLevel user`），所以 GUI 的自動更新（#65）可以直接啟動它。
+  需要所有使用者範圍時，Setup 以 `runas` 重新啟動自己並等待那份 Setup 結束，再以它的退出碼結束。
+  使用者拒絕 UAC 時不做任何變更，退出碼為 4；無法提升權限時退出碼為 2。範圍頁在沒有系統管理員權限時，
+  「下一步」按鈕顯示 UAC 盾牌圖示；提升權限的那份 Setup 從資料夾頁繼續。
+  以系統管理員權限執行的 Setup 不會用系統管理員權限開啟 InstanceHarbor：等待頁的「開啟 InstanceHarbor」改由 Explorer 開啟「開始」捷徑。
+- 資料夾必須是本機磁碟上的完整路徑，不能是磁碟根目錄、相對路徑或網路資料夾；已有任何檔案（包含隱藏檔）的資料夾一律拒絕，
+  所以解除安裝只刪除 Setup 安裝的檔案，之後才加入的檔案與資料夾會保留。
+  - 只為目前使用者：拒絕 `Program Files`、`Program Files (x86)` 與 Windows 資料夾（即使 Setup 有系統管理員權限），
+    並實際試著建立資料夾與一個檔案，失敗時拒絕；試完只移除試驗時建立的資料夾。
+  - 所有使用者：拒絕使用者設定檔資料夾（`C:\Users` 底下）內的位置。選在 `Program Files` 以外時，Setup 把新資料夾的擁有者設為
+    Administrators，移除繼承的權限，只給 SYSTEM 與 Administrators 完整控制、Users 讀取與執行。之後的更新會以系統管理員權限執行
+    已安裝的 `ihctl.exe`，所以不能讓一般使用者替換它。上層資料夾若允許一般使用者改名或刪除子資料夾，仍可能被替換；
+    建議使用 `Program Files`。
+- 更新、修復與降級沿用已登記的範圍與資料夾，不再詢問。要更換範圍或資料夾，需要先解除安裝。
+  已有另一種範圍的安裝、`/D=` 指向已登記以外的資料夾，或兩種範圍同時有登記時，Setup 說明原因並拒絕（退出碼 2）。
+  無法核對的舊安裝（未登記但預設資料夾有 InstanceHarbor 檔案，或任一範圍的「開始」捷徑已存在）同樣拒絕。
+- 所有使用者範圍的安裝也會被**其他使用者**的 GUI、Manager 與 Host 占用。等待頁與靜默安裝逾時的訊息會說明這件事；
+  Setup 無法讀取或關閉其他使用者的程式，只能等它們結束。
+- 靜默安裝參數：`/S` 靜默；`/CurrentUser` 或 `/AllUsers` 指定新安裝的範圍（兩者同時使用時拒絕）；`/D=<資料夾>` 指定新安裝的資料夾，
+  必須是最後一個參數且不加引號；不是完整路徑的 `/D=` 會被 NSIS 本身忽略，Setup 改用該範圍的預設資料夾。例如 `InstanceHarbor-<版本>-windows-x64-setup.exe /S /AllUsers /D=D:\Apps\InstanceHarbor`。
+  更新時可以省略範圍與資料夾；指定時必須與已登記的相同。`/Elevated` 與 `/Continue` 只供 Setup 提升權限時內部使用。
+- 解除安裝程式依自己所在的資料夾核對 `HKCU` 或 `HKLM` 的登錄；所有使用者範圍沒有系統管理員權限時，同樣以 UAC 重新啟動自己。
+
+驗證方式：
+
+- `tests/verify-windows-setup-version.ps1 -Compiler <makensis.exe>` 一併編譯 `tests/windows-setup-scope.nsi`，在主機上檢查範圍決策與資料夾規則
+  （只在暫存資料夾建立與刪除資料夾，Program Files 與 Windows 資料夾在寫入前就被拒絕）。
+- `tests/acceptance/verify-windows-setup-scope.ps1` 是 Windows Sandbox 驗收，**不在主機安裝任何東西**。它以 `packaging/pack-windows-setup.ps1`
+  從已核對的 ZIP 建立 Setup，另以同一份檔案建立下一個修補版號的 Setup，寫出 `.wsb` 並啟動 Sandbox，最後列出 PASS／FAIL：
+
+  ```powershell
+  ./tests/acceptance/verify-windows-setup-scope.ps1 -Compiler <makensis.exe> -Package <ZIP> -PackageSha256 <SHA-256> -FakeServer <controlled-server.exe> -SandboxFix <含 Install-CjkFonts.ps1 的資料夾> -Evidence <新資料夾>
+  ```
+
+  `-SandboxFix` 是維護者的 Sandbox 修正資料夾（繁中字型連結與可用的 WebView2），唯讀對映到 Sandbox 的 `C:\CjkSetup`，
+  並在登入時先執行它。`-OnlyUac` 只跑下面的第二階段。
+
+  `-FakeServer` 是 `tests/controlled-server.rs` 編譯出的測試替身（見 `tests/acceptance/verify-resident-manager.ps1`）。
+  Sandbox 帳號預設是已提升權限的系統管理員，UAC 關閉；第一階段在這個狀態驗證兩種範圍的安裝、修復、更新、降級、執行中等待、
+  其他使用者占用、資料夾規則、互動頁面與解除安裝。接著腳本開啟 UAC 並重開 Sandbox，第二階段以 medium integrity 的排程工作執行：
+  一般權限的目前使用者安裝、經 UAC 的所有使用者安裝（先設為不詢問直接提升）、以 CreateProcess 啟動的更新、解除安裝、
+  範圍頁提升權限後由資料夾頁接續，最後改為需要確認：UAC 確認視窗出現，再由已提升的小幫手結束確認視窗，模擬沒有取得同意（這會走「無法以系統管理員權限啟動」、退出碼 2 的分支；
+  使用者實際按「否」時 Windows 回傳 `ERROR_CANCELLED`、退出碼 4，這條分支沒有自動化驗證）。
+  Sandbox 內一般使用者帳號的提升權限要求在自動拒絕設定下會停住，所以腳本不測一般使用者的提升權限。
+  證據寫在 `-Evidence\out`（`run.log`、截圖、`consent-helper.txt`）。截圖只有在主機上看得到 Sandbox 視窗時才有內容，
+  所以檢查以 `run.log` 記錄的視窗文字為準。字型修正腳本重開 Sandbox 後偶爾不會再執行登入指令，這時 `run.log` 不會出現，
+  關閉 Sandbox 重跑即可。
+
+#### 安裝位置與工作區
+
+Setup 預設安裝在 `%LOCALAPPDATA%/Programs/InstanceHarbor`（所有使用者範圍為 `%ProgramFiles%/InstanceHarbor`），在「開始」與已安裝的應用程式中登記為 InstanceHarbor。
 雙擊便攜版或已安裝的 `InstanceHarbor.exe`，預設使用 `%LOCALAPPDATA%/InstanceHarbor/workspaces/default`。
 以腳本直接啟動時，`IH_WORKSPACE` 可指定已初始化的工作區。Setup 建立的「開始」捷徑固定使用正式預設工作區。
 需要隔離多個候選時，請明確指定各自的工作區。這個版本第一次啟動會建立預設工作區，不會自動遷移舊版資料。
@@ -1092,7 +1153,7 @@ GUI 診斷紀錄的 `gui-start` 事件也記錄 `commit`。
 | 測試管理員 | 工作區的 `test-administrators.json` 與 `plugin-cache/luckperms/` | 只存在本機；見「測試管理員權限」 |
 | GUI 診斷紀錄 | `<應用程式資料夾>\logs\gui-*.jsonl`（正式）、`InstanceHarbor Dev\logs\<名稱>\gui-*.jsonl`（開發） | 1.0 之前寫在 `<應用程式資料夾>\v2\logs`；舊檔留在原處，可以手動刪除。每個資料夾各有 16 MiB 上限 |
 | WebView2 資料 | `<應用程式資料夾>\webview`（正式）、`InstanceHarbor Dev\webviews\<名稱>`（開發） | 啟動腳本已設定 `WEBVIEW2_USER_DATA_FOLDER` 時，正式版改用該資料夾；開發版一律使用左欄位置 |
-| Setup 安裝位置 | `Programs\InstanceHarbor` | 解除安裝登錄 `InstanceHarbor-Desktop`，安裝租約檔 `instanceharbor.install` |
+| Setup 安裝位置 | `Programs\InstanceHarbor`（只為目前使用者）；所有使用者範圍在 `%ProgramFiles%\InstanceHarbor`，兩者都可在新安裝時改選 | 解除安裝登錄 `InstanceHarbor-Desktop`（`HKCU` 或 `HKLM`），安裝租約檔 `instanceharbor.install` |
 
 GUI 診斷紀錄每次啟動寫一組檔案，檔名為 `gui-<GUI 啟動的本機時間 yyyyMMdd-HHmmss>-<PID>-<分段序號>.jsonl`，
 例如 `gui-20261125-060415-56824-1.jsonl`。單檔寫到 2 MiB 時，最後一行寫入 `segment-full` 事件與下一段的檔名，

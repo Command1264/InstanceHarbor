@@ -28,7 +28,7 @@ InstanceHarbor is a Windows desktop app and command-line tool for running Minecr
 
 Download the latest release from [GitHub Releases](https://github.com/Command1264/InstanceHarbor/releases).
 
-- **Setup** (`InstanceHarbor-<version>-windows-x64-setup.exe`) installs for the current user, without administrator rights, and adds a Start menu entry. Run a newer Setup to update. Uninstalling keeps your servers and settings.
+- **Setup** (`InstanceHarbor-<version>-windows-x64-setup.exe`) installs for the current user by default, without administrator rights, and adds a Start menu entry. You can choose another folder, or install for all users of the computer (in Program Files, with administrator approval). Run a newer Setup to update; it keeps the scope and folder. Uninstalling keeps your servers and settings.
 - **Portable ZIP** (`InstanceHarbor-<version>-windows-x64.zip`): extract the whole ZIP to one folder and open `InstanceHarbor.exe`. See `WINDOWS-GETTING-STARTED.txt` inside the ZIP.
 
 Setup is not code-signed yet, so Windows SmartScreen may warn you. Choose **More info**, then **Run anyway**.
@@ -46,7 +46,7 @@ Your settings and server records are kept in `%LOCALAPPDATA%\InstanceHarbor\work
 
 ## Command line
 
-`ihctl.exe` is installed next to `InstanceHarbor.exe`. Every command takes the workspace folder first:
+`ihctl.exe` is installed next to `InstanceHarbor.exe` (the example uses the default folder for the current user). Every command takes the workspace folder first:
 
 ```powershell
 $ihctl = "$env:LOCALAPPDATA\Programs\InstanceHarbor\ihctl.exe"

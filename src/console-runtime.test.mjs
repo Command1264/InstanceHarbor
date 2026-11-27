@@ -56,7 +56,7 @@ test('Setup checks WebView2 on every run and compares the installed version', ()
   const setup = read('../packaging/windows-setup.nsi')
   const init = setup.slice(setup.indexOf('Function .onInit'), setup.indexOf('FunctionEnd', setup.indexOf('Function .onInit')))
   // Before any installed-version branch, so an update or repair also checks it.
-  assert.ok(init.indexOf('Call RequireWebView2') < init.indexOf('ReadRegStr $0 HKCU "${UNINSTALL_KEY}"'))
+  assert.ok(init.indexOf('Call RequireWebView2') < init.indexOf('ReadRegStr $1 HKCU "${UNINSTALL_KEY}"'))
   assert.match(init, /Call CompareVersions/)
   assert.match(init, /\$\(DowngradeAsk\)" \/SD IDNO/)
   for (const name of ['WebView2Missing', 'UpdateAsk', 'RepairAsk', 'DowngradeAsk', 'InUse']) {
@@ -66,6 +66,27 @@ test('Setup checks WebView2 on every run and compares the installed version', ()
   }
   assert.ok(setup.includes('linkid=2124701'))
   assert.ok(read('../src-tauri/src/webview_runtime.rs').includes('linkid=2124701'))
+})
+
+test('Setup installs for the current user or for all users and keeps the registered scope (#38)', () => {
+  const setup = read('../packaging/windows-setup.nsi')
+  // Starts without administrator rights, so the GUI's update can start it with CreateProcess;
+  // it asks for them (UAC) only for all users.
+  assert.match(setup, /^RequestExecutionLevel user\r?$/m)
+  assert.doesNotMatch(setup, /RequestExecutionLevel (admin|highest)/)
+  assert.match(setup, /w "runas"/)
+  // Both scopes register in the hive that SetShellVarContext selects.
+  assert.doesNotMatch(setup, /WriteReg\w+ HKCU/)
+  assert.match(setup, /ReadRegStr \$2 HKLM "\$\{UNINSTALL_KEY\}" "InstallLocation"/)
+  // Workspaces stay in the user's own %LOCALAPPDATA%, also for all users.
+  assert.match(setup, /!define WORKSPACE "\$UserData\\InstanceHarbor\\workspaces\\default"/)
+  for (const name of ['ScopeTitle', 'ScopeCurrent', 'ScopeAll', 'ScopeNote', 'FolderTop', 'FolderInvalid', 'FolderNotEmpty',
+    'FolderProtected', 'FolderNoAccess', 'FolderProfile', 'InstalledCurrent', 'InstalledAll', 'InstalledFolder', 'InstalledTwice',
+    'ScopeUsage', 'ElevationDenied', 'ElevationFailed', 'WaitAllUsers']) {
+    for (const language of ['LANG_TRADCHINESE', 'LANG_ENGLISH']) {
+      assert.ok(setup.includes(`LangString ${name} ${'$'}{${language}}`), `${name} ${language}`)
+    }
+  }
 })
 
 test('the GUI checks WebView2 before it takes the single-instance lock', () => {
