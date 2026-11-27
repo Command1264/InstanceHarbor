@@ -3,6 +3,13 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { consoleFallbackReason, consoleSummary } from './console-tier.ts'
 
+// The texts below are the Traditional Chinese ones. tr() follows the system language, so pin
+// it here; otherwise the tests fail on an English system such as the CI runners (#122).
+Object.defineProperty(globalThis, 'navigator', {
+  configurable: true,
+  value: { language: 'zh-TW', languages: ['zh-TW'] },
+})
+
 // Reason codes the Host writes into console-tier.json (native_console.rs).
 const hostReasons = ['ConsoleRuntimeMissing', 'ConsoleRuntimeMismatch', 'ConsoleSystemUnavailable',
   'ConsolePathUnsupported', 'ConsoleWindowNotConfirmed', 'ConsoleTierLimited']
