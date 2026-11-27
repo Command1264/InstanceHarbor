@@ -102,6 +102,16 @@ pub(super) fn mark(name: &'static str) {
     }
 }
 
+/// The last native mark reached, so a stuck start can say where it stopped.
+pub(super) fn last_mark() -> Option<&'static str> {
+    clock().marks.lock().ok()?.iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(name, _)| *name)
+}
+
+/// Time since the process was created.
+pub(super) fn since_start() -> std::time::Duration {
+    std::time::Duration::from_secs_f64(((unix_ms() - clock().created_unix_ms) / 1000.0).max(0.0))
+}
+
 fn round(value: f64) -> Value {
     json!((value * 10.0).round() / 10.0)
 }
