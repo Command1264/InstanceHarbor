@@ -19,8 +19,10 @@ if (Get-CimInstance Win32_Process -Filter "Name='InstanceHarbor.exe' OR Name='in
     throw 'An existing 2.0 window is open.'
 }
 $runtimeRecord = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../packaging/console-runtime.json') -Raw | ConvertFrom-Json
+# The pins of this computer's architecture (#66), for the native build of this checkout.
+$architecture = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
 foreach ($name in 'conpty.dll','OpenConsole.exe') {
-    if ((Get-FileHash -LiteralPath (Join-Path $Runtime $name)).Hash -ne $runtimeRecord.files.$name.sha256) {
+    if ((Get-FileHash -LiteralPath (Join-Path $Runtime $name)).Hash -ne $runtimeRecord.architectures.$architecture.files.$name.sha256) {
         throw "Private runtime does not match the pinned identity: $name"
     }
 }

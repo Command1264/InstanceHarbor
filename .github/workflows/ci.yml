@@ -1,5 +1,5 @@
-# Build and test on Windows x64 and Windows ARM64 (#122). No secrets, no releases,
-# no signing. docs/development.md ("CI") explains each step and how to run it locally.
+# Build and test on Windows x64 and Windows ARM64 (#122), then build and check the release
+# ZIP and Setup of each architecture (#66). No secrets, no releases, no signing, no uploads. docs/development.md ("CI") explains each step and how to run it locally.
 name: CI
 
 on:
@@ -31,9 +31,11 @@ jobs:
           - name: Windows x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
+            arch: x64
           - name: Windows ARM64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
+            arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     env:
@@ -138,3 +140,36 @@ jobs:
           if ($clippyExit -ne 0) { throw "cargo clippy failed with exit code $clippyExit" }
           node ../scripts/clippy-baseline.mjs check $json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Download the pinned NSIS 3.13 and ConPTY package
+        # Both are checked against their pinned SHA-256 before use. NSIS is not on windows-latest,
+        # and windows-11-arm has an older one; Setup is built with 3.13 everywhere.
+        run: |
+          $tools = Join-Path $env:RUNNER_TEMP 'package-tools'
+          New-Item -ItemType Directory -Path $tools | Out-Null
+          function Get-Pinned([string]$Url, [string]$Path, [string]$Sha256) {
+            curl.exe --fail --silent --show-error --location --retry 3 --output $Path $Url
+            if ($LASTEXITCODE -ne 0) { throw "Download failed ($LASTEXITCODE): $Url" }
+            $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+            if ($actual -ne $Sha256) { throw "SHA-256 mismatch for $Url`: $actual" }
+          }
+          # The official installer that docs/windows-distribution-licenses.md pins.
+          $installer = Join-Path $tools 'nsis-3.13-setup.exe'
+          Get-Pinned 'https://downloads.sourceforge.net/project/nsis/NSIS%203/3.13/nsis-3.13-setup.exe' $installer 'db9a1038bbc0e53fef24f423fd609979bd578e942f1be1198db186d1c42652a3'
+          $nsis = Join-Path $tools 'nsis'
+          $run = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$nsis" -Wait -PassThru
+          if ($run.ExitCode -ne 0) { throw "The NSIS installer exited with $($run.ExitCode)." }
+          $makensis = Join-Path $nsis 'makensis.exe'
+          $nsisVersion = (& $makensis /VERSION | Out-String).Trim()
+          if ($nsisVersion -ne 'v3.13') { throw "Expected NSIS v3.13, got '$nsisVersion'." }
+          $record = Get-Content -Raw packaging/console-runtime.json | ConvertFrom-Json
+          $conpty = Join-Path $tools ([IO.Path]::GetFileName($record.source.url))
+          Get-Pinned $record.source.url $conpty $record.source.sha256
+          "IH_CI_MAKENSIS=$makensis" >> $env:GITHUB_ENV
+          "IH_CI_CONPTY=$conpty" >> $env:GITHUB_ENV
+
+      - name: Setup decision tests (NSIS)
+        run: ./tests/verify-windows-setup-version.ps1 -Compiler $env:IH_CI_MAKENSIS
+
+      - name: Release ZIP and Setup for ${{ matrix.arch }} (built, checked, installed, not published)
+        run: ./packaging/verify-ci-package.ps1 -Architecture ${{ matrix.arch }} -ConsoleRuntimePackage $env:IH_CI_CONPTY -Compiler $env:IH_CI_MAKENSIS -Output (Join-Path $env:RUNNER_TEMP 'package') -Install

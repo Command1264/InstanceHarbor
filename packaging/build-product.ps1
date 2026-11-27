@@ -4,7 +4,10 @@
 # SymbolDirectory: where -Release keeps this build's PDBs (with the matching executables) on
 # this machine only. Defaults to IH_SYMBOL_DIRECTORY, else artifacts/symbols in the project
 # folder that holds repo/ and worktrees/. PDBs name local paths: never commit, upload or ship them.
-param([switch]$Acceptance,[switch]$Release,[switch]$Development,[string]$ConsoleRuntimeSource=$env:IH_CONSOLE_RUNTIME_SOURCE,[string]$SymbolDirectory=$env:IH_SYMBOL_DIRECTORY)
+# Architecture: x64 or arm64 (#66), for -Release and -Development. The Rust target, the ConPTY
+# files and the evidence folder follow it; arm64 needs the aarch64-pc-windows-msvc target and the
+# MSVC ARM64 build tools, or an ARM64 computer.
+param([switch]$Acceptance,[switch]$Release,[switch]$Development,[string]$ConsoleRuntimeSource=$env:IH_CONSOLE_RUNTIME_SOURCE,[string]$SymbolDirectory=$env:IH_SYMBOL_DIRECTORY,[ValidateSet('x64','arm64')][string]$Architecture='x64')
 $ErrorActionPreference='Stop'
 $PSNativeCommandUseErrorActionPreference=$true
 # This script lives in packaging/; it builds from the repository root.
@@ -14,6 +17,8 @@ try {
     if (@($Release, $Acceptance, $Development).Where({ $_ }).Count -gt 1) {
         throw 'Release, Acceptance and Development are mutually exclusive.'
     }
+    if($Architecture -ne 'x64' -and !($Release -or $Development)){throw 'Architecture applies to -Release and -Development builds only.'}
+    $rustTarget=@{x64='x86_64-pc-windows-msvc';arm64='aarch64-pc-windows-msvc'}[$Architecture]
     # Reuse the already installed, lockfile-bound dependencies. Never install here.
     if(!(Test-Path -LiteralPath 'node_modules/.bin/vite.cmd')){throw '缺少本機依賴。此建置入口不會自動安裝。'}
     # The Git commit written into both executables: seven hex digits, `-dirty` with
@@ -37,11 +42,11 @@ try {
     & $npm run build -- @viteArgs
     $cargoArgs=@('build','--offline','--locked','--manifest-path','src-tauri/Cargo.toml')
     if($Development){
-        $cargoArgs+=@('--profile','dev-channel','--target','x86_64-pc-windows-msvc','--features','development-channel')
-        $binaryDirectory=Join-Path $repositoryRoot 'src-tauri/target/x86_64-pc-windows-msvc/dev-channel'
+        $cargoArgs+=@('--profile','dev-channel','--target',$rustTarget,'--features','development-channel')
+        $binaryDirectory=Join-Path $repositoryRoot "src-tauri/target/$rustTarget/dev-channel"
     }elseif($Release){
-        $cargoArgs+=@('--release','--target','x86_64-pc-windows-msvc')
-        $binaryDirectory=Join-Path $repositoryRoot 'src-tauri/target/x86_64-pc-windows-msvc/release'
+        $cargoArgs+=@('--release','--target',$rustTarget)
+        $binaryDirectory=Join-Path $repositoryRoot "src-tauri/target/$rustTarget/release"
     }else{
         $binaryDirectory=Join-Path $repositoryRoot 'src-tauri/target/debug'
     }
@@ -72,9 +77,13 @@ try {
     $builtCli=Join-Path $binaryDirectory 'ihctl.exe'
     $binaryText=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($builtBinary))
     if($assets.Count -lt 2){throw '找不到 Vite 資產身分。'}
-    $cliVersion=(& $builtCli --version|Out-String).Trim()
+    # A cross-built ihctl cannot run here; the commit check then reads the binary instead.
+    $hostArchitecture=if([Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64'){'arm64'}else{'x64'}
+    $cliVersion=if($Architecture -eq $hostArchitecture -or $hostArchitecture -eq 'arm64'){(& $builtCli --version|Out-String).Trim()}else{$null}
     if($Release -or $Development){& (Join-Path $PSScriptRoot 'verify-no-local-paths.ps1') -Binary $builtBinary,$builtCli}
-    if(!$cliVersion.EndsWith(" ($commit)")){throw "ihctl 未包含本次建置的 commit（$commit）：$cliVersion"}
+    if($null -ne $cliVersion){
+        if(!$cliVersion.EndsWith(" ($commit)")){throw "ihctl 未包含本次建置的 commit（$commit）：$cliVersion"}
+    }elseif(![Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($builtCli)).Contains(" ($commit)")){throw "ihctl 未包含本次建置的 commit（$commit）。"}
     foreach($asset in $assets){if(!$binaryText.Contains($asset)){throw "原生候選未包含最新前端資產：$asset"}}
     # Blue icons for the product and acceptance builds, red ones for development only.
     # The files of each channel come from src-tauri/icons/channels.json (#116).
@@ -89,7 +98,7 @@ try {
     $brandHashes=@(Get-ChildItem -LiteralPath (Join-Path $frontendDirectory 'assets') -Filter '*.png'|ForEach-Object{(Get-FileHash -LiteralPath $_.FullName).Hash})
     if($brandHashes -notcontains (Get-FileHash -LiteralPath $brandFile).Hash){throw "前端未包含 $($channelIcons.$channel.brand) 的側欄品牌圖。"}
     if($brandHashes -contains (Get-FileHash -LiteralPath $otherBrandFile).Hash){throw "前端誤含 $($channelIcons.$otherChannel.brand) 的側欄品牌圖。"}
-    $folder=Join-Path $repositoryRoot $(if($Development){'.evidence/windows-x64-development'}elseif($Release){'.evidence/windows-x64-release'}else{'.evidence/vue-product-20261109'})
+    $folder=Join-Path $repositoryRoot $(if($Development){".evidence/windows-$Architecture-development"}elseif($Release){".evidence/windows-$Architecture-release"}else{'.evidence/vue-product-20261109'})
     $binary=$builtBinary
     $cli=$builtCli
     if($Acceptance){
@@ -115,13 +124,13 @@ try {
         elseif($Acceptance -and @($runtimeNames|Where-Object{Test-Path -LiteralPath (Join-Path $binaryDirectory $_)}).Count -eq 2){$binaryDirectory}
     $consoleRuntime=$null
     if($runtimeSource){
-        $consoleRuntime=(& (Join-Path $PSScriptRoot 'provision-console-runtime.ps1') -Source $runtimeSource -Destination $runtimeTarget).version
+        $consoleRuntime=(& (Join-Path $PSScriptRoot 'provision-console-runtime.ps1') -Source $runtimeSource -Destination $runtimeTarget -Architecture $Architecture).version
     }elseif($Release){
         throw '發行建置需要已核對的後台元件。請以 -ConsoleRuntimeSource 指定 conpty.dll／OpenConsole.exe 的本機來源。'
     }else{
         Write-Warning '未提供後台元件（conpty.dll、OpenConsole.exe）。此建置的伺服器後台會改用 Windows 內建主控台。'
     }
-    @{assets=$assets;frontendDirectory=(Resolve-Path -LiteralPath $frontendDirectory).Path;binary=$binary;sha256=(Get-FileHash -LiteralPath $binary).Hash;cliSha256=(Get-FileHash -LiteralPath $cli).Hash;indexSha256=(Get-FileHash -LiteralPath $index).Hash;acceptanceUi=[bool]$Acceptance;development=[bool]$Development;commit=$commit;consoleRuntime=$consoleRuntime}|
+    @{assets=$assets;frontendDirectory=(Resolve-Path -LiteralPath $frontendDirectory).Path;binary=$binary;sha256=(Get-FileHash -LiteralPath $binary).Hash;cliSha256=(Get-FileHash -LiteralPath $cli).Hash;indexSha256=(Get-FileHash -LiteralPath $index).Hash;acceptanceUi=[bool]$Acceptance;development=[bool]$Development;architecture=$Architecture;commit=$commit;consoleRuntime=$consoleRuntime}|
         ConvertTo-Json|Set-Content -LiteralPath (Join-Path $folder 'build-manifest.json')
     if($Release){
         $symbols=& (Join-Path $PSScriptRoot 'save-release-symbols.ps1') -BinaryDirectory $binaryDirectory -Commit $commit -Destination $SymbolDirectory

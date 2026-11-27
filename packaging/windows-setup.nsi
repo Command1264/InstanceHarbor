@@ -1,6 +1,8 @@
 ﻿Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
+!include "WinVer.nsh"
+!include "windows-setup-arch.nsh"
 !include "windows-setup-version.nsh"
 !include "windows-setup-webview2.nsh"
 !include "windows-setup-close.nsh"
@@ -22,8 +24,22 @@
 !define APP_EXIT_VERSION "1.1.0"
 ; Exit code of a silent update that stopped because servers may still be running.
 !define EXIT_SERVERS_RUNNING 5
-; Microsoft's permanent link to the WebView2 Evergreen Standalone Installer for x64.
-!define WEBVIEW2_URL "https://go.microsoft.com/fwlink/?linkid=2124701"
+; The architecture of the installed files (#66): x64 or arm64. pack-windows-setup.ps1
+; passes the one that the package manifest records.
+!ifndef ARCH
+  !error "Define ARCH as x64 or arm64."
+!endif
+; Microsoft's permanent links to the WebView2 Evergreen Standalone Installer, from
+; https://developer.microsoft.com/microsoft-edge/webview2/.
+!if "${ARCH}" == "x64"
+  !define ARCH_LABEL "x64"
+  !define WEBVIEW2_URL "https://go.microsoft.com/fwlink/?linkid=2124701"
+!else if "${ARCH}" == "arm64"
+  !define ARCH_LABEL "ARM64"
+  !define WEBVIEW2_URL "https://go.microsoft.com/fwlink/?linkid=2099616"
+!else
+  !error "ARCH must be x64 or arm64, not ${ARCH}."
+!endif
 
 Name "${APP} ${VERSION}"
 OutFile "${OUTPUT}"
@@ -86,10 +102,15 @@ Var Continue
 Var UserData
 Var ScopeCurrent
 Var ScopeAll
+; The architecture of the registered installation, as shown: x64 or ARM64.
+Var InstalledArch
 
 ; The binaries link the Visual C++ runtime statically; only WebView2 comes from the system.
-LangString NeedX64 ${LANG_ENGLISH} "A Windows x64 system is required."
-LangString WebView2Missing ${LANG_ENGLISH} "Microsoft Edge WebView2 Runtime was not found. InstanceHarbor needs it to show its window.$\r$\n$\r$\nInstall Microsoft's Evergreen Standalone Installer for x64, then run InstanceHarbor Setup again.$\r$\n$\r$\nDownload that installer from Microsoft now (about 280 MB)?"
+LangString NeedX64 ${LANG_ENGLISH} "This Setup installs the Windows x64 version of InstanceHarbor, which this computer cannot run. It needs a 64-bit x64 computer, or Windows 11 on an ARM64 computer. On an ARM64 computer, use the windows-arm64 Setup."
+LangString NeedArm64 ${LANG_ENGLISH} "This Setup installs the Windows ARM64 version of InstanceHarbor, which runs only on ARM64 computers. On this computer, use the windows-x64 Setup."
+LangString EmulatedAsk ${LANG_ENGLISH} "This computer has an ARM64 processor, but this Setup installs the Windows x64 version of InstanceHarbor. Windows runs x64 programs through emulation, so:$\r$\n$\r$\n- InstanceHarbor and its server console can be slower and use more power.$\r$\n- Some low-level Windows components, such as DLLs that it loads, may not work under emulation.$\r$\n$\r$\nThe windows-arm64 Setup runs natively. Install the x64 version anyway?"
+LangString ArchSwitch ${LANG_ENGLISH} "The installed InstanceHarbor is the Windows $InstalledArch version. This Setup replaces it with the Windows ${ARCH_LABEL} version.$\r$\n$\r$\nYour workspace, servers and settings are kept."
+LangString WebView2Missing ${LANG_ENGLISH} "Microsoft Edge WebView2 Runtime was not found. InstanceHarbor needs it to show its window.$\r$\n$\r$\nInstall Microsoft's Evergreen Standalone Installer for ${ARCH_LABEL}, then run InstanceHarbor Setup again.$\r$\n$\r$\nDownload that installer from Microsoft now (about 280 MB)?"
 LangString Unverified ${LANG_ENGLISH} "InstanceHarbor files or a shortcut already exist, but the installed version cannot be verified. Close InstanceHarbor and uninstall it before installing. Your workspace is stored separately."
 LangString UpdateAsk ${LANG_ENGLISH} "InstanceHarbor $Installed is installed.$\r$\nUpdate it to ${VERSION}?$\r$\n$\r$\nYour workspace is kept."
 LangString RepairAsk ${LANG_ENGLISH} "InstanceHarbor ${VERSION} is already installed.$\r$\nReinstall its program files (repair)?$\r$\n$\r$\nYour workspace is kept."
@@ -128,8 +149,11 @@ LangString InstalledTwice ${LANG_ENGLISH} "InstanceHarbor is registered both for
 LangString ScopeUsage ${LANG_ENGLISH} "Use only one of /AllUsers and /CurrentUser."
 LangString ElevationDenied ${LANG_ENGLISH} "An installation for all users needs administrator approval, which was not given. Nothing was changed."
 LangString ElevationFailed ${LANG_ENGLISH} "Setup could not start with administrator rights. Nothing was changed."
-LangString NeedX64 ${LANG_TRADCHINESE} "需要 Windows x64 系統。"
-LangString WebView2Missing ${LANG_TRADCHINESE} "找不到 Microsoft Edge WebView2 Runtime，InstanceHarbor 需要它才能顯示視窗。$\r$\n$\r$\n請安裝 Microsoft 官方的「Evergreen 獨立安裝程式」x64 版（Evergreen Standalone Installer），再重新執行 InstanceHarbor Setup。$\r$\n$\r$\n要現在從 Microsoft 下載這個安裝程式嗎？（約 280 MB）"
+LangString NeedX64 ${LANG_TRADCHINESE} "這個 Setup 安裝的是 Windows x64 版 InstanceHarbor，這台電腦無法執行。需要 64 位元的 x64 電腦，或安裝 Windows 11 的 ARM64 電腦。ARM64 電腦請改用 windows-arm64 的 Setup。"
+LangString NeedArm64 ${LANG_TRADCHINESE} "這個 Setup 安裝的是 Windows ARM64 版 InstanceHarbor，只能在 ARM64 電腦上執行。這台電腦請改用 windows-x64 的 Setup。"
+LangString EmulatedAsk ${LANG_TRADCHINESE} "這台電腦使用 ARM64 處理器，但這個 Setup 安裝的是 Windows x64 版 InstanceHarbor。Windows 會以模擬方式執行 x64 程式，因此：$\r$\n$\r$\n・InstanceHarbor 與伺服器後台可能變慢、較耗電。$\r$\n・部分 Windows 底層元件（例如程式載入的 DLL）在模擬下可能無法使用。$\r$\n$\r$\nwindows-arm64 的 Setup 可以原生執行。仍要安裝 x64 版嗎？"
+LangString ArchSwitch ${LANG_TRADCHINESE} "目前安裝的是 Windows $InstalledArch 版 InstanceHarbor。這個 Setup 會把它換成 Windows ${ARCH_LABEL} 版。$\r$\n$\r$\n工作區、伺服器與設定都會保留。"
+LangString WebView2Missing ${LANG_TRADCHINESE} "找不到 Microsoft Edge WebView2 Runtime，InstanceHarbor 需要它才能顯示視窗。$\r$\n$\r$\n請安裝 Microsoft 官方的「Evergreen 獨立安裝程式」${ARCH_LABEL} 版（Evergreen Standalone Installer），再重新執行 InstanceHarbor Setup。$\r$\n$\r$\n要現在從 Microsoft 下載這個安裝程式嗎？（約 280 MB）"
 LangString Unverified ${LANG_TRADCHINESE} "已有 InstanceHarbor 的檔案或捷徑，但無法確認已安裝的版本。請先關閉並解除安裝 InstanceHarbor，再進行安裝。工作區另外存放，不受影響。"
 LangString UpdateAsk ${LANG_TRADCHINESE} "已安裝 InstanceHarbor $Installed。$\r$\n要更新為 ${VERSION} 嗎？$\r$\n$\r$\n工作區資料會保留。"
 LangString RepairAsk ${LANG_TRADCHINESE} "已安裝相同版本的 InstanceHarbor ${VERSION}。$\r$\n要重新安裝程式檔案（修復）嗎？$\r$\n$\r$\n工作區資料會保留。"
@@ -576,11 +600,21 @@ Function .onInit
   ${OrIf} $0 = 0x1404
     StrCpy $LANGUAGE ${LANG_TRADCHINESE}
   ${EndIf}
-  ${IfNot} ${RunningX64}
+  ; Which computers run the installed files (#66); x64 files on an ARM64 computer ask below.
+  ${GetNativeMachineArchitecture} $R6
+  ${WinVerGetBuild} $R7
+  StrCpy $R5 "${ARCH}"
+  Call DecideArchitecture
+  ${If} $R0 == "x64-needed"
     MessageBox MB_ICONSTOP "$(NeedX64)" /SD IDOK
     SetErrorLevel 2
     Abort
+  ${ElseIf} $R0 == "arm64-needed"
+    MessageBox MB_ICONSTOP "$(NeedArm64)" /SD IDOK
+    SetErrorLevel 2
+    Abort
   ${EndIf}
+  StrCpy $R8 $R0
   SetShellVarContext current
   SetRegView 64
   StrCpy $UserData $LOCALAPPDATA
@@ -625,6 +659,12 @@ Function .onInit
       Abort
     ${EndIf}
   ${Else}
+    ; Asked once, before elevation; a silent installation continues.
+    ${If} $R8 == "emulated"
+      MessageBox MB_YESNO|MB_ICONEXCLAMATION "$(EmulatedAsk)" /SD IDYES IDYES +3
+      SetErrorLevel 4
+      Abort
+    ${EndIf}
     ; Checked on every run, updates included, in case WebView2 was removed later. The
     ; elevated copy relies on this check: its own per-user runtime may differ.
     Call RequireWebView2
@@ -682,6 +722,17 @@ Function .onInit
   ReadRegStr $Installed SHCTX "${UNINSTALL_KEY}" "DisplayVersion"
   StrCmp $Installed "" unverified
   IfFileExists "$INSTDIR\${LEASE}" 0 unverified
+  ; Another architecture is replaced in place (#66); an installation without the value is x64.
+  ReadRegStr $R5 SHCTX "${UNINSTALL_KEY}" "Architecture"
+  StrCpy $R6 "${ARCH}"
+  Call CompareArchitecture
+  StrCpy $InstalledArch "x64"
+  StrCmp $R0 "arm64" 0 +2
+  StrCpy $InstalledArch "ARM64"
+  StrCmp $R1 "same" +4
+  MessageBox MB_OKCANCEL|MB_ICONINFORMATION "$(ArchSwitch)" /SD IDOK IDOK +3
+  SetErrorLevel 4
+  Abort
   StrCpy $Generation "current"
   StrCpy $R5 $Installed
   StrCpy $R6 "${APP_EXIT_VERSION}"
@@ -811,6 +862,7 @@ files:
   IfErrors failed
   WriteRegStr SHCTX "${UNINSTALL_KEY}" "DisplayName" "${APP}"
   WriteRegStr SHCTX "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr SHCTX "${UNINSTALL_KEY}" "Architecture" "${ARCH}"
   WriteRegStr SHCTX "${UNINSTALL_KEY}" "Publisher" "${APP}"
   WriteRegStr SHCTX "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr SHCTX "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\InstanceHarbor.exe,0"

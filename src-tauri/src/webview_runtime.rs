@@ -5,8 +5,12 @@
 use instanceharbor::desktop_channel;
 use std::{env, fs, os::windows::fs::MetadataExt, path::PathBuf};
 
-/// Microsoft's permanent link to the Evergreen Standalone Installer for x64.
-const STANDALONE_X64: &str = "https://go.microsoft.com/fwlink/?linkid=2124701";
+/// Microsoft's permanent links to the Evergreen Standalone Installer, from the download page.
+/// Each build names the installer of its own architecture (#66).
+#[cfg(not(target_arch = "aarch64"))]
+const STANDALONE: (&str, &str) = ("x64", "https://go.microsoft.com/fwlink/?linkid=2124701");
+#[cfg(target_arch = "aarch64")]
+const STANDALONE: (&str, &str) = ("ARM64", "https://go.microsoft.com/fwlink/?linkid=2099616");
 const DOWNLOAD_PAGE: &str = "https://developer.microsoft.com/microsoft-edge/webview2/#download-section";
 
 #[link(name = "user32")]
@@ -78,17 +82,19 @@ pub(super) fn message(chinese: bool) -> String {
     if chinese {
         format!(
             "找不到 Microsoft Edge WebView2 Runtime，InstanceHarbor 需要它才能顯示視窗。\n\n\
-             請安裝 Microsoft 官方的「Evergreen 獨立安裝程式」x64 版（Evergreen Standalone Installer），\
+             請安裝 Microsoft 官方的「Evergreen 獨立安裝程式」{} 版（Evergreen Standalone Installer），\
              安裝完成後再開啟 InstanceHarbor。\n\n\
              選「是」會從 Microsoft 下載這個安裝程式（約 280 MB）。\n\
-             下載頁面：{DOWNLOAD_PAGE}"
+             下載頁面：{DOWNLOAD_PAGE}",
+            STANDALONE.0
         )
     } else {
         format!(
             "Microsoft Edge WebView2 Runtime was not found. InstanceHarbor needs it to show its window.\n\n\
-             Install Microsoft's Evergreen Standalone Installer for x64, then open InstanceHarbor again.\n\n\
+             Install Microsoft's Evergreen Standalone Installer for {}, then open InstanceHarbor again.\n\n\
              Choose Yes to download that installer from Microsoft (about 280 MB).\n\
-             Download page: {DOWNLOAD_PAGE}"
+             Download page: {DOWNLOAD_PAGE}",
+            STANDALONE.0
         )
     }
 }
@@ -103,7 +109,7 @@ pub(super) fn ensure_available() -> bool {
     let title = wide(&desktop_channel::product_title(desktop_channel::workspace_name().as_deref()));
     // MB_YESNO | MB_ICONERROR | MB_DEFBUTTON1; IDYES = 6.
     if unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x4 | 0x10) } == 6 {
-        let (open, link) = (wide("open"), wide(STANDALONE_X64));
+        let (open, link) = (wide("open"), wide(STANDALONE.1));
         let opened = unsafe {
             ShellExecuteW(std::ptr::null_mut(), open.as_ptr(), link.as_ptr(), std::ptr::null(), std::ptr::null(), 1)
         };
@@ -120,8 +126,10 @@ mod tests {
 
     #[test]
     fn message_names_the_exact_installer_in_both_languages() {
-        assert!(message(true).contains("Evergreen 獨立安裝程式」x64"));
-        assert!(message(false).contains("Evergreen Standalone Installer for x64"));
+        let label = if cfg!(target_arch = "aarch64") { "ARM64" } else { "x64" };
+        assert_eq!(STANDALONE.0, label);
+        assert!(message(true).contains(&format!("Evergreen 獨立安裝程式」{label} 版")));
+        assert!(message(false).contains(&format!("Evergreen Standalone Installer for {label},")));
         for chinese in [true, false] {
             assert!(message(chinese).contains(DOWNLOAD_PAGE));
         }

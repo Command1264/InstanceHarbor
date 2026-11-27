@@ -1,12 +1,14 @@
 # Copy the pinned tier-1 console runtime (conpty.dll, OpenConsole.exe) next to built binaries.
 # The source is a local directory or a local copy of the Microsoft ConPTY NuGet package named in
 # console-runtime.json (`source`); a package must match its pinned size and SHA-256. This script
-# never downloads. Each file must match the pinned SHA-256, be x64 and carry a valid Microsoft
-# Authenticode signature before it is copied.
+# never downloads. Each file must match the pinned SHA-256 of the chosen architecture, carry that
+# architecture's PE machine type and a valid Microsoft Authenticode signature before it is copied.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Source,
-    [Parameter(Mandatory)][string]$Destination
+    [Parameter(Mandatory)][string]$Destination,
+    # The architecture of the executables beside which the runtime goes (#66).
+    [ValidateSet('x64', 'arm64')][string]$Architecture = 'x64'
 )
 $ErrorActionPreference = 'Stop'
 if (!$IsWindows) { throw 'Windows PowerShell 7 is required.' }
@@ -28,7 +30,7 @@ function Get-Sha256([byte[]]$Bytes) {
 function Assert-Runtime([string]$Name, [byte[]]$Bytes, [string]$Expected) {
     if ((Get-Sha256 $Bytes) -cne $Expected) { throw "Console runtime SHA-256 mismatch: $Name" }
     $peOffset = [BitConverter]::ToInt32($Bytes, 0x3C)
-    if ([BitConverter]::ToUInt16($Bytes, $peOffset + 4) -ne 0x8664) { throw "Console runtime is not x64: $Name" }
+    if ([BitConverter]::ToUInt16($Bytes, $peOffset + 4) -ne $pins.machine) { throw "Console runtime is not $($Architecture): $Name" }
 }
 
 function Assert-Signature([string]$Path, [string]$Signer) {
@@ -39,7 +41,8 @@ function Assert-Signature([string]$Path, [string]$Signer) {
 }
 
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'console-runtime.json') -Raw | ConvertFrom-Json
-$names = @($manifest.files.PSObject.Properties.Name)
+$pins = $manifest.architectures.$Architecture
+$names = @($pins.files.PSObject.Properties.Name)
 $sourceItem = Get-PlainItem $Source
 $destinationItem = Get-PlainItem $Destination
 if (!$destinationItem.PSIsContainer) { throw 'Destination must be an existing directory.' }
@@ -60,9 +63,9 @@ if ($sourceItem.PSIsContainer) {
     $archive = [IO.Compression.ZipArchive]::new([IO.MemoryStream]::new($packageBytes), [IO.Compression.ZipArchiveMode]::Read)
     try {
         foreach ($name in $names) {
-            # The package carries one build per architecture; the manifest names the x64 entry.
-            $entry = $archive.GetEntry($manifest.files.$name.entry)
-            if ($null -eq $entry -or $entry.Length -gt 64MB) { throw "The package has no $($manifest.files.$name.entry)." }
+            # The package carries one build per architecture; the manifest names each entry.
+            $entry = $archive.GetEntry($pins.files.$name.entry)
+            if ($null -eq $entry -or $entry.Length -gt 64MB) { throw "The package has no $($pins.files.$name.entry)." }
             $stream = $entry.Open()
             try {
                 $buffer = [IO.MemoryStream]::new()
@@ -76,7 +79,7 @@ if ($sourceItem.PSIsContainer) {
 }
 
 foreach ($name in $names) {
-    $expected = $manifest.files.$name.sha256
+    $expected = $pins.files.$name.sha256
     Assert-Runtime $name $payloads[$name] $expected
     $target = Join-Path $destinationItem.FullName $name
     if (Test-Path -LiteralPath $target) {
@@ -97,4 +100,4 @@ foreach ($name in $names) {
         if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage }
     }
 }
-[pscustomobject]@{ version = $manifest.version; destination = $destinationItem.FullName; files = $names }
+[pscustomobject]@{ version = $manifest.version; architecture = $Architecture; destination = $destinationItem.FullName; files = $names }

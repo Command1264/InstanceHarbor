@@ -7,7 +7,10 @@ param(
     [string]$VCRuntimeDirectory,
     [string]$NoticeDirectory,
     [Parameter(Mandatory)][string]$OutputZip,
-    [Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$')][string]$Version
+    [Parameter(Mandatory)][ValidatePattern('^[0-9A-Za-z][0-9A-Za-z.-]{0,63}$')][string]$Version,
+    # The architecture of the executables (#66). Release files are named
+    # InstanceHarbor-<version>-windows-<architecture>.zip; the manifest records it too.
+    [ValidateSet('x64', 'arm64')][string]$Architecture = 'x64'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,6 +37,12 @@ $parent = Get-PlainItem $parentPath
 if (!$parent.PSIsContainer -or [IO.Path]::GetExtension($destination) -cne '.zip' -or (Test-Path -LiteralPath $destination)) {
     throw 'OutputZip must name a new .zip file in an existing directory.'
 }
+# The GUI's update picks the ZIP by name, so a release file name must state the architecture.
+$releaseName = "InstanceHarbor-$Version-windows-$Architecture.zip"
+$outputName = [IO.Path]::GetFileName($destination)
+if ($outputName -like 'InstanceHarbor-*' -and $outputName -cne $releaseName) {
+    throw "A release ZIP of this package must be named $releaseName."
+}
 
 $names = @('InstanceHarbor.exe', 'ihctl.exe')
 # Neither PDBs nor executables that name the build machine's folders may ship (#118).
@@ -41,6 +50,19 @@ $names = @('InstanceHarbor.exe', 'ihctl.exe')
 $gui = Get-PlainItem (Join-Path $binaryRoot.FullName 'InstanceHarbor.exe')
 if ($gui.VersionInfo.ProductName -eq 'InstanceHarbor Dev') {
     throw 'Development binaries cannot be packaged as the stable product.'
+}
+
+# The PE machine type of each architecture; the executables and the console runtime must match.
+$machines = @{ x64 = 0x8664; arm64 = 0xAA64 }
+function Get-Machine([string]$Path) {
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+    if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x4550) { throw "Not a PE file: $Path" }
+    [BitConverter]::ToUInt16($bytes, $pe + 4)
+}
+foreach ($name in $names) {
+    $machine = Get-Machine (Join-Path $binaryRoot.FullName $name)
+    if ($machine -ne $machines[$Architecture]) { throw ("$name is not a Windows $Architecture executable (PE machine 0x{0:X4})." -f $machine) }
 }
 
 # Names of the DLLs in a PE32+ file's import directory.
@@ -89,10 +111,17 @@ if ($Version -cmatch '^\d+\.\d+\.\d+$') {
     }
 }
 # Match console-runtime.json and native_console.rs. Release candidates can be packaged without them.
-$consoleHashes = [ordered]@{
-    'conpty.dll' = 'feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a'
-    'OpenConsole.exe' = '3d66b23d0a71bb8eed2b77edc8b9df9bf54ce6c8fb74c863a30e760997f80586'
+$consoleHashesByArchitecture = @{
+    x64 = [ordered]@{
+        'conpty.dll' = 'feeef341d891643c62d30b6b07800bc70f0bc148f44cb8c3bee84aa557ae805a'
+        'OpenConsole.exe' = '3d66b23d0a71bb8eed2b77edc8b9df9bf54ce6c8fb74c863a30e760997f80586'
+    }
+    arm64 = [ordered]@{
+        'conpty.dll' = '151a02355227710c20c9f8f1eaf68ac4668aa09cdc921adc7ec661804d8eb1bf'
+        'OpenConsole.exe' = '4313825a3ba634d113cc6ed3bc8ce735e3c19d360cecd985794787479469f91f'
+    }
 }
+$consoleHashes = $consoleHashesByArchitecture[$Architecture]
 $consoleRoot = $binaryRoot
 if ($ConsoleRuntimeDirectory) {
     $consoleRoot = Get-PlainItem $ConsoleRuntimeDirectory
@@ -132,7 +161,7 @@ if ($NoticeDirectory) {
 }
 $guideNames = @()
 if ($distribution) { $guideNames = @('WINDOWS-GETTING-STARTED.txt') }
-$manifest = [ordered]@{ schema = 'instanceharbor-windows-package/v1'; version = $Version; files = @() }
+$manifest = [ordered]@{ schema = 'instanceharbor-windows-package/v1'; version = $Version; architecture = $Architecture; files = @() }
 $stage = Join-Path $parent.FullName ('.instanceharbor-package-' + [guid]::NewGuid().ToString('N') + '.tmp')
 $encoding = [Text.UTF8Encoding]::new($false)
 $zipStream = [IO.File]::Open($stage, [IO.FileMode]::CreateNew, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
@@ -152,7 +181,7 @@ try {
                 $input = [IO.File]::OpenRead($item.FullName)
                 try {
                     $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($input)).ToLowerInvariant()
-                    if ($name -cin $consoleNames -and $hash -cne $consoleHashes[$name]) { throw "Native console runtime SHA-256 mismatch: $name" }
+                    if ($name -cin $consoleNames -and $hash -cne $consoleHashes[$name]) { throw "Native console runtime SHA-256 mismatch for $($Architecture): $name" }
                     if ($name -cin $crtNames -and $hash -cne $crtHashes[$name]) { throw "Microsoft C++ runtime SHA-256 mismatch: $name" }
                     $input.Position = 0
                     $manifest.files += @{ name = $name; size = $input.Length; sha256 = $hash }
@@ -168,7 +197,7 @@ try {
         $digest = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($zipStream)).ToLowerInvariant()
     } finally { $zipStream.Dispose() }
     [IO.File]::Move($stage, $destination)
-    [pscustomobject]@{ version = $Version; packagePath = $destination; sha256 = $digest }
+    [pscustomobject]@{ version = $Version; architecture = $Architecture; packagePath = $destination; sha256 = $digest }
 } finally {
     if ([IO.File]::Exists($stage)) { [IO.File]::Delete($stage) }
 }

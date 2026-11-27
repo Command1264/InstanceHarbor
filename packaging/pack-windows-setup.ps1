@@ -21,6 +21,12 @@ $prepared=& (Join-Path $PSScriptRoot 'install-windows.ps1') -Action Stage -Insta
 $stable=$prepared.version -cmatch '^(\d+)\.(\d+)\.(\d+)$'
 if(!($stable -or $prepared.version -ceq '1.0.0-rc2') -or !$prepared.nativeConsoleRuntime -or $prepared.visualCppRuntime){throw 'Expected 1.0.0-rc2 or a stable version with ConPTY and without app-local Visual C++ DLLs.'}
 $fileVersion=if($stable){'{0}.{1}.{2}.0' -f $Matches[1],$Matches[2],$Matches[3]}else{'1.0.0.0'}
+# The package manifest names the architecture (#66). A release file name must say it too,
+# because the GUI's update picks the Setup by name.
+$architecture=$prepared.architecture
+$releaseName="InstanceHarbor-$($prepared.version)-windows-$architecture-setup.exe"
+$outputName=Split-Path -Leaf $outputPath
+if($outputName -like 'InstanceHarbor-*' -and $outputName -cne $releaseName){throw "A release Setup for this package must be named $releaseName."}
 $payload=Join-Path (Join-Path $stage 'releases') $prepared.release
 foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.txt', 'MPL-SOURCES.zip', 'WINDOWS-GETTING-STARTED.txt')) {
     if (!(Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)) { throw "Missing distribution notice: $name" }
@@ -30,11 +36,12 @@ if ((Get-Item -LiteralPath (Join-Path $payload 'InstanceHarbor.exe')).VersionInf
 }
 Push-Location $PSScriptRoot
 try {
-    & $compilerPath /NOCONFIG /V3 "/DVERSION=$($prepared.version)" "/DFILE_VERSION=$fileVersion" "/DOUTPUT=$outputPath" "/DPAYLOAD=$payload" windows-setup.nsi | Out-Host
+    & $compilerPath /NOCONFIG /V3 "/DVERSION=$($prepared.version)" "/DFILE_VERSION=$fileVersion" "/DARCH=$architecture" "/DOUTPUT=$outputPath" "/DPAYLOAD=$payload" windows-setup.nsi | Out-Host
     if(!(Test-Path -LiteralPath $outputPath -PathType Leaf)){throw 'NSIS did not create the candidate.'}
 } finally {Pop-Location}
 [pscustomobject]@{
     version=$prepared.version
+    architecture=$architecture
     packageSha256=$prepared.release
     setup=$outputPath
     setupSha256=(Get-FileHash -LiteralPath $outputPath).Hash.ToLowerInvariant()

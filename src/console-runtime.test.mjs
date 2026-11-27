@@ -9,19 +9,28 @@ const manifest = JSON.parse(read('../packaging/console-runtime.json'))
 test('packaging and installation pin the console runtime in packaging/console-runtime.json', () => {
   for (const script of ['../packaging/pack-windows.ps1', '../packaging/install-windows.ps1']) {
     const source = read(script)
-    for (const [name, { sha256 }] of Object.entries(manifest.files)) {
-      assert.ok(source.includes(`'${name}' = '${sha256}'`), `${script} does not pin ${name}`)
+    for (const [architecture, { files }] of Object.entries(manifest.architectures)) {
+      for (const [name, { sha256 }] of Object.entries(files)) {
+        assert.ok(source.includes(`'${name}' = '${sha256}'`), `${script} does not pin ${architecture} ${name}`)
+      }
     }
   }
 })
 
-test('the runtime record names the official package and its x64 entries', () => {
-  const { source, files } = manifest
+test('the runtime record names the official package and its x64 and ARM64 entries (#66)', () => {
+  const { source, architectures } = manifest
   assert.match(source.url, /^https:\/\/api\.nuget\.org\/v3-flatcontainer\/microsoft\.windows\.console\.conpty\/1\.25\.260930003\//)
   assert.match(source.sha256, /^[0-9a-f]{64}$/)
   assert.ok(Number.isInteger(source.bytes) && source.bytes > 0)
-  assert.equal(files['conpty.dll'].entry, 'runtimes/win-x64/native/conpty.dll')
-  assert.equal(files['OpenConsole.exe'].entry, 'build/native/runtimes/x64/OpenConsole.exe')
+  assert.deepEqual(Object.keys(architectures), ['x64', 'arm64'])
+  assert.equal(architectures.x64.machine, 0x8664)
+  assert.equal(architectures.arm64.machine, 0xAA64)
+  for (const [architecture, folder] of [['x64', 'x64'], ['arm64', 'arm64']]) {
+    const { files } = architectures[architecture]
+    assert.deepEqual(Object.keys(files), ['conpty.dll', 'OpenConsole.exe'])
+    assert.equal(files['conpty.dll'].entry, `runtimes/win-${folder}/native/conpty.dll`)
+    assert.equal(files['OpenConsole.exe'].entry, `build/native/runtimes/${folder}/OpenConsole.exe`)
+  }
   const docs = read('../docs/windows-distribution-licenses.md')
   for (const value of [source.url, source.sha256]) assert.ok(docs.includes(value), `the distribution guide lacks ${value}`)
 })
@@ -46,7 +55,10 @@ test('the retired workspace switch file is gone', () => {
 })
 
 test('stable executables need no Visual C++ Redistributable', () => {
-  assert.match(read('../.cargo/config.toml'), /\[target\.x86_64-pc-windows-msvc\]\s*rustflags = \["-C", "target-feature=\+crt-static"\]/)
+  for (const target of ['x86_64', 'aarch64']) {
+    const pattern = String.raw`\[target\.${target}-pc-windows-msvc\]\s*rustflags = \["-C", "target-feature=\+crt-static"\]`
+    assert.match(read('../.cargo/config.toml'), new RegExp(pattern), target)
+  }
   const pack = read('../packaging/pack-windows.ps1')
   assert.ok(pack.includes(String.raw`Where-Object { $_ -match '^(vcruntime|msvcp)\d' }`))
   assert.doesNotMatch(read('../packaging/windows-setup.nsi'), /VC_RUNTIME|vc_redist/i)
@@ -64,8 +76,11 @@ test('Setup checks WebView2 on every run and compares the installed version', ()
       assert.ok(setup.includes(`LangString ${name} ${'$'}{${language}}`), `${name} ${language}`)
     }
   }
-  assert.ok(setup.includes('linkid=2124701'))
-  assert.ok(read('../src-tauri/src/webview_runtime.rs').includes('linkid=2124701'))
+  // x64 and ARM64 Evergreen Standalone Installers (#66).
+  for (const link of ['linkid=2124701', 'linkid=2099616']) {
+    assert.ok(setup.includes(link), link)
+    assert.ok(read('../src-tauri/src/webview_runtime.rs').includes(link), link)
+  }
 })
 
 test('Setup installs for the current user or for all users and keeps the registered scope (#38)', () => {
@@ -98,9 +113,35 @@ test('the GUI checks WebView2 before it takes the single-instance lock', () => {
 test('the WebView2 prompt and Setup default to English unless Traditional Chinese is chosen', () => {
   const setup = read('../packaging/windows-setup.nsi')
   assert.ok(setup.indexOf('MUI_LANGUAGE "English"') < setup.indexOf('MUI_LANGUAGE "TradChinese"'))
-  assert.ok(setup.indexOf('StrCpy $LANGUAGE ${LANG_ENGLISH}') < setup.indexOf('${IfNot} ${RunningX64}'))
+  assert.ok(setup.indexOf('StrCpy $LANGUAGE ${LANG_ENGLISH}') < setup.indexOf('Call DecideArchitecture'))
   for (const id of ['0x0404', '0x0C04', '0x1404']) assert.ok(setup.includes(`$0 = ${id}`), id)
   const prompt = read('../src-tauri/src/webview_runtime.rs')
   assert.match(prompt, /matches!\(ui_language, 0x0404 \| 0x0C04 \| 0x1404\)/)
   assert.match(prompt, /join\("preferences\.json"\)/)
+})
+
+test('Setup refuses the wrong architecture, warns under emulation and records its own (#66)', () => {
+  const setup = read('../packaging/windows-setup.nsi')
+  const init = setup.slice(setup.indexOf('Function .onInit'), setup.indexOf('FunctionEnd', setup.indexOf('Function .onInit')))
+  assert.match(init, /Call DecideArchitecture/)
+  // The emulation question comes once, before elevation and before the WebView2 check.
+  assert.ok(init.indexOf('$(EmulatedAsk)') < init.indexOf('Call RequireWebView2'))
+  assert.match(init, /"\$\(EmulatedAsk\)" \/SD IDYES/)
+  assert.match(init, /ReadRegStr \$R5 SHCTX "\$\{UNINSTALL_KEY\}" "Architecture"/)
+  assert.match(init, /"\$\(ArchSwitch\)" \/SD IDOK/)
+  assert.match(setup, /WriteRegStr SHCTX "\$\{UNINSTALL_KEY\}" "Architecture" "\$\{ARCH\}"/)
+  for (const name of ['NeedX64', 'NeedArm64', 'EmulatedAsk', 'ArchSwitch']) {
+    for (const language of ['LANG_TRADCHINESE', 'LANG_ENGLISH']) {
+      assert.ok(setup.includes(`LangString ${name} ${'$'}{${language}}`), `${name} ${language}`)
+    }
+  }
+  // The package manifest decides the architecture that Setup is built for.
+  assert.match(read('../packaging/pack-windows-setup.ps1'), /"\/DARCH=\$architecture"/)
+})
+
+test('release file names carry the architecture that the GUI update looks for (#66)', () => {
+  assert.ok(read('../packaging/pack-windows.ps1').includes('$releaseName = "InstanceHarbor-$Version-windows-$Architecture.zip"'))
+  assert.ok(read('../packaging/pack-windows-setup.ps1').includes('$releaseName="InstanceHarbor-$($prepared.version)-windows-$architecture-setup.exe"'))
+  const update = read('../src-tauri/src/app_update.rs')
+  assert.ok(update.includes('("windows", "x86_64", "windows-x64"), ("windows", "aarch64", "windows-arm64")'))
 })
