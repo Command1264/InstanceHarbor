@@ -20,6 +20,7 @@ mod app_update;
 #[path = "cache_cleanup.rs"]
 mod cache_cleanup;
 pub use cache_cleanup::clear_scheduled_webview;
+pub use presentation::fast_open_enabled;
 #[path = "creation.rs"]
 mod creation;
 #[path = "creation_defaults.rs"]

@@ -192,6 +192,9 @@ mod platform {
     fn record_name(lock: &str) -> String {
         format!("{lock}-Owner")
     }
+    fn show_name(lock: &str) -> String {
+        format!("{lock}-Show")
+    }
     fn quit_name(lock: &str) -> String {
         format!("{lock}-Quit")
     }
@@ -274,6 +277,7 @@ mod platform {
         if revealed() {
             mark_revealed();
         }
+        listen_for_show(lock);
         if !listen {
             return Ok(());
         }
@@ -299,6 +303,42 @@ mod platform {
             })
             .map(|_| ())
             .map_err(|error| format!("QuitListener ({error})"))
+    }
+
+    /// A later launch asks this GUI to show its window, hidden in fast open mode (#56).
+    /// Auto-reset: each request shows the window once.
+    fn listen_for_show(lock: &str) {
+        let name = wide(&show_name(lock));
+        let event = unsafe { CreateEventW(std::ptr::null_mut(), 0, 0, name.as_ptr()) } as usize;
+        if event == 0 {
+            eprintln!(
+                "GUI show event unavailable: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("gui-show-listener".into())
+            .spawn(move || {
+                while unsafe { WaitForSingleObject(event as Handle, INFINITE) } == WAIT_OBJECT_0 {
+                    crate::fast_open::show();
+                }
+            });
+        if let Err(error) = spawned {
+            eprintln!("GUI show listener could not start: {error}");
+        }
+    }
+
+    /// Asks the lock holder to show its window; nothing happens when it is not hidden.
+    pub fn request_show(lock: &str) {
+        let name = wide(&show_name(lock));
+        let event = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+        if !event.is_null() {
+            unsafe {
+                SetEvent(event);
+                CloseHandle(event);
+            }
+        }
     }
 
     static REVEALED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

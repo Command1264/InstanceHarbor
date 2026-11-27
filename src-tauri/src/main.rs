@@ -14,6 +14,7 @@ mod startup_theme;
 mod startup_timing;
 #[cfg(windows)]
 mod startup_guard;
+mod fast_open;
 #[cfg(windows)]
 mod webview_events;
 #[cfg(windows)]
@@ -609,6 +610,8 @@ fn main() {
     #[cfg(windows)]
     let simulate = webview_start::simulation();
     #[cfg(windows)]
+    fast_open::configure();
+    #[cfg(windows)]
     let _installation = match instanceharbor::installation::acquire() {
         Ok(lease) => lease,
         Err(error) => {
@@ -670,6 +673,8 @@ fn main() {
         Ok(None) => match replace_stuck_gui() {
             Ok(lease) => lease,
             Err(holder) => {
+                // A GUI in fast open mode shows its hidden window and resumes its page (#56).
+                startup_guard::request_show(&desktop_channel::gui_lock_name(desktop_channel::workspace_name().as_deref()));
                 let existing_window_found = instanceharbor::gui_singleton::focus_existing();
                 if let Ok(log) = diagnostics::global() {
                     diagnostic_write(log.record(json!({
@@ -828,10 +833,26 @@ fn main() {
                     }
                     Err(error) => eprintln!("GUI exit watchdog cannot see the main window: {error}"),
                 }
-                window.on_window_event(|event| {
-                    if matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed) {
-                        exit_watchdog::arm();
+                fast_open::install(&window);
+                let main = window.clone();
+                window.on_window_event(move |event| match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } => {
+                        let revealed = WINDOW_REVEALED.load(Ordering::SeqCst);
+                        let (enabled, quitting) = (fast_open::enabled(), fast_open::quitting());
+                        if let Ok(log) = diagnostics::global() {
+                            diagnostic_write(log.record(json!({
+                                "type":"gui-close-requested","fastOpen":enabled,"revealed":revealed,"quitting":quitting,
+                            })));
+                        }
+                        if fast_open::on_close(enabled, quitting, revealed) == fast_open::Close::Hide {
+                            api.prevent_close();
+                            fast_open::hide(&main);
+                        } else {
+                            exit_watchdog::arm();
+                        }
                     }
+                    tauri::WindowEvent::Destroyed => exit_watchdog::arm(),
+                    _ => {}
                 });
             }
             // The Manager owns the notification-area icon; attaching starts it if needed.

@@ -84,6 +84,16 @@ repository 根目錄只放專案設定、Vite 入口（`index.html`、`console.h
   送出關閉訊息前重新核對三者。GUI 已結束、PID 被其他程序重用，或執行檔不同時略過並清掉紀錄，避免把關閉訊息送給無關程式。
 - 「結束」失敗時，對話框顯示翻譯後的說明與 GUI 診斷紀錄資料夾；原始錯誤只以代碼寫入診斷紀錄（`manager-quit-failed`），不含路徑。
 - 按 GUI 視窗的 X 會結束 GUI 程序，Manager 與圖示留著。原本的「關閉視窗時縮到系統匣」設定已移除。
+- 快速開啟（#56，「語言與外觀」的「快速開啟」，`preferences.json` 的 `fastOpen`，預設關閉；關閉時不寫入檔案，舊版仍能讀取）：
+  開啟後按 X 只隱藏主視窗（`src-tauri/src/fast_open.rs`），WebView2 設為不可見並暫停（`TrySuspend`），頁面依 `document.visibilityState`
+  暫停所有背景輪詢（`src/page-visibility.ts`）。之後從系統匣、開始選單或捷徑開啟時，新 GUI 經具名事件（鎖名加 `-Show`）請常駐的 GUI 顯示視窗並恢復，
+  頁面恢復時立即重讀一次。隱藏超過 30 分鐘自動結束（`gui-hidden-exit`）；開發版可用 `IH_DEV_FAST_OPEN_HIDE_MS` 縮短，只供測試。
+  - 隱藏的視窗收不到 `WM_CLOSE`，所以「結束」與 `app-exit`（Setup 與應用程式內更新也經它關閉 GUI）另外對每個已核對的 GUI 設定它的結束事件
+    （`Local\InstanceHarbor-GUI-Exit-<PID>`，`gui_singleton::signal_exit`），GUI 收到後記錄 `gui-exit-requested` 並結束。
+  - 顯示過主視窗後才隱藏的 GUI 不會被 #117 的接手當成卡住。
+  - 實測（12 核心測試機、空工作區）：冷啟動到首份清單畫出中位數約 830 ms；快速開啟下從系統匣重開 60–130 ms。GUI 與 WebView2 程序的私有記憶體顯示時約 200 MB、
+    隱藏時約 165 MB（工作集約 380 MB → 50 MB）；隱藏時 GUI 程序 CPU 0%、頁面渲染程序約 0.1%，WebView2 主程序與 GPU 程序合計約單核 1%。
+  - 量測與驗收：`tests/measure-gui-memory.ps1`（`-Hide -Reopen`）與 `tests/verify-fast-open.ps1`（重開、隱藏期限、系統匣「結束」、`app-exit`、關閉時的 X）。
 - 「結束」與 `app-exit` 只對 GUI 的應用程式視窗送 `WM_CLOSE`，略過工具視窗（`WS_EX_TOOLWINDOW`）。
   GUI 事件迴圈有一個可見的工具視窗（Tao 的「Thread Event Target」）負責接收結束請求；1.1.0 及更早的版本中它也會收到 `WM_CLOSE` 而被銷毀，
   GUI 收不到結束請求，每次都要等下面的看門狗 10 秒後才結束（#92）。

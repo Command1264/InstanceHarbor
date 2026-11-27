@@ -10,6 +10,7 @@ import { coreBlockedMessage, coreDiagnosticText } from '../core-diagnostics'
 import { coreBuildText, coreVersionText } from '../core-display'
 import OperationButton from './OperationButton.vue'
 import PathPickerButton from './PathPickerButton.vue'
+import { pageHidden } from '../page-visibility'
 const props = defineProps<{
   name: string
   cachedSource?: CoreSource
@@ -142,7 +143,7 @@ let refresh: number | undefined
 let progressTimer: number | undefined
 onMounted(() => {
   refresh = window.setInterval(() => {
-    if (dialog.value?.open && !busy.value && !checking.value && !confirm.value?.open) void read(true)
+    if (!pageHidden() && dialog.value?.open && !busy.value && !checking.value && !confirm.value?.open) void read(true)
   }, 5000)
 })
 onUnmounted(() => {

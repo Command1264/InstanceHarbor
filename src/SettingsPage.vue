@@ -26,6 +26,7 @@ import { isWorldRule, policyLabel, validWorldRuleValue, verifiedWorldRuleReceipt
 import { applySelectionOpacity, refreshSelectionColor, refreshSelectionTheme, resolveSelectionColor, resolveSelectionOpacity, resolveTheme } from './theme'
 import { displayPath } from './path-display'
 import { errorText, manage, nativeBridge, rawError, type InstanceMeta, type Jvm, type AutoRestart, type AutoRestartStatus, type LifecycleTiming, type InstanceSettings, type JavaCandidate, type Preferences, type PreferencesSnapshot } from './manager'
+import { pageHidden } from './page-visibility'
 const props=defineProps<{instance?:string;instanceState?:string;instanceRun?:string;worldCommandReady?:boolean;worldRuleWork?:string;restartStatus?:AutoRestartStatus|null;instanceMeta?:InstanceMeta;preferences:Preferences;preferencesRevision:string;preferencesLoaded:boolean;preferencesReady:boolean;connected:boolean;javaCandidates:JavaCandidate[];javaChecked:boolean;refreshJava:(origin:"manual"|"background",fresh?:boolean)=>Promise<void>;retryPreferences:()=>Promise<void>}>()
 const emit=defineEmits<{(e:"language-preview",v?:LanguagePreference):void;(e:'close'):void;(e:'preferences',snapshot:PreferencesSnapshot):void;(e:'dirty',dirty:boolean):void;(e:'saving',saving:boolean):void;(e:'mutating'):void;(e:'management-changed'):void;(e:'core',name:string):void}>()
 type Tab='appearance'|'global-java'|'java'|'restart'|'autorestart'|'terminal'|'initialization'|'world'|'core'|'updates'|'scan'|'creation'|'cache'|'recovery'|'test-admins'|'app-update'|'about'
@@ -169,11 +170,13 @@ function pasteSelectionOpacity(event: ClipboardEvent) {
   editSelectionOpacity(event)
 }
 const pathSeparator=ref(props.preferences.pathSeparator ?? 'forward')
+const fastOpen=ref(props.preferences.fastOpen ?? false)
 const timeFormat=ref<TimeFormat>(props.preferences.timeFormat ?? 'local24')
 const consoleTitleTemplate=ref(props.preferences.consoleTitleTemplate ?? '{instance}')
 const instanceConsoleTitle=ref(props.preferences.consoleTitleOverrides?.[props.instance ?? ''] ?? '')
 function resetDisplayPreferences(){
   corePrefetch.value=props.preferences.corePrefetch ?? false
+  fastOpen.value=props.preferences.fastOpen ?? false
   selectionColor.value=resolveSelectionColor(props.preferences.selectionColor)
   setSelectionOpacity(resolveSelectionOpacity(props.preferences.selectionOpacity))
   timeFormat.value=props.preferences.timeFormat??'local24'
@@ -508,7 +511,7 @@ const settlingWorldRule = (value?: WorldLiveValue) => value?.state === 'LiveRetr
 let worldSettleTimer: ReturnType<typeof setInterval> | undefined
 watch(() => tab.value === 'world' && Object.values(worldLiveValues.value).some(settlingWorldRule), settling => {
   clearInterval(worldSettleTimer)
-  worldSettleTimer = settling ? setInterval(() => void readWorldLive(), 2000) : undefined
+  worldSettleTimer = settling ? setInterval(() => { if (!pageHidden()) void readWorldLive() }, 2000) : undefined
 }, { immediate: true })
 onUnmounted(() => clearInterval(worldSettleTimer))
 // The save message follows the rules it reported on until they settle, unless
@@ -613,7 +616,7 @@ const retryingRead=computed(()=>settingsRetry.value?.tab===tab.value && settings
 const editableTab=computed(()=>['appearance','updates','app-update','test-admins','global-java','java','initialization','world','scan','creation','restart','autorestart','terminal'].includes(tab.value))
 const preferencesTab=computed(()=>['appearance','terminal','updates'].includes(tab.value))
 const globalJavaDraft=computed(()=>({mode:globalJavaMode.value,manualPath:globalJavaPath.value.trim()}))
-const draftSignature=computed(()=>JSON.stringify(tab.value==='appearance'?{theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,invalidOpacity:selectionOpacityInvalid.value?selectionOpacityInput.value:null,language:language.value,pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value}:tab.value==='updates'?corePrefetch.value:tab.value==='app-update'?{channel:updateChannel.value,autoCheck:updateAutoCheck.value}:tab.value==='test-admins'?testAdminDraft.value:tab.value==='terminal'?instanceConsoleTitle.value:tab.value==='global-java'?globalJavaDraft.value:tab.value==='java'?{java:settings.java,port:settings.port,jvm:{...jvm},advancedJvm:advancedJvm.value}:tab.value==='restart'?timing:tab.value==='autorestart'?autoRestart:tab.value==='initialization'?initValues.value:tab.value==='world'?{files:worldValues.value,rules:worldRuleDraft.value}:tab.value==='scan'?scanPaths():tab.value==='creation'?creationParent.value.trim():null))
+const draftSignature=computed(()=>JSON.stringify(tab.value==='appearance'?{theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,invalidOpacity:selectionOpacityInvalid.value?selectionOpacityInput.value:null,language:language.value,pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value,fastOpen:fastOpen.value}:tab.value==='updates'?corePrefetch.value:tab.value==='app-update'?{channel:updateChannel.value,autoCheck:updateAutoCheck.value}:tab.value==='test-admins'?testAdminDraft.value:tab.value==='terminal'?instanceConsoleTitle.value:tab.value==='global-java'?globalJavaDraft.value:tab.value==='java'?{java:settings.java,port:settings.port,jvm:{...jvm},advancedJvm:advancedJvm.value}:tab.value==='restart'?timing:tab.value==='autorestart'?autoRestart:tab.value==='initialization'?initValues.value:tab.value==='world'?{files:worldValues.value,rules:worldRuleDraft.value}:tab.value==='scan'?scanPaths():tab.value==='creation'?creationParent.value.trim():null))
 const draftDirty=computed(()=>baseline.value!=='' && draftSignature.value!==baseline.value)
 const dirty=computed(()=>draftDirty.value || (tab.value==='global-java' && javaSearchDirty.value))
 const globalJavaCanSave=computed(()=>!!savedGlobalJava.value && dirty.value &&
@@ -1064,7 +1067,7 @@ async function save(confirmWorld = false, confirmScope = false){
       if(tab.value==='appearance'){
         const before=baseline.value ? JSON.parse(baseline.value) : {}
         const fields={theme:theme.value,selectionColor:selectionColor.value,selectionOpacity:selectionOpacity.value,language:language.value,
-          pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value}
+          pathSeparator:pathSeparator.value,timeFormat:timeFormat.value,consoleTitleTemplate:consoleTitleTemplate.value,fastOpen:fastOpen.value}
         const changed=Object.entries(fields).filter(([key,value])=>before[key]!==value)
         Object.assign(next,Object.fromEntries(changed))
       }else if(tab.value==='updates'){
@@ -1210,7 +1213,8 @@ void load()
             </div>
           </div>
         </div>
-        <div v-if="preferencesLoaded" class="field"><label for="path-separator">{{ t('appearance.pathSeparator') }}</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">{{ t('appearance.forwardSlash') }}</option><option value="native">{{ t('appearance.backslash') }}</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" /></template>
+        <div v-if="preferencesLoaded" class="field"><label for="path-separator">{{ t('appearance.pathSeparator') }}</label><div class="editor"><select id="path-separator" v-model="pathSeparator" name="path-separator"><option value="forward">{{ t('appearance.forwardSlash') }}</option><option value="native">{{ t('appearance.backslash') }}</option></select></div></div><LanguageSetting v-if="preferencesLoaded" v-model="language" /><DisplayPreferencesFields v-if="preferencesLoaded" v-model:time-format="timeFormat" v-model:console-title-template="consoleTitleTemplate" />
+        <div v-if="preferencesLoaded" class="field"><span>{{ t('appearance.fastOpen') }}</span><div class="editor"><label class="check"><input v-model="fastOpen" type="checkbox" name="fast-open" aria-describedby="fast-open-hint"> {{ t('appearance.fastOpenToggle') }}</label><small id="fast-open-hint" class="hint">{{ t('appearance.fastOpenHint') }}</small></div></div></template>
       <template v-else-if="tab==='java'">
         <h2>{{ t('settings.java') }}</h2>
         <p v-if="instanceState!=='Stopped'" class="notice">{{ t('settingsPage.pendingApplyNotice') }}</p>

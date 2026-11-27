@@ -3,7 +3,7 @@ use super::process_image;
 use std::{
     ffi::c_void,
     io,
-    os::windows::io::{FromRawHandle, OwnedHandle},
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::PathBuf,
 };
 type Handle = *mut c_void;
@@ -12,6 +12,10 @@ type Handle = *mut c_void;
 unsafe extern "system" {
     fn CreateMutexW(attributes: Handle, owner: i32, name: *const u16) -> Handle;
     fn OpenMutexW(access: u32, inherit: i32, name: *const u16) -> Handle;
+    fn CreateEventW(attributes: Handle, manual: i32, initial: i32, name: *const u16) -> Handle;
+    fn OpenEventW(access: u32, inherit: i32, name: *const u16) -> Handle;
+    fn SetEvent(event: Handle) -> i32;
+    fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
 }
 
 #[link(name = "user32")]
@@ -62,6 +66,44 @@ pub(super) fn exists_named(name: &str) -> io::Result<bool> {
     }
     drop(unsafe { OwnedHandle::from_raw_handle(handle) });
     Ok(true)
+}
+
+/// The session event a GUI process waits on for the Manager's Quit (#56). Named by the
+/// process id: the Manager has already verified that process before it signals.
+fn exit_event_name(pid: u32) -> Vec<u16> {
+    format!(r"Local\InstanceHarbor-GUI-Exit-{pid}").encode_utf16().chain([0]).collect()
+}
+
+/// Creates this process's exit event; manual reset, so a late waiter still sees it.
+pub fn exit_event() -> io::Result<OwnedHandle> {
+    let name = exit_event_name(std::process::id());
+    let handle = unsafe { CreateEventW(std::ptr::null_mut(), 1, 0, name.as_ptr()) };
+    if handle.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+/// Asks the GUI process `pid` to exit. False when it has no exit event (an older GUI,
+/// or one that already ended).
+pub fn signal_exit(pid: u32) -> bool {
+    let name = exit_event_name(pid);
+    // EVENT_MODIFY_STATE
+    let handle = unsafe { OpenEventW(0x0002, 0, name.as_ptr()) };
+    if handle.is_null() {
+        return false;
+    }
+    let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+    unsafe { SetEvent(handle.as_raw_handle()) != 0 }
+}
+
+/// Waits up to `milliseconds` (u32::MAX: forever) for the event; true once it is set.
+pub fn wait(event: &OwnedHandle, milliseconds: u32) -> bool {
+    unsafe { WaitForSingleObject(event.as_raw_handle(), milliseconds) == 0 }
+}
+
+pub fn signaled(event: &OwnedHandle) -> bool {
+    wait(event, 0)
 }
 
 pub fn focus_existing() -> bool {
@@ -117,6 +159,16 @@ unsafe extern "system" fn find_existing(window: Handle, context: isize) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_exit_request_reaches_the_event_of_that_process_only() {
+        // No GUI with this id listens: nothing to signal.
+        assert!(!signal_exit(u32::MAX - 1));
+        let event = exit_event().unwrap();
+        assert!(!signaled(&event));
+        assert!(signal_exit(std::process::id()));
+        assert!(signaled(&event));
+    }
 
     #[test]
     fn exists_named_sees_a_held_lease_without_creating_one() {
