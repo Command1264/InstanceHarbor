@@ -130,7 +130,8 @@ try {
       return {label:b.textContent.trim(),x:rect.x,y:rect.y,width:rect.width,
         fits:text.getBoundingClientRect().width<=rect.width,disabled:b.disabled,tooltip:b.parentElement.title}
     })`)
-    assert.deepEqual(group.map(item=>item.label),['啟動所選','開啟所選後台','正常停止所選','重新啟動所選'])
+    // Batch buttons append the number of rows they act on, e.g. 啟動所選（2）.
+    assert.deepEqual(group.map(item=>item.label.replace(/（\d+）$/,'')),['啟動所選','開啟所選後台','正常停止所選','重新啟動所選'])
     assert.equal(group[0].width,group[1].width)
     assert.equal(group[0].y,group[1].y)
     assert.equal(group[2].y,group[3].y)

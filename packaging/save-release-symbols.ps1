@@ -99,7 +99,7 @@ foreach ($folder in @($repository, $mainCheckout) + $worktrees) {
     }
 }
 
-$version = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'package.json') -Raw | ConvertFrom-Json).version
+$version = (Get-Content -LiteralPath (Join-Path $repository 'package.json') -Raw | ConvertFrom-Json).version
 $saved = foreach ($name in $Names) {
     $exe = Join-Path $BinaryDirectory "$name.exe"
     $key = Get-PdbKey $exe

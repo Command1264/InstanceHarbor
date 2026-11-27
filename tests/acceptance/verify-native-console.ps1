@@ -10,7 +10,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $Evidence = [IO.Path]::GetFullPath($Evidence)
-$parent = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '.evidence'))
+$parent = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../.evidence'))
 if ((Split-Path -Parent $Evidence) -ne $parent -or (Split-Path -Leaf $Evidence) -notmatch '^native-console-[a-z0-9-]+$') {
     throw 'Choose a new native-console evidence directory within this checkout.'
 }
@@ -18,7 +18,7 @@ if (Get-CimInstance Win32_Process -Filter "Name='InstanceHarbor.exe' OR Name='in
     Where-Object CommandLine -NotMatch '\s+native-console$') {
     throw 'An existing 2.0 window is open.'
 }
-$runtimeRecord = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'console-runtime.json') -Raw | ConvertFrom-Json
+$runtimeRecord = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../packaging/console-runtime.json') -Raw | ConvertFrom-Json
 foreach ($name in 'conpty.dll','OpenConsole.exe') {
     if ((Get-FileHash -LiteralPath (Join-Path $Runtime $name)).Hash -ne $runtimeRecord.files.$name.sha256) {
         throw "Private runtime does not match the pinned identity: $name"

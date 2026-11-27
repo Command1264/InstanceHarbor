@@ -1,10 +1,10 @@
 [CmdletBinding()]
 param([string]$Workspace)
 $ErrorActionPreference='Stop'
-$folder=Join-Path $PSScriptRoot '.evidence/vue-product-20261109'
+$folder=Join-Path (Split-Path -Parent $PSScriptRoot) '.evidence/vue-product-20261109'
 $build=Get-Content -LiteralPath (Join-Path $folder 'build-manifest.json') -Raw|ConvertFrom-Json
-$binary=Join-Path $PSScriptRoot 'src-tauri/target/debug/InstanceHarbor.exe'
-$cli=Join-Path $PSScriptRoot 'src-tauri/target/debug/ihctl.exe'
+$binary=Join-Path (Split-Path -Parent $PSScriptRoot) 'src-tauri/target/debug/InstanceHarbor.exe'
+$cli=Join-Path (Split-Path -Parent $PSScriptRoot) 'src-tauri/target/debug/ihctl.exe'
 if((Get-FileHash -LiteralPath $binary).Hash -ne $build.sha256 -or (Get-FileHash -LiteralPath $cli).Hash -ne $build.cliSha256){throw '候選與已核對的建置 manifest 不一致。請重新建置並驗證。'}
 if(!$Workspace){
     $candidate=Get-Content -LiteralPath (Join-Path $folder 'candidate.json') -Raw|ConvertFrom-Json

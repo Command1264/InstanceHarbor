@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import '../experiments/conpty-a-prototype/ui/vendor/xterm.css'
+import './vendor/xterm/xterm.css'
 import { resolveLanguage, translate } from './i18n'
 import { attachConsoleScroll } from './console-scroll'
 import { attachConsoleClipboard, CONSOLE_INPUT_LIMIT } from './console-clipboard'
@@ -388,8 +388,8 @@ async function run() {
   // Label the hidden window now; the first tab then applies the saved language.
   updateLanguage()
   try {
-    await loadScript(new URL('../experiments/conpty-a-prototype/ui/vendor/xterm.js', import.meta.url).href)
-    await loadScript(new URL('../experiments/conpty-a-prototype/ui/vendor/graphemes.js', import.meta.url).href)
+    await loadScript(new URL('./vendor/xterm/xterm.js', import.meta.url).href)
+    await loadScript(new URL('./vendor/xterm/graphemes.js', import.meta.url).href)
   } catch {
     message(viewerError, t('console.loadFailed'))
     await invoke('terminal_present')

@@ -4,7 +4,7 @@
 //! the crate. The icon becomes Windows resource 32512 of every executable, which
 //! the Explorer, the taskbar, Alt+Tab, the window title bar and the Manager tray
 //! icon all read. The product channel keeps the blue icon; the development channel
-//! uses the red copy that `generate-development-icons.py` derives from it.
+//! uses the red copy that `packaging/generate-development-icons.py` derives from it.
 
 /// The blue icon of the product channel, relative to the crate folder.
 pub const PRODUCT: &str = "icons/icon.ico";

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pwsh -NoProfile -File ./launch-development.ps1",
+    "dev": "pwsh -NoProfile -File ./scripts/launch-development.ps1",
     "preview:vue": "vite --config vite.preview.config.ts --host 127.0.0.1",
     "build:preview": "vue-tsc --noEmit && vite build --config vite.preview.config.ts",
     "test:preview": "node --test preview/lifecycle.test.mjs",

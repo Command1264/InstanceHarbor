@@ -104,7 +104,7 @@ mod tests {
         let stable = cli_version("InstanceHarbor");
         assert!(stable.starts_with(&format!("InstanceHarbor CLI {VERSION} (")), "{stable}");
         assert!(stable.ends_with(&format!("({COMMIT})")), "{stable}");
-        // launch-development.ps1 checks `-like 'InstanceHarbor Dev CLI *'`.
+        // scripts/launch-development.ps1 checks `-like 'InstanceHarbor Dev CLI *'`.
         assert!(cli_version("InstanceHarbor Dev").starts_with("InstanceHarbor Dev CLI "));
     }
 
