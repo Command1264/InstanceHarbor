@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Evidence,
-    [string]$BinaryDirectory = (Join-Path $PSScriptRoot 'src-tauri/target/debug'),
+    [string]$BinaryDirectory = (Join-Path $PSScriptRoot '../../src-tauri/target/debug'),
     # A build from before recovery pins were retired (1.1.0 or earlier). It starts
     # a pinned run so the current build can show that it still controls one.
     [string]$LegacyBinaryDirectory,
@@ -92,7 +92,7 @@ function Stop-Fixture([string]$cli, [string]$name, [string]$run) {
 
 $cli = Install-Copy $BinaryDirectory 'current'
 $legacy = if ($LegacyBinaryDirectory) { Install-Copy $LegacyBinaryDirectory 'legacy' }
-& rustc --edition 2021 (Join-Path $PSScriptRoot 'tests/controlled-server.rs') -o $java
+& rustc --edition 2021 (Join-Path $PSScriptRoot '../controlled-server.rs') -o $java
 if ($LASTEXITCODE -ne 0) { throw 'Fixture compilation failed.' }
 Ih $cli @('init') | Out-Null
 $names = @('fixture-plain', 'fixture-keyed')

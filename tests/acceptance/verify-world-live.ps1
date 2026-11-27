@@ -23,7 +23,7 @@ if ((Get-FileHash -LiteralPath $Core).Hash -ne $coreHash -or (Get-FileHash -Lite
 }
 $cli = Join-Path $BinaryDirectory 'ihctl.exe'
 $binaryHash = (Get-FileHash -LiteralPath $cli).Hash
-$evidence = Join-Path $PSScriptRoot '.evidence'
+$evidence = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../.evidence'))
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null
 $task = Join-Path $evidence ('windows-world-live-' + [Guid]::NewGuid().ToString('N'))
 if (Test-Path -LiteralPath $task) { throw 'Evidence directory already exists.' }

@@ -10,7 +10,7 @@ icon as an ICO file. build-product.ps1 uses -Expected so that a product build ca
 only ship the blue icon and a development build only the red one.
 
 .EXAMPLE
-./verify-app-icon.ps1 -Binary src-tauri/target/x86_64-pc-windows-msvc/release/InstanceHarbor.exe -Expected src-tauri/icons/icon.ico
+./packaging/verify-app-icon.ps1 -Binary src-tauri/target/x86_64-pc-windows-msvc/release/InstanceHarbor.exe -Expected src-tauri/icons/icon.ico
 #>
 [CmdletBinding()]
 param(

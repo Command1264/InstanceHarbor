@@ -39,7 +39,7 @@ fn webview_profile_for(
     workspace: Option<&str>,
 ) -> Option<PathBuf> {
     // The development channel always isolates its profile, one per workspace; a stable
-    // launcher such as launch-acceptance.ps1 may pick a per-workspace profile.
+    // launcher such as scripts/launch-acceptance.ps1 may pick a per-workspace profile.
     if !development && inherited.is_some_and(|folder| !folder.is_empty()) {
         return None;
     }

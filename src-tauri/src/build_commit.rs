@@ -7,7 +7,7 @@
 
 /// The label of a build made without Git, for example from a source archive.
 pub const UNKNOWN: &str = "unknown";
-/// The environment variable that `build-product.ps1` sets and `build.rs` reads.
+/// The environment variable that `packaging/build-product.ps1` sets and `build.rs` reads.
 pub const VARIABLE: &str = "IH_BUILD_COMMIT";
 const DIRTY: &str = "-dirty";
 const LENGTH: usize = 7;
